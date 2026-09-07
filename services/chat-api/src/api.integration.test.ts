@@ -23,11 +23,14 @@ test("two users can become friends, create an Agent room, and sync settings", as
   });
   const adapter = memory.adapters.createPg();
   const pool = new adapter.Pool() as unknown as pg.Pool;
-  const migration = (await readFile(join(migrationsDir, "0001_initial.sql"), "utf8")).replace(
-    "CREATE EXTENSION IF NOT EXISTS pgcrypto;",
-    "",
-  );
+  const migration = (await readFile(join(migrationsDir, "0001_initial.sql"), "utf8"))
+    .replace("CREATE EXTENSION IF NOT EXISTS pgcrypto;", "")
+    .replace(
+      "status text NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'waiting', 'review', 'blocked', 'done', 'failed', 'cancelled')),",
+      "status text NOT NULL DEFAULT 'queued' CONSTRAINT tasks_status_check CHECK (status IN ('queued', 'running', 'waiting', 'review', 'blocked', 'done', 'failed', 'cancelled')),",
+    );
   await pool.query(migration);
+  await pool.query(await readFile(join(migrationsDir, "0002_task_review.sql"), "utf8"));
   const config = loadConfig({
     NODE_ENV: "test",
     JWT_SECRET: "test-jwt-secret-with-at-least-32-characters",
@@ -124,19 +127,48 @@ test("two users can become friends, create an Agent room, and sync settings", as
     assert.equal(room.statusCode, 201, room.body);
     assert.equal(room.json().pendingAgentIds.length, 0);
 
+    const chatMention = await app.inject({
+      method: "POST",
+      url: "/internal/openim/callbacks/message/after?token=test-callback-token-long-enough",
+      payload: {
+        sendID: (alice.user as { openimUserId?: string }).openimUserId,
+        groupID: room.json().openimGroupId,
+        serverMsgID: "server-chat-1",
+        clientMsgID: "client-chat-1",
+        content: JSON.stringify({ content: "@coder 你觉得登录页面应该怎么设计？" }),
+        contentType: 101,
+        seq: 1,
+        sendTime: Date.now(),
+        atUserList: [agent.openimUserId],
+      },
+    });
+    assert.equal(chatMention.statusCode, 200, chatMention.body);
+
+    const noAutomaticTask = await app.inject({
+      method: "GET",
+      url: "/v1/tasks",
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    });
+    assert.equal(
+      noAutomaticTask.json().data.length,
+      0,
+      "a normal Agent mention must stay chat-only",
+    );
+
     const taskMessage = await app.inject({
       method: "POST",
       url: "/internal/openim/callbacks/message/after?token=test-callback-token-long-enough",
       payload: {
         sendID: (alice.user as { openimUserId?: string }).openimUserId,
         groupID: room.json().openimGroupId,
-        serverMsgID: "server-task-1",
-        clientMsgID: "client-task-1",
+        serverMsgID: "server-task-2",
+        clientMsgID: "client-task-2",
         content: JSON.stringify({ content: "@coder 请实现登录页面" }),
         contentType: 101,
-        seq: 1,
+        seq: 2,
         sendTime: Date.now(),
         atUserList: [agent.openimUserId],
+        ex: JSON.stringify({ agentAction: "propose-task" }),
       },
     });
     assert.equal(taskMessage.statusCode, 200, taskMessage.body);
@@ -148,16 +180,17 @@ test("two users can become friends, create an Agent room, and sync settings", as
     });
     assert.equal(tasks.statusCode, 200, tasks.body);
     assert.equal(tasks.json().data.length, 1);
+    assert.equal(tasks.json().data[0].status, "pending_review");
     const taskId = tasks.json().data[0].id as string;
 
     const contextMessage = {
       sendID: (bob.user as { openimUserId?: string }).openimUserId,
       groupID: room.json().openimGroupId,
-      serverMsgID: "server-context-2",
-      clientMsgID: "client-context-2",
+      serverMsgID: "server-context-3",
+      clientMsgID: "client-context-3",
       content: JSON.stringify({ content: "补充：登录后进入好友列表" }),
       contentType: 101,
-      seq: 2,
+      seq: 3,
       sendTime: Date.now(),
     };
     for (let index = 0; index < 2; index += 1) {
@@ -179,7 +212,63 @@ test("two users can become friends, create an Agent room, and sync settings", as
       2,
       "duplicate callbacks must not advance context twice",
     );
-    assert.equal(taskDetail.json().runs.length, 1);
+    assert.equal(taskDetail.json().runs.length, 0, "a proposal must not execute before review");
+
+    const reviewed = await app.inject({
+      method: "POST",
+      url: `/v1/tasks/${taskId}/reviews`,
+      headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "1" },
+      payload: { decision: "changes_requested", comment: "请补充测试计划" },
+    });
+    assert.equal(reviewed.statusCode, 200, reviewed.body);
+    assert.equal(reviewed.json().reviewerUserId, alice.user.id);
+    assert.equal(reviewed.json().reviewerName, "Alice");
+
+    const revised = await app.inject({
+      method: "PATCH",
+      url: `/v1/tasks/${taskId}/proposal`,
+      headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "1" },
+      payload: {
+        title: "实现并测试登录页面",
+        objective: "实现登录页面并覆盖主要状态",
+        expectedResult: "可通过验收的登录页面",
+        plan: ["实现表单", "接入接口", "运行测试"],
+        acceptanceCriteria: ["登录成功进入首页", "错误状态有提示"],
+        requestedAccess: "read",
+        proposedByAgentId: agent.id,
+      },
+    });
+    assert.equal(revised.statusCode, 200, revised.body);
+    assert.equal(revised.json().revision, 2);
+
+    const approved = await app.inject({
+      method: "POST",
+      url: `/v1/tasks/${taskId}/reviews`,
+      headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "2" },
+      payload: { decision: "approved", comment: "补充后方案可执行" },
+    });
+    assert.equal(approved.statusCode, 200, approved.body);
+    assert.equal(approved.json().taskRevision, 2);
+
+    const started = await app.inject({
+      method: "POST",
+      url: `/v1/tasks/${taskId}/start`,
+      headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "2" },
+    });
+    assert.equal(started.statusCode, 200, started.body);
+    assert.equal(started.json().runIds.length, 1);
+    const persistedRun = await pool.query(
+      `SELECT agent_snapshot, approval_id, started_by_user_id
+       FROM task_runs WHERE id = $1`,
+      [started.json().runIds[0]],
+    );
+    assert.equal(
+      persistedRun.rows[0].agent_snapshot.workspaceAccess,
+      "read",
+      "the human-reviewed Task permission must cap the Agent's workspace access",
+    );
+    assert.equal(persistedRun.rows[0].approval_id, approved.json().id);
+    assert.equal(persistedRun.rows[0].started_by_user_id, alice.user.id);
 
     const agentDirect = await app.inject({
       method: "POST",

@@ -8,7 +8,11 @@ import {
   type SdkResponse,
 } from "@openim/wasm-client-sdk";
 
-import type { ExternalTeamMessage, ImRuntimeConfig } from "../../shared/agent-team";
+import type {
+  AgentMessageAction,
+  ExternalTeamMessage,
+  ImRuntimeConfig,
+} from "../../shared/agent-team";
 
 export type OpenImConnectionState = {
   state: "local" | "connecting" | "connected" | "error";
@@ -17,13 +21,12 @@ export type OpenImConnectionState = {
 
 const { instance: sdk } = getWithRenderProcess();
 
-const parseRunId = (value?: string) => {
-  if (!value) return undefined;
+const parseMessageMetadata = (value?: string) => {
+  if (!value) return {} as Record<string, unknown>;
   try {
-    const parsed = JSON.parse(value) as Record<string, unknown>;
-    return typeof parsed.runId === "string" && parsed.runId ? parsed.runId : undefined;
+    return JSON.parse(value) as Record<string, unknown>;
   } catch {
-    return undefined;
+    return {} as Record<string, unknown>;
   }
 };
 
@@ -56,6 +59,7 @@ export const toExternalMessage = (
       (message.sendID === fallback.userId ? message.recvID : message.sendID))
     : undefined;
   const sentByLocalUser = Boolean(fallback.userId && message.sendID === fallback.userId);
+  const metadata = parseMessageMetadata(message.ex);
   return {
     externalId,
     roomId: message.groupID || principalId || fallback.groupId,
@@ -67,7 +71,21 @@ export const toExternalMessage = (
       : message.senderNickname || message.sendID || "群成员",
     content,
     createdAt: message.sendTime || message.createTime || Date.now(),
-    runId: parseRunId(message.ex),
+    runId: typeof metadata.runId === "string" ? metadata.runId : undefined,
+    agentHop:
+      typeof metadata.agentHop === "number" && Number.isFinite(metadata.agentHop)
+        ? Math.max(0, Math.floor(metadata.agentHop))
+        : undefined,
+    relayRootId:
+      typeof metadata.relayRootId === "string" && metadata.relayRootId
+        ? metadata.relayRootId
+        : undefined,
+    loopId: typeof metadata.loopId === "string" && metadata.loopId ? metadata.loopId : undefined,
+    loopTurn:
+      typeof metadata.loopTurn === "number" && Number.isFinite(metadata.loopTurn)
+        ? Math.max(1, Math.floor(metadata.loopTurn))
+        : undefined,
+    agentAction: metadata.agentAction === "propose-task" ? "propose-task" : "chat",
   };
 };
 
@@ -201,11 +219,17 @@ class OpenImTransport {
     directPrincipalId?: string,
     groupId?: string,
     targetOpenimIds: string[] = [],
+    metadata: { agentAction?: AgentMessageAction } = {},
   ) {
     if (!this.config || this.status.state !== "connected") throw new Error("OpenIM 尚未连接。");
     const created = targetOpenimIds.length
       ? await sdk.createTextAtMessage({ text, atUserIDList: targetOpenimIds })
       : await sdk.createTextMessage(text);
+    created.data.ex = JSON.stringify({
+      ...parseMessageMetadata(created.data.ex),
+      agentAction: metadata.agentAction ?? "chat",
+      targetAgentIds: targetOpenimIds,
+    });
     const targetGroupId = directPrincipalId ? "" : groupId || this.config.groupId;
     if (!directPrincipalId && !targetGroupId) throw new Error("当前会话没有 OpenIM 群组 ID。");
     const sent = await sdk.sendMessage({

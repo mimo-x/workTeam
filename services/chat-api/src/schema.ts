@@ -279,7 +279,25 @@ export const tasks = pgTable(
       .references(() => rooms.id),
     anchorMessageId: text("anchor_message_id").notNull(),
     title: text("title").notNull(),
-    status: text("status").notNull().default("queued"),
+    objective: text("objective").notNull().default(""),
+    expectedResult: text("expected_result").notNull().default(""),
+    plan: jsonb("plan").$type<string[]>().notNull().default([]),
+    acceptanceCriteria: jsonb("acceptance_criteria").$type<string[]>().notNull().default([]),
+    requestedAccess: text("requested_access").notNull().default("read"),
+    requestedByUserId: uuid("requested_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    proposedByAgentId: uuid("proposed_by_agent_id").references(() => agents.id, {
+      onDelete: "set null",
+    }),
+    status: text("status").notNull().default("pending_review"),
+    revision: integer("revision").notNull().default(1),
+    approvalRequired: boolean("approval_required").notNull().default(true),
+    approvedReviewId: uuid("approved_review_id"),
+    startedByUserId: uuid("started_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    startedAt: timestamp("started_at", { withTimezone: true }),
     contextVersion: integer("context_version").notNull().default(1),
     latestSourceSeq: bigint("latest_source_seq", { mode: "number" }).notNull().default(0),
     ...timestamps,
@@ -288,6 +306,26 @@ export const tasks = pgTable(
     uniqueIndex("tasks_anchor_message_uq").on(table.anchorMessageId),
     index("tasks_source_status_idx").on(table.sourceRoomId, table.status),
   ],
+);
+
+export const taskReviews = pgTable(
+  "task_reviews",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    taskRevision: integer("task_revision").notNull(),
+    reviewerUserId: uuid("reviewer_user_id")
+      .notNull()
+      .references(() => users.id),
+    reviewerNameSnapshot: text("reviewer_name_snapshot").notNull(),
+    decision: text("decision").notNull(),
+    comment: text("comment").notNull().default(""),
+    taskSnapshot: jsonb("task_snapshot").$type<Record<string, unknown>>().notNull(),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("task_reviews_task_reviewed_idx").on(table.taskId, table.reviewedAt)],
 );
 
 export const taskAssignees = pgTable(
@@ -337,6 +375,10 @@ export const taskRuns = pgTable(
     leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
     attempts: integer("attempts").notNull().default(0),
     outputMessageId: text("output_message_id"),
+    approvalId: uuid("approval_id").references(() => taskReviews.id, { onDelete: "set null" }),
+    startedByUserId: uuid("started_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
     error: text("error"),
     startedAt: timestamp("started_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),

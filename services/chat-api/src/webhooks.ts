@@ -74,20 +74,6 @@ type AgentForTask = {
   version: number;
 };
 
-const snapshotAgent = (agent: AgentForTask) => ({
-  id: agent.id,
-  name: agent.name,
-  title: agent.title,
-  mention: agent.mention,
-  description: agent.description,
-  workspaceAccess: agent.workspace_access,
-  executionTarget: agent.execution_target,
-  skillPolicy: agent.skill_policy,
-  skillRefs: agent.skill_refs,
-  privateConfig: agent.private_config,
-  version: agent.version,
-});
-
 export const registerOpenImWebhooks = (
   app: FastifyInstance,
   pool: pg.Pool,
@@ -159,6 +145,7 @@ export const registerOpenImWebhooks = (
       [senderOpenimId],
     );
     const extension = parseJson(body.ex);
+    const agentAction = extension.agentAction === "propose-task" ? "propose-task" : "chat";
     const mentionedOpenimIds = new Set([
       ...(Array.isArray(body.atUserList) ? body.atUserList.map(String) : []),
       ...(Array.isArray(extension.targetAgentIds) ? extension.targetAgentIds.map(String) : []),
@@ -179,7 +166,6 @@ export const registerOpenImWebhooks = (
     const sequence = Number(body.seq ?? 0);
     const client = await pool.connect();
     let createdTask: { id: string; taskRoomId: string } | null = null;
-    const ownerIds = new Set<string>();
     const contextUpdates: Array<{ taskId: string; taskRoomId: string; contextVersion: number }> =
       [];
     try {
@@ -250,29 +236,13 @@ export const registerOpenImWebhooks = (
             contextVersion: task.context_version,
           });
         }
-        if (senderUser.rows[0] && targetAgents.rows.length) {
+        if (senderUser.rows[0] && targetAgents.rows.length && agentAction === "propose-task") {
           createdTask = await createTaskFromMessage(
             client,
             room.rows[0],
             senderUser.rows[0],
             targetAgents.rows,
             { serverMsgId, sequence, text },
-          );
-          for (const agent of targetAgents.rows) ownerIds.add(agent.owner_id);
-        }
-      } else if (room.rows[0].type === "task" && senderUser.rows[0] && targetAgents.rows.length) {
-        const task = await client.query<{ id: string; context_version: number }>(
-          "SELECT id, context_version FROM tasks WHERE task_room_id = $1",
-          [room.rows[0].id],
-        );
-        if (task.rows[0]) {
-          for (const agent of targetAgents.rows) {
-            await createRun(client, task.rows[0].id, task.rows[0].context_version, agent);
-            ownerIds.add(agent.owner_id);
-          }
-          await client.query(
-            "UPDATE tasks SET status = 'queued', updated_at = now() WHERE id = $1",
-            [task.rows[0].id],
           );
         }
       }
@@ -304,13 +274,12 @@ export const registerOpenImWebhooks = (
     }
     if (createdTask) {
       await events.publishToRoom(room.rows[0].id, {
-        type: "task.created",
+        type: "task.proposed",
         taskId: createdTask.id,
         taskRoomId: createdTask.taskRoomId,
         anchorMessageId: serverMsgId,
       });
     }
-    for (const owner of ownerIds) await events.dispatchQueued(owner);
     return callbackResponse(true);
   });
 };
@@ -331,25 +300,6 @@ const findDirectRoom = async (pool: pg.Pool, sender: string, receiver: string) =
         .map((row) => row.id)
         .sort()
         .join(":"),
-    ],
-  );
-};
-
-const createRun = async (
-  client: pg.PoolClient,
-  taskId: string,
-  contextVersion: number,
-  agent: AgentForTask,
-) => {
-  await client.query(
-    `INSERT INTO task_runs(task_id, agent_id, status, execution_target, context_version, agent_snapshot)
-     VALUES ($1, $2, 'queued', $3, $4, $5::jsonb)`,
-    [
-      taskId,
-      agent.id,
-      agent.execution_target,
-      contextVersion,
-      JSON.stringify(snapshotAgent(agent)),
     ],
   );
 };
@@ -386,10 +336,24 @@ const createTaskFromMessage = async (
     ]);
   }
   await client.query(
-    `INSERT INTO tasks(id, creator_id, source_room_id, task_room_id, anchor_message_id, title,
-                       status, context_version, latest_source_seq)
-     VALUES ($1,$2,$3,$4,$5,$6,'queued',1,$7)`,
-    [taskId, creator.id, sourceRoom.id, taskRoomId, message.serverMsgId, title, message.sequence],
+    `INSERT INTO tasks(
+       id, creator_id, requested_by_user_id, proposed_by_agent_id, source_room_id, task_room_id,
+       anchor_message_id, title, objective, expected_result, plan, acceptance_criteria,
+       requested_access, status, revision, context_version, latest_source_seq, approval_required
+     ) VALUES ($1,$2,$2,$3,$4,$5,$6,$7,$8,$8,$9::jsonb,'[]'::jsonb,$10,'pending_review',1,1,$11,true)`,
+    [
+      taskId,
+      creator.id,
+      targetAgents[0]?.id ?? null,
+      sourceRoom.id,
+      taskRoomId,
+      message.serverMsgId,
+      title,
+      message.text,
+      JSON.stringify(["由 Agent 完善执行计划和验收条件"]),
+      targetAgents.some((agent) => agent.workspace_access === "write") ? "write" : "read",
+      message.sequence,
+    ],
   );
   await client.query(
     `INSERT INTO task_context_events(task_id, message_id, context_version, source_seq)
@@ -401,7 +365,6 @@ const createTaskFromMessage = async (
       taskId,
       agent.id,
     ]);
-    await createRun(client, taskId, 1, agent);
   }
   await enqueueOutbox(client, "openim.group.create", "room", taskRoomId, {
     groupID: taskGroupId,

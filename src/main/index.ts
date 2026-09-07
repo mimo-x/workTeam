@@ -12,10 +12,12 @@ import { ImConfigStore, imConfigPath } from "./im-config";
 import { RemoteAgentHost } from "./remote-agent-host";
 import type {
   AgentDefinition,
+  AgentMessageAction,
   ExternalTeamMessage,
   HumanContact,
   ImConfigInput,
   TaskStatus,
+  TaskReviewDecision,
 } from "../shared/agent-team";
 import type { ApprovalDecision, RpcRequestId } from "../shared/codex";
 import type {
@@ -204,6 +206,7 @@ const registerIpc = () => {
         text?: unknown;
         model?: unknown;
         targetAgentIds?: unknown;
+        agentAction?: unknown;
         transport?: unknown;
         externalId?: unknown;
       },
@@ -219,6 +222,8 @@ const registerIpc = () => {
         roomId: typeof options.roomId === "string" ? options.roomId : undefined,
         model: typeof options.model === "string" ? options.model : undefined,
         targetAgentIds,
+        agentAction:
+          options.agentAction === "propose-task" ? "propose-task" : ("chat" as AgentMessageAction),
         transport: options.transport === "openim" ? "openim" : "local",
         externalId: typeof options.externalId === "string" ? options.externalId : undefined,
       });
@@ -234,6 +239,7 @@ const registerIpc = () => {
         model?: unknown;
         targetAgentIds?: unknown;
         triggerAgents?: unknown;
+        agentAction?: unknown;
       },
     ) => {
       const workspace = await requireDirectory(options.workspace);
@@ -249,6 +255,23 @@ const registerIpc = () => {
         content: requireString(raw.content, "消息"),
         createdAt: typeof raw.createdAt === "number" ? raw.createdAt : Date.now(),
         runId: typeof raw.runId === "string" ? raw.runId : undefined,
+        agentHop:
+          typeof raw.agentHop === "number" && Number.isFinite(raw.agentHop)
+            ? Math.max(0, Math.floor(raw.agentHop))
+            : undefined,
+        relayRootId:
+          typeof raw.relayRootId === "string" && raw.relayRootId.trim()
+            ? raw.relayRootId.trim().slice(0, 256)
+            : undefined,
+        loopId:
+          typeof raw.loopId === "string" && raw.loopId.trim()
+            ? raw.loopId.trim().slice(0, 256)
+            : undefined,
+        loopTurn:
+          typeof raw.loopTurn === "number" && Number.isFinite(raw.loopTurn)
+            ? Math.max(1, Math.floor(raw.loopTurn))
+            : undefined,
+        agentAction: raw.agentAction === "propose-task" ? "propose-task" : "chat",
       };
       return agentTeam.ingestExternalMessage({
         workspace,
@@ -258,11 +281,47 @@ const registerIpc = () => {
           ? options.targetAgentIds.filter((value): value is string => typeof value === "string")
           : undefined,
         triggerAgents: options.triggerAgents === true,
+        agentAction: options.agentAction === "propose-task" ? "propose-task" : "chat",
       });
     },
   );
   ipcMain.handle("agent-team:stop-run", (_event, options: { runId?: unknown }) =>
     agentTeam.stopRun(requireString(options.runId, "run ID", 256)),
+  );
+  ipcMain.handle(
+    "agent-team:promote-agents",
+    async (_event, options: { workspace?: unknown; mappings?: unknown }) => {
+      if (!Array.isArray(options.mappings) || options.mappings.length > 24) {
+        throw new Error("Agent 云端映射格式无效。");
+      }
+      const mappings = options.mappings.map((value) => {
+        if (!value || typeof value !== "object") throw new Error("Agent 云端映射格式无效。");
+        const raw = value as Record<string, unknown>;
+        return {
+          localAgentId: requireString(raw.localAgentId, "本地 Agent ID", 64),
+          cloudAgentId: requireString(raw.cloudAgentId, "云端 Agent ID", 64),
+          openimUserId: requireString(raw.openimUserId, "Agent OpenIM ID", 128),
+          version: typeof raw.version === "number" ? raw.version : 1,
+        };
+      });
+      return agentTeam.promoteAgents(await requireDirectory(options.workspace), mappings);
+    },
+  );
+  ipcMain.handle(
+    "agent-team:control-loop",
+    async (
+      _event,
+      options: { workspace?: unknown; loopId?: unknown; action?: unknown; model?: unknown },
+    ) => {
+      const actions = new Set(["pause", "resume", "cancel"]);
+      if (!actions.has(String(options.action))) throw new Error("Loop 操作无效。");
+      return agentTeam.controlLoop(
+        await requireDirectory(options.workspace),
+        requireString(options.loopId, "Loop ID", 256),
+        options.action as "pause" | "resume" | "cancel",
+        typeof options.model === "string" ? options.model : undefined,
+      );
+    },
   );
   ipcMain.handle(
     "agent-team:save-agents",
@@ -335,6 +394,43 @@ const registerIpc = () => {
       const workspace = await requireDirectory(options.workspace);
       const taskId = requireString(options.taskId, "Task ID", 256);
       return agentTeam.updateTaskStatus(workspace, taskId, options.status as TaskStatus);
+    },
+  );
+  ipcMain.handle(
+    "agent-team:review-task",
+    async (
+      _event,
+      options: {
+        workspace?: unknown;
+        taskId?: unknown;
+        decision?: unknown;
+        comment?: unknown;
+      },
+    ) => {
+      const workspace = await requireDirectory(options.workspace);
+      const taskId = requireString(options.taskId, "Task ID", 256);
+      const decisions = new Set<TaskReviewDecision>(["approved", "changes_requested", "rejected"]);
+      if (!decisions.has(options.decision as TaskReviewDecision)) {
+        throw new Error("Task 审核结果无效。");
+      }
+      return agentTeam.reviewTask(
+        workspace,
+        taskId,
+        options.decision as TaskReviewDecision,
+        typeof options.comment === "string" ? options.comment : "",
+      );
+    },
+  );
+  ipcMain.handle(
+    "agent-team:start-task",
+    async (_event, options: { workspace?: unknown; taskId?: unknown; model?: unknown }) => {
+      const workspace = await requireDirectory(options.workspace);
+      const taskId = requireString(options.taskId, "Task ID", 256);
+      return agentTeam.startTask(
+        workspace,
+        taskId,
+        typeof options.model === "string" ? options.model : undefined,
+      );
     },
   );
 

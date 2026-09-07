@@ -61,10 +61,20 @@ const server = createServer(async (request, response) => {
   try {
     const body = await readJson(request);
     const agentId = String(body.agentId || "");
+    const senderOpenimId = String(body.senderOpenimId || agentId).trim();
     const groupId = String(body.groupId || "");
     const content = String(body.content || "").trim();
     const deliveryId = String(body.deliveryId || "");
+    const atUserIds = [
+      ...new Set(
+        (Array.isArray(body.atUserIds) ? body.atUserIds : [])
+          .map(String)
+          .map((value) => value.trim())
+          .filter((value) => value && value.length <= 128),
+      ),
+    ].slice(0, 100);
     if (!allowedAgents.has(agentId)) throw new Error("Agent 不在允许列表中。");
+    if (!senderOpenimId || senderOpenimId.length > 128) throw new Error("Agent OpenIM ID 无效。");
     if (!groupId) throw new Error("缺少 groupId。");
     if (allowedGroups.size && !allowedGroups.has(groupId)) {
       throw new Error("群组不在允许列表中。");
@@ -76,6 +86,20 @@ const server = createServer(async (request, response) => {
     if (delivered) return json(response, 200, delivered);
 
     const operationId = randomUUID();
+    const metadata = {
+      kind: "agent-message",
+      agentId,
+      deliveryId,
+      runId: String(body.runId || ""),
+      parentMessageId: String(body.parentMessageId || ""),
+      agentHop: Math.max(1, Math.min(1_000, Number(body.agentHop) || 1)),
+      final: true,
+    };
+    if (body.relayRootId) metadata.relayRootId = String(body.relayRootId).slice(0, 256);
+    if (body.loopId) {
+      metadata.loopId = String(body.loopId).slice(0, 256);
+      metadata.loopTurn = Math.max(1, Math.min(1_000, Number(body.loopTurn) || 1));
+    }
     const upstream = await fetch(`${openImApi}/msg/send_msg`, {
       method: "POST",
       headers: {
@@ -84,24 +108,19 @@ const server = createServer(async (request, response) => {
         token: adminToken,
       },
       body: JSON.stringify({
-        sendID: agentId,
+        sendID: senderOpenimId,
         recvID: "",
         groupID: groupId,
         senderNickname: String(body.senderName || agentId),
         senderPlatformID: 10,
-        content: { content },
-        contentType: 101,
+        content: atUserIds.length
+          ? { text: content, atUserList: atUserIds, atUsersInfo: [], isAtSelf: false }
+          : { content },
+        contentType: atUserIds.length ? 106 : 101,
         sessionType: 3,
         isOnlineOnly: false,
         notOfflinePush: false,
-        ex: JSON.stringify({
-          kind: "agent-message",
-          agentId,
-          deliveryId,
-          runId: String(body.runId || ""),
-          parentMessageId: String(body.parentMessageId || ""),
-          final: true,
-        }),
+        ex: JSON.stringify(metadata),
       }),
       signal: AbortSignal.timeout(15_000),
     });

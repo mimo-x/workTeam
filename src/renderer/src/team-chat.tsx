@@ -11,8 +11,11 @@ import {
   LoaderCircleIcon,
   LockIcon,
   MessageSquareMoreIcon,
+  PauseIcon,
   PencilIcon,
+  PlayIcon,
   PlusIcon,
+  Repeat2Icon,
   SearchIcon,
   SendIcon,
   Settings2Icon,
@@ -28,6 +31,8 @@ import remarkGfm from "remark-gfm";
 
 import type {
   AgentDefinition,
+  AgentLoopSession,
+  AgentMessageAction,
   AgentTask,
   HumanContact,
   ImConfigInput,
@@ -43,8 +48,20 @@ import { openImTransport, type OpenImConnectionState } from "./openim-transport"
 export type TeamView = "messages" | "contacts" | "tasks";
 
 const LOCAL_ROOM_ID = "local-agent-team";
-const activeTaskStatuses: TaskStatus[] = ["queued", "running", "waiting", "review", "blocked"];
+const activeTaskStatuses: TaskStatus[] = [
+  "pending_review",
+  "changes_requested",
+  "approved",
+  "queued",
+  "running",
+  "waiting",
+  "review",
+  "blocked",
+];
 const taskLabels: Record<TaskStatus, string> = {
+  pending_review: "待人工审核",
+  changes_requested: "待修改",
+  approved: "已审核",
   queued: "待处理",
   running: "执行中",
   waiting: "等待确认",
@@ -55,6 +72,9 @@ const taskLabels: Record<TaskStatus, string> = {
   cancelled: "已取消",
 };
 const taskTone: Record<TaskStatus, string> = {
+  pending_review: "border-amber-300/15 bg-amber-300/7 text-amber-300",
+  changes_requested: "border-orange-300/15 bg-orange-300/7 text-orange-300",
+  approved: "border-emerald-300/15 bg-emerald-300/7 text-emerald-300",
   queued: "border-zinc-300/10 bg-zinc-300/5 text-zinc-400",
   running: "border-cyan-300/15 bg-cyan-300/7 text-cyan-300",
   waiting: "border-amber-300/15 bg-amber-300/7 text-amber-300",
@@ -112,6 +132,24 @@ const dateLabel = (timestamp: number) =>
     minute: "2-digit",
   }).format(timestamp);
 
+const cloudAgentBody = (agent: AgentDefinition) => ({
+  name: agent.name,
+  title: agent.title,
+  mention: agent.mention,
+  description: agent.description,
+  instructions: agent.instructions,
+  visibility: agent.visibility,
+  workspaceAccess: agent.workspaceAccess,
+  executionTarget: agent.executionLocation,
+  skillPolicy: agent.skillPolicy ?? "none",
+  skillRefs: agent.skillRefs ?? [],
+  secrets: {},
+});
+const cloudAgentUpdateBody = (agent: AgentDefinition) => {
+  const { secrets: _secrets, ...body } = cloudAgentBody(agent);
+  return body;
+};
+
 const upsertRoom = (rooms: TeamRoomSnapshot[], room: TeamRoomSnapshot) => {
   const index = rooms.findIndex((candidate) => candidate.roomId === room.roomId);
   if (index < 0) return [...rooms, room];
@@ -128,12 +166,21 @@ const upsertTask = (tasks: AgentTask[], task: AgentTask) => {
   return next;
 };
 
+const upsertLoop = (loops: AgentLoopSession[], loop: AgentLoopSession) => {
+  const index = loops.findIndex((candidate) => candidate.id === loop.id);
+  if (index < 0) return [loop, ...loops];
+  const next = [...loops];
+  next[index] = loop;
+  return next;
+};
+
 const applyEvent = (state: TeamWorkspaceSnapshot, event: TeamEvent) => {
   if (event.type === "workspace-snapshot") return event.snapshot;
   if (event.type === "agents-upsert") return { ...state, agents: event.agents };
   if (event.type === "humans-upsert") return { ...state, humans: event.humans };
   if (event.type === "room-upsert") return { ...state, rooms: upsertRoom(state.rooms, event.room) };
   if (event.type === "task-upsert") return { ...state, tasks: upsertTask(state.tasks, event.task) };
+  if (event.type === "loop-upsert") return { ...state, loops: upsertLoop(state.loops, event.loop) };
   const room = state.rooms.find((candidate) => candidate.roomId === event.roomId);
   if (!room) return state;
   const messages = [...room.messages];
@@ -561,55 +608,34 @@ const AgentSettings = ({
         const originalById = new Map(originalAgents.current.map((agent) => [agent.id, agent]));
         const removedRemote = originalAgents.current.filter(
           (agent) =>
-            agent.syncSource === "backend" &&
+            (agent.syncSource === "backend" || Boolean(agent.cloudAgentId)) &&
             agent.ownerId === "local_user" &&
             !drafts.some((draft) => draft.id === agent.id),
         );
         for (const agent of removedRemote) {
           await window.backend.request({
             method: "DELETE",
-            path: `/v1/agents/${encodeURIComponent(agent.id)}`,
+            path: `/v1/agents/${encodeURIComponent(agent.cloudAgentId ?? agent.id)}`,
           });
         }
         for (const agent of drafts) {
           const original = originalById.get(agent.id);
-          if (agent.syncSource === "backend" && agent.ownerId === "local_user" && original) {
+          const cloudAgentId =
+            agent.cloudAgentId ?? (agent.syncSource === "backend" ? agent.id : undefined);
+          if (cloudAgentId && agent.ownerId === "local_user" && original) {
             if (JSON.stringify(agent) !== JSON.stringify(original)) {
               await window.backend.request({
                 method: "PATCH",
-                path: `/v1/agents/${encodeURIComponent(agent.id)}`,
+                path: `/v1/agents/${encodeURIComponent(cloudAgentId)}`,
                 headers: { "if-match": String(agent.version ?? 1) },
-                body: {
-                  name: agent.name,
-                  title: agent.title,
-                  mention: agent.mention,
-                  description: agent.description,
-                  instructions: agent.instructions,
-                  visibility: agent.visibility,
-                  workspaceAccess: agent.workspaceAccess,
-                  executionTarget: agent.executionLocation,
-                  skillPolicy: agent.skillPolicy ?? "none",
-                  skillRefs: agent.skillRefs ?? [],
-                },
+                body: cloudAgentUpdateBody(agent),
               });
             }
           } else if (!original && agent.syncSource !== "backend") {
             await window.backend.request({
               method: "POST",
               path: "/v1/agents",
-              body: {
-                name: agent.name,
-                title: agent.title,
-                mention: agent.mention,
-                description: agent.description,
-                instructions: agent.instructions,
-                visibility: agent.visibility,
-                workspaceAccess: agent.workspaceAccess,
-                executionTarget: agent.executionLocation,
-                skillPolicy: agent.skillPolicy ?? "none",
-                skillRefs: agent.skillRefs ?? [],
-                secrets: {},
-              },
+              body: cloudAgentBody(agent),
             });
           }
         }
@@ -1241,9 +1267,10 @@ const RoomDialog = ({
     setError("");
     try {
       const remoteSelection =
-        selectedAgents.some(
-          (id) => agents.find((agent) => agent.id === id)?.syncSource === "backend",
-        ) ||
+        selectedAgents.some((id) => {
+          const agent = agents.find((candidate) => candidate.id === id);
+          return agent?.syncSource === "backend" || Boolean(agent?.cloudAgentId);
+        }) ||
         selectedHumans.some(
           (id) =>
             id !== "local_user" &&
@@ -1252,16 +1279,48 @@ const RoomDialog = ({
       const useCloud = room?.syncSource === "backend" || (cloudMode && remoteSelection);
       let next: TeamRoomSnapshot;
       if (useCloud) {
-        const hasLocalOnlyMember =
-          selectedAgents.some(
-            (id) => agents.find((agent) => agent.id === id)?.syncSource !== "backend",
-          ) ||
-          selectedHumans.some(
-            (id) =>
-              id !== "local_user" &&
-              humans.find((human) => human.id === id)?.syncSource !== "backend",
+        const localOnlyHumans = selectedHumans.filter(
+          (id) =>
+            id !== "local_user" &&
+            humans.find((human) => human.id === id)?.syncSource !== "backend",
+        );
+        if (localOnlyHumans.length) {
+          throw new Error("本地联系人没有远程账号，请先通过好友功能添加对方后再加入云端群。");
+        }
+        const localOnlyAgents = selectedAgents
+          .map((id) => agents.find((agent) => agent.id === id))
+          .filter((agent): agent is AgentDefinition =>
+            Boolean(agent && agent.syncSource !== "backend" && !agent.cloudAgentId),
           );
-        if (hasLocalOnlyMember) throw new Error("云端群不能加入尚未同步的本地联系人或 Agent。");
+        const promotedMappings = await Promise.all(
+          localOnlyAgents.map(async (agent) => {
+            const created = await window.backend.request<{
+              id: string;
+              openimUserId: string;
+              version: number;
+            }>({
+              method: "POST",
+              path: "/v1/agents",
+              body: cloudAgentBody(agent),
+            });
+            return {
+              localAgentId: agent.id,
+              cloudAgentId: created.id,
+              openimUserId: created.openimUserId,
+              version: created.version,
+            };
+          }),
+        );
+        if (promotedMappings.length) {
+          await window.agentTeam.promoteAgents({ workspace, mappings: promotedMappings });
+        }
+        const promotedByLocalId = new Map(
+          promotedMappings.map((mapping) => [mapping.localAgentId, mapping.cloudAgentId]),
+        );
+        const cloudAgentIds = selectedAgents.map((id) => {
+          const agent = agents.find((candidate) => candidate.id === id);
+          return promotedByLocalId.get(id) ?? agent?.cloudAgentId ?? id;
+        });
         const userIds = selectedHumans.filter((id) => id !== "local_user");
         let roomId: string;
         if (room) {
@@ -1279,14 +1338,14 @@ const RoomDialog = ({
             method: "PUT",
             path: `/v1/rooms/${encodeURIComponent(room.roomId)}/members`,
             headers: { "if-match": String(revision) },
-            body: { userIds, agentIds: selectedAgents },
+            body: { userIds, agentIds: cloudAgentIds },
           });
           roomId = room.roomId;
         } else {
           const created = await window.backend.request<{ id: string }>({
             method: "POST",
             path: "/v1/rooms",
-            body: { name, userIds, agentIds: selectedAgents },
+            body: { name, userIds, agentIds: cloudAgentIds },
           });
           roomId = created.id;
         }
@@ -1585,15 +1644,19 @@ const TaskBoard = ({
   state,
   onOpen,
   onStatus,
+  onReview,
+  onStart,
 }: {
   state: TeamWorkspaceSnapshot;
   onOpen: (task: AgentTask) => void;
   onStatus: (task: AgentTask, status: TaskStatus) => void;
+  onReview: (task: AgentTask, decision: "approved" | "changes_requested") => void;
+  onStart: (task: AgentTask) => void;
 }) => {
   const columns: Array<{ title: string; statuses: TaskStatus[] }> = [
-    { title: "待处理", statuses: ["queued"] },
-    { title: "进行中", statuses: ["running", "waiting", "blocked"] },
-    { title: "待验收", statuses: ["review"] },
+    { title: "待审核", statuses: ["pending_review", "changes_requested"] },
+    { title: "待执行", statuses: ["approved", "queued"] },
+    { title: "执行中", statuses: ["running", "waiting", "blocked", "review"] },
     { title: "已结束", statuses: ["done", "failed", "cancelled"] },
   ];
   const sorted = [...state.tasks].sort((a, b) => b.updatedAt - a.updatedAt);
@@ -1688,6 +1751,35 @@ const TaskBoard = ({
                             验收完成
                           </button>
                         )}
+                        {(task.status === "pending_review" ||
+                          task.status === "changes_requested") && (
+                          <div className="mt-3 grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              onClick={() => onReview(task, "changes_requested")}
+                              className="rounded-lg border border-white/8 py-1.5 text-[10px] text-zinc-500 hover:text-zinc-200"
+                            >
+                              退回修改
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onReview(task, "approved")}
+                              className="rounded-lg bg-emerald-300/10 py-1.5 text-[10px] text-emerald-300"
+                            >
+                              审核通过
+                            </button>
+                          </div>
+                        )}
+                        {task.status === "approved" && (
+                          <button
+                            type="button"
+                            onClick={() => onStart(task)}
+                            className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg bg-cyan-300 py-1.5 text-[10px] font-medium text-cyan-950"
+                          >
+                            <SendIcon className="size-3" />
+                            开始执行
+                          </button>
+                        )}
                       </article>
                     );
                   })}
@@ -1720,7 +1812,13 @@ export const TeamChat = ({
   const [state, setState] = useState<TeamWorkspaceSnapshot | null>(null);
   const [selectedRoomId, setSelectedRoomId] = useState(LOCAL_ROOM_ID);
   const [draft, setDraft] = useState("");
-  const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
+  const [agentAction, setAgentAction] = useState<AgentMessageAction>("chat");
+  const [mention, setMention] = useState<{
+    start: number;
+    end: number;
+    query: string;
+  } | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1734,6 +1832,7 @@ export const TeamChat = ({
   const [connection, setConnection] = useState<OpenImConnectionState>(openImTransport.getStatus());
   const [configRevision, setConfigRevision] = useState(0);
   const endRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => openImTransport.onStatus(setConnection), []);
   useEffect(() => {
@@ -1804,7 +1903,9 @@ export const TeamChat = ({
             await openImTransport.connect(runtime);
           } catch (nextError) {
             if (cancelled) return;
-            setError(nextError instanceof Error ? nextError.message : String(nextError));
+            const message = nextError instanceof Error ? nextError.message : String(nextError);
+            if (message.includes("OpenIM 尚未配置")) return;
+            setError(message);
             attempt += 1;
             if (attempt < 5) retryTimer = setTimeout(() => void connectCloudIm(), attempt * 1_500);
           }
@@ -1936,6 +2037,20 @@ export const TeamChat = ({
     ? state?.rooms.find((candidate) => candidate.roomId === task.sourceRoomId)
     : undefined;
   const roomAgents = state?.agents.filter((agent) => room?.agentIds.includes(agent.id)) ?? [];
+  const mentionsAllAgents = /@(所有Agent|全部Agent|all-agents|all)(?=\s|$)/i.test(draft);
+  const mentionedAgents = mentionsAllAgents
+    ? roomAgents
+    : roomAgents.filter((agent) => draft.includes(agent.mention) || draft.includes(`@${agent.id}`));
+  const mentionCandidates = mention
+    ? roomAgents
+        .filter((agent) => {
+          const query = mention.query.toLocaleLowerCase();
+          return [agent.name, agent.title, agent.mention.slice(1), agent.id].some((value) =>
+            value.toLocaleLowerCase().includes(query),
+          );
+        })
+        .slice(0, 8)
+    : [];
   const roomHumans = state?.humans.filter((human) => room?.humanIds.includes(human.id)) ?? [];
   const directAgent = state?.agents.find((agent) => agent.id === room?.directPrincipalId);
   const directHuman = state?.humans.find((human) => human.id === room?.directPrincipalId);
@@ -1943,6 +2058,14 @@ export const TeamChat = ({
     state?.tasks
       .filter((candidate) => candidate.sourceRoomId === room?.roomId)
       .sort((a, b) => b.updatedAt - a.updatedAt) ?? [];
+  const roomLoops =
+    state?.loops
+      .filter((candidate) => candidate.roomId === room?.roomId)
+      .sort((a, b) => b.updatedAt - a.updatedAt) ?? [];
+  const visibleLoop =
+    roomLoops.find(
+      (candidate) => candidate.status === "running" || candidate.status === "paused",
+    ) ?? roomLoops[0];
   const sourceContext =
     task && sourceRoom
       ? task.contextEvents
@@ -1958,7 +2081,8 @@ export const TeamChat = ({
     0;
 
   useEffect(() => {
-    setSelectedAgents([]);
+    setAgentAction("chat");
+    setMention(null);
   }, [selectedRoomId]);
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -1988,16 +2112,46 @@ export const TeamChat = ({
     setSelectedRoomId(nextTask.taskRoomId);
     onViewChange("messages");
   };
+  const updateMention = (value: string, caret: number) => {
+    if (room?.type === "direct" || !roomAgents.length) {
+      setMention(null);
+      return;
+    }
+    const match = value.slice(0, caret).match(/@([^\s@]*)$/u);
+    if (!match) {
+      setMention(null);
+      return;
+    }
+    setMention({ start: caret - match[0].length, end: caret, query: match[1] });
+    setMentionIndex(0);
+  };
+  const insertMention = (agent: AgentDefinition) => {
+    if (!mention) return;
+    const insertion = `${agent.mention} `;
+    const value = `${draft.slice(0, mention.start)}${insertion}${draft.slice(mention.end)}`;
+    const caret = mention.start + insertion.length;
+    setDraft(value);
+    setMention(null);
+    requestAnimationFrame(() => {
+      composerRef.current?.focus();
+      composerRef.current?.setSelectionRange(caret, caret);
+    });
+  };
   const openDirect = async (principalId: string) => {
     try {
       const human = state?.humans.find((candidate) => candidate.id === principalId);
       const agent = state?.agents.find((candidate) => candidate.id === principalId);
       let nextRoom: TeamRoomSnapshot;
-      if (cloudMode && (human?.syncSource === "backend" || agent?.syncSource === "backend")) {
+      if (
+        cloudMode &&
+        (human?.syncSource === "backend" ||
+          agent?.syncSource === "backend" ||
+          Boolean(agent?.cloudAgentId))
+      ) {
         const created = await window.backend.request<{ id: string }>({
           method: "POST",
           path: agent ? "/v1/rooms/agent-direct" : "/v1/rooms/direct",
-          body: agent ? { agentId: principalId } : { userId: principalId },
+          body: agent ? { agentId: agent.cloudAgentId ?? principalId } : { userId: principalId },
         });
         const snapshot = await syncCloudWorkspace();
         const syncedRoom = snapshot.rooms.find((candidate) => candidate.roomId === created.id);
@@ -2028,17 +2182,19 @@ export const TeamChat = ({
   const send = async () => {
     const text = draft.trim();
     if (!text || sending || !room) return;
+    if (room.type !== "direct" && agentAction === "propose-task" && !mentionedAgents.length) {
+      setError("请先在消息中 @ 一个负责规划的 Agent。");
+      return;
+    }
     setSending(true);
     setError("");
     setDraft("");
     try {
-      let result: Awaited<ReturnType<typeof window.agentTeam.sendMessage>>;
       if (connection.state === "connected" && room.syncSource === "backend" && room.externalId) {
         const targetOpenimIds = roomAgents
           .filter(
             (agent) =>
-              selectedAgents.includes(agent.id) ||
-              text.includes(agent.mention) ||
+              mentionedAgents.some((mentioned) => mentioned.id === agent.id) ||
               (room.type === "direct" && room.directPrincipalId === agent.id),
           )
           .map((agent) => agent.openimUserId)
@@ -2048,10 +2204,12 @@ export const TeamChat = ({
           undefined,
           room.externalId,
           targetOpenimIds,
+          { agentAction },
         );
-        result = await window.agentTeam.ingestExternalMessage({
+        await window.agentTeam.ingestExternalMessage({
           workspace,
-          message: { ...message, roomId: room.roomId },
+          message: { ...message, roomId: room.roomId, agentAction },
+          agentAction,
         });
       } else if (
         connection.state === "connected" &&
@@ -2059,7 +2217,7 @@ export const TeamChat = ({
         room.roomId === imConfig.groupId
       ) {
         const targetOpenimIds = roomAgents
-          .filter((agent) => selectedAgents.includes(agent.id) || text.includes(agent.mention))
+          .filter((agent) => mentionedAgents.some((mentioned) => mentioned.id === agent.id))
           .map((agent) => agent.openimUserId)
           .filter((id): id is string => Boolean(id));
         const message = await openImTransport.sendText(
@@ -2067,34 +2225,37 @@ export const TeamChat = ({
           undefined,
           imConfig.groupId,
           targetOpenimIds,
+          { agentAction },
         );
-        result = await window.agentTeam.ingestExternalMessage({
+        await window.agentTeam.ingestExternalMessage({
           workspace,
-          message,
+          message: { ...message, agentAction },
           model,
-          targetAgentIds: selectedAgents,
+          targetAgentIds: mentionedAgents.map((agent) => agent.id),
           triggerAgents: true,
+          agentAction,
         });
       } else if (connection.state === "connected" && room.type === "direct" && directHuman) {
         const message = await openImTransport.sendText(
           text,
           directHuman.openimUserId ?? directHuman.id,
         );
-        result = await window.agentTeam.ingestExternalMessage({
+        await window.agentTeam.ingestExternalMessage({
           workspace,
           message: { ...message, roomId: room.roomId },
         });
       } else {
-        result = await window.agentTeam.sendMessage({
+        await window.agentTeam.sendMessage({
           workspace,
           roomId: room.roomId,
           text,
           model,
-          targetAgentIds: selectedAgents,
+          targetAgentIds: mentionedAgents.map((agent) => agent.id),
+          agentAction,
         });
       }
-      setSelectedAgents([]);
-      if (result.taskRoomId) setSelectedRoomId(result.taskRoomId);
+      setAgentAction("chat");
+      setMention(null);
     } catch (nextError) {
       setDraft(text);
       setError(nextError instanceof Error ? nextError.message : String(nextError));
@@ -2114,6 +2275,68 @@ export const TeamChat = ({
       } else {
         await window.agentTeam.updateTaskStatus({ workspace, taskId: nextTask.id, status });
       }
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  };
+  const reviewTask = async (nextTask: AgentTask, decision: "approved" | "changes_requested") => {
+    try {
+      setError("");
+      if (nextTask.syncSource === "backend") {
+        await window.backend.request({
+          method: "POST",
+          path: `/v1/tasks/${encodeURIComponent(nextTask.id)}/reviews`,
+          headers: { "if-match": String(nextTask.revision) },
+          body: {
+            decision,
+            comment:
+              decision === "approved"
+                ? "已人工审核任务目标、执行计划和权限。"
+                : "请根据沟通内容修改任务计划后再次提交审核。",
+          },
+        });
+        await syncCloudWorkspace();
+      } else {
+        await window.agentTeam.reviewTask({
+          workspace,
+          taskId: nextTask.id,
+          decision,
+          comment:
+            decision === "approved"
+              ? "已人工审核任务目标、执行计划和权限。"
+              : "请根据沟通内容修改任务计划后再次提交审核。",
+        });
+      }
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  };
+  const startTask = async (nextTask: AgentTask) => {
+    try {
+      setError("");
+      if (nextTask.syncSource === "backend") {
+        await window.backend.request({
+          method: "POST",
+          path: `/v1/tasks/${encodeURIComponent(nextTask.id)}/start`,
+          headers: { "if-match": String(nextTask.revision) },
+        });
+        await syncCloudWorkspace();
+      } else {
+        await window.agentTeam.startTask({ workspace, taskId: nextTask.id, model });
+      }
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  };
+  const controlLoop = async (nextLoop: AgentLoopSession, action: "pause" | "resume" | "cancel") => {
+    try {
+      setError("");
+      await window.agentTeam.controlLoop({
+        workspace,
+        loopId: nextLoop.id,
+        action,
+        model,
+      });
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     }
@@ -2166,6 +2389,8 @@ export const TeamChat = ({
         state={state}
         onOpen={openTask}
         onStatus={(nextTask, status) => void updateTaskStatus(nextTask, status)}
+        onReview={(nextTask, decision) => void reviewTask(nextTask, decision)}
+        onStart={(nextTask) => void startTask(nextTask)}
       />
     );
 
@@ -2328,26 +2553,167 @@ export const TeamChat = ({
             )}
           </div>
         </header>
+        {visibleLoop && room?.type !== "task" && (
+          <div className="border-b border-cyan-300/8 bg-cyan-300/[0.025] px-5 py-3">
+            <div className="flex items-center gap-3">
+              <div className="grid size-8 shrink-0 place-items-center rounded-lg bg-cyan-300/8 text-cyan-300">
+                <Repeat2Icon
+                  className={`size-4 ${visibleLoop.status === "running" ? "animate-pulse" : ""}`}
+                />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="truncate text-xs text-zinc-300">{visibleLoop.title}</span>
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-[9px] ${
+                      visibleLoop.status === "running"
+                        ? "border-cyan-300/15 bg-cyan-300/8 text-cyan-300"
+                        : visibleLoop.status === "paused"
+                          ? "border-amber-300/15 bg-amber-300/8 text-amber-300"
+                          : visibleLoop.status === "completed"
+                            ? "border-emerald-300/15 bg-emerald-300/8 text-emerald-300"
+                            : "border-white/8 bg-white/4 text-zinc-500"
+                    }`}
+                  >
+                    {visibleLoop.status === "running"
+                      ? "运行中"
+                      : visibleLoop.status === "paused"
+                        ? "已暂停"
+                        : visibleLoop.status === "completed"
+                          ? "已完成"
+                          : visibleLoop.status === "cancelled"
+                            ? "已终止"
+                            : "失败"}
+                  </span>
+                  <span className="text-[9px] text-zinc-600">
+                    {visibleLoop.completedTurns}
+                    {visibleLoop.targetTurns ? ` / ${visibleLoop.targetTurns}` : " 次回复"}
+                  </span>
+                </div>
+                <p className="mt-1 truncate text-[10px] text-zinc-600">
+                  {visibleLoop.endReason || visibleLoop.objective}
+                </p>
+                {visibleLoop.targetTurns && (
+                  <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/5">
+                    <div
+                      className="h-full rounded-full bg-cyan-300/70 transition-[width]"
+                      style={{
+                        width: `${Math.min(100, (visibleLoop.completedTurns / visibleLoop.targetTurns) * 100)}%`,
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                {visibleLoop.status === "running" && (
+                  <button
+                    type="button"
+                    onClick={() => void controlLoop(visibleLoop, "pause")}
+                    className="grid size-8 place-items-center rounded-lg text-zinc-600 hover:bg-white/5 hover:text-amber-300"
+                    title="暂停 Loop"
+                  >
+                    <PauseIcon className="size-3.5" />
+                  </button>
+                )}
+                {visibleLoop.status === "paused" && (
+                  <button
+                    type="button"
+                    onClick={() => void controlLoop(visibleLoop, "resume")}
+                    className="grid size-8 place-items-center rounded-lg text-zinc-600 hover:bg-white/5 hover:text-cyan-300"
+                    title="继续 Loop"
+                  >
+                    <PlayIcon className="size-3.5" />
+                  </button>
+                )}
+                {(visibleLoop.status === "running" || visibleLoop.status === "paused") && (
+                  <button
+                    type="button"
+                    onClick={() => void controlLoop(visibleLoop, "cancel")}
+                    className="grid size-8 place-items-center rounded-lg text-zinc-600 hover:bg-red-300/5 hover:text-red-300"
+                    title="终止 Loop"
+                  >
+                    <XIcon className="size-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
         {task && sourceRoom && (
-          <div className="flex items-center gap-3 border-b border-violet-300/8 bg-violet-300/[0.025] px-5 py-2.5">
-            <div className="grid size-8 place-items-center rounded-lg bg-violet-300/8 text-violet-300">
-              <MessageSquareMoreIcon className="size-4" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-xs text-zinc-300">
-                来源：{sourceRoom.name} · 消息 #{task.anchorSeq}
+          <div className="border-b border-violet-300/8 bg-violet-300/[0.025] px-5 py-3">
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-violet-300/8 text-violet-300">
+                <MessageSquareMoreIcon className="size-4" />
               </div>
-              <div className="mt-0.5 text-[9px] text-zinc-600">
-                主群后续消息会持续进入当前 Task，上次执行后的新增内容会在下一轮注入。
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusPill status={task.status} />
+                  <span className="truncate text-xs text-zinc-300">{task.title}</span>
+                  <span className="text-[9px] text-zinc-700">v{task.revision}</span>
+                </div>
+                <p className="mt-1 text-[10px] leading-4 text-zinc-500">{task.objective}</p>
+                {!!task.plan.length && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {task.plan.map((step, index) => (
+                      <span
+                        key={`${index}-${step}`}
+                        className="rounded-md border border-white/6 bg-black/15 px-2 py-1 text-[9px] text-zinc-500"
+                      >
+                        {index + 1}. {step}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[9px] text-zinc-600">
+                  <span>
+                    来源：{sourceRoom.name} · 消息 #{task.anchorSeq}
+                  </span>
+                  <span>权限：{task.requestedAccess === "write" ? "读写工作区" : "只读分析"}</span>
+                  {task.reviews.at(-1) && (
+                    <span>
+                      最近审核：{task.reviews.at(-1)?.reviewerName} ·{" "}
+                      {dateLabel(task.reviews.at(-1)!.reviewedAt)}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {(task.status === "pending_review" || task.status === "changes_requested") && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void reviewTask(task, "changes_requested")}
+                      className="rounded-lg border border-white/8 px-2.5 py-1.5 text-[9px] text-zinc-500 hover:text-zinc-200"
+                    >
+                      退回修改
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void reviewTask(task, "approved")}
+                      className="rounded-lg bg-emerald-300/10 px-2.5 py-1.5 text-[9px] text-emerald-300"
+                    >
+                      审核通过
+                    </button>
+                  </>
+                )}
+                {task.status === "approved" && (
+                  <button
+                    type="button"
+                    onClick={() => void startTask(task)}
+                    className="rounded-lg bg-cyan-300 px-2.5 py-1.5 text-[9px] font-medium text-cyan-950"
+                  >
+                    开始执行
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSelectedRoomId(sourceRoom.roomId)}
+                  className="px-1 text-[9px] text-violet-300/70 hover:text-violet-200"
+                >
+                  查看主群
+                </button>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setSelectedRoomId(sourceRoom.roomId)}
-              className="text-[10px] text-violet-300/70 hover:text-violet-200"
-            >
-              查看主群
-            </button>
           </div>
         )}
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
@@ -2367,12 +2733,12 @@ export const TeamChat = ({
                   </h2>
                   <p className="mt-2 text-sm leading-6 text-zinc-600">
                     {room?.type === "task"
-                      ? "在这里继续讨论细节；艾特 Agent 会在同一 Task 中创建新的执行轮次。"
+                      ? "在这里继续讨论细节；Agent 会持续看到来源群的新消息，审核通过前不会执行。"
                       : room?.type === "direct"
                         ? directAgent
                           ? "直接发送消息即可连续对话；这里的消息不会自动创建 Task。"
                           : "发送一条消息，开始一对一好友会话。"
-                        : "普通消息会成为活跃 Task 的实时上下文；选择或 @ Agent 会创建独立 Task 小群。"}
+                        : "普通 @ 只会让 Agent 在群里回复；需要执行工作时切换到“规划 Task”。"}
                   </p>
                 </div>
               </div>
@@ -2401,38 +2767,130 @@ export const TeamChat = ({
                 {directAgent ? "Agent 会在当前私聊中自动回复" : "好友私聊"}
               </div>
             ) : (
-              <div className="mb-2 flex items-center gap-1.5 overflow-x-auto pb-1">
-                <span className="mr-1 shrink-0 text-[9px] text-zinc-700">
-                  {room?.type === "group" ? "下发给" : "唤醒"}
-                </span>
-                {roomAgents.map((agent) => {
-                  const selected = selectedAgents.includes(agent.id);
-                  const theme = themeClasses[agent.theme];
-                  return (
-                    <button
-                      key={agent.id}
-                      type="button"
-                      onClick={() =>
-                        setSelectedAgents((current) =>
-                          selected
-                            ? current.filter((id) => id !== agent.id)
-                            : [...current, agent.id],
-                        )
-                      }
-                      className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] transition ${selected ? theme.chip : "border-white/7 text-zinc-600 hover:text-zinc-300"}`}
-                    >
-                      <span className={`mr-1.5 inline-block size-1.5 rounded-full ${theme.dot}`} />
-                      {agent.name}
-                    </button>
-                  );
-                })}
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2 text-[9px] text-zinc-600">
+                  <span className="rounded-md border border-white/7 bg-white/[0.025] px-2 py-1 font-medium text-zinc-400">
+                    @
+                  </span>
+                  <span>在消息栏输入 @ 选择 Agent，可连续提及多个</span>
+                  {!!mentionedAgents.length && (
+                    <span className="truncate text-cyan-300/75">
+                      将通知：{mentionedAgents.map((agent) => agent.name).join("、")}
+                    </span>
+                  )}
+                </div>
+                <div className="flex shrink-0 rounded-lg border border-white/7 bg-black/20 p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setAgentAction("chat")}
+                    className={`rounded-md px-2.5 py-1 text-[9px] transition ${
+                      agentAction === "chat"
+                        ? "bg-white/8 text-zinc-200"
+                        : "text-zinc-600 hover:text-zinc-300"
+                    }`}
+                  >
+                    群聊回复
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAgentAction("propose-task")}
+                    className={`rounded-md px-2.5 py-1 text-[9px] transition ${
+                      agentAction === "propose-task"
+                        ? "bg-violet-300/12 text-violet-200"
+                        : "text-zinc-600 hover:text-zinc-300"
+                    }`}
+                  >
+                    规划 Task
+                  </button>
+                </div>
               </div>
             )}
-            <div className="rounded-2xl border border-white/9 bg-white/[0.035] p-2 shadow-xl shadow-black/10 focus-within:border-cyan-300/20">
+            <div className="relative rounded-2xl border border-white/9 bg-white/[0.035] p-2 shadow-xl shadow-black/10 focus-within:border-cyan-300/20">
+              {mention && (
+                <div className="absolute bottom-full left-0 z-30 mb-2 w-72 overflow-hidden rounded-xl border border-white/10 bg-[#111620] p-1.5 shadow-2xl shadow-black/50">
+                  <div className="px-2 py-1.5 text-[9px] tracking-[0.12em] text-zinc-600 uppercase">
+                    {mention.query ? `搜索 “${mention.query}”` : "选择要提及的 Agent"}
+                  </div>
+                  {mentionCandidates.map((agent, index) => {
+                    const theme = themeClasses[agent.theme];
+                    return (
+                      <button
+                        key={agent.id}
+                        type="button"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => insertMention(agent)}
+                        className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition ${
+                          index === mentionIndex ? "bg-white/8" : "hover:bg-white/5"
+                        }`}
+                      >
+                        <span
+                          className={`grid size-7 shrink-0 place-items-center rounded-lg border text-[9px] ${theme.avatar}`}
+                        >
+                          {agent.initials}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-center gap-2 text-xs text-zinc-300">
+                            {agent.name}
+                            <span className="text-[9px] text-zinc-600">{agent.mention}</span>
+                          </span>
+                          <span className="block truncate text-[9px] text-zinc-600">
+                            {agent.title} · {agent.description}
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {!mentionCandidates.length && (
+                    <div className="px-2 py-3 text-[10px] text-zinc-600">
+                      当前群里没有匹配的 Agent
+                    </div>
+                  )}
+                  {!!mentionCandidates.length && (
+                    <div className="border-t border-white/6 px-2 pt-1.5 text-[8px] text-zinc-700">
+                      ↑↓ 选择 · Enter 插入 · Esc 关闭
+                    </div>
+                  )}
+                </div>
+              )}
               <textarea
+                ref={composerRef}
                 value={draft}
-                onChange={(event) => setDraft(event.target.value)}
+                onChange={(event) => {
+                  setDraft(event.target.value);
+                  updateMention(event.target.value, event.currentTarget.selectionStart);
+                }}
+                onClick={(event) =>
+                  updateMention(event.currentTarget.value, event.currentTarget.selectionStart)
+                }
+                onSelect={(event) =>
+                  updateMention(event.currentTarget.value, event.currentTarget.selectionStart)
+                }
                 onKeyDown={(event) => {
+                  if (mention && mentionCandidates.length) {
+                    if (event.key === "ArrowDown") {
+                      event.preventDefault();
+                      setMentionIndex((index) => (index + 1) % mentionCandidates.length);
+                      return;
+                    }
+                    if (event.key === "ArrowUp") {
+                      event.preventDefault();
+                      setMentionIndex(
+                        (index) =>
+                          (index - 1 + mentionCandidates.length) % mentionCandidates.length,
+                      );
+                      return;
+                    }
+                    if (event.key === "Enter" || event.key === "Tab") {
+                      event.preventDefault();
+                      insertMention(mentionCandidates[mentionIndex] ?? mentionCandidates[0]);
+                      return;
+                    }
+                  }
+                  if (event.key === "Escape" && mention) {
+                    event.preventDefault();
+                    setMention(null);
+                    return;
+                  }
                   if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault();
                     void send();
@@ -2441,9 +2899,13 @@ export const TeamChat = ({
                 rows={2}
                 placeholder={
                   room?.type === "group"
-                    ? "发消息；选择或 @ Agent 会创建 Task…"
+                    ? agentAction === "propose-task"
+                      ? "描述需要完成的工作，Agent 将整理目标和执行计划供你审核…"
+                      : "发消息或 @ Agent 对话；不会自动创建 Task…"
                     : room?.type === "task"
-                      ? "讨论任务；选择或 @ Agent 继续执行…"
+                      ? agentAction === "propose-task"
+                        ? "要求 Agent 根据讨论修改 Task 计划并重新提交审核…"
+                        : "讨论任务细节；消息会更新上下文，但不会立即执行…"
                       : `给 ${room?.name ?? "联系人"} 发消息…`
                 }
                 className="w-full resize-none bg-transparent px-2 py-1 text-sm leading-6 text-zinc-200 outline-none placeholder:text-zinc-700"
@@ -2454,15 +2916,23 @@ export const TeamChat = ({
                     ? directAgent
                       ? "连续 Agent 会话，不创建 Task"
                       : "一对一好友消息"
-                    : selectedAgents.length
-                      ? room?.type === "group"
-                        ? "发送后创建 Task 小群"
-                        : "发送后创建新的 TaskRun"
-                      : "仅发送消息，不唤醒 Agent"}
+                    : agentAction === "propose-task"
+                      ? mentionedAgents.length
+                        ? "Agent 只生成或修改 Task 草案；人工审核后才能开始执行"
+                        : "请先在消息中 @ 一个负责规划的 Agent"
+                      : mentionedAgents.length
+                        ? "Agent 在当前会话回复；不会创建或启动 Task"
+                        : "输入 @ 提及 Agent；未提及时只发送普通消息"}
                 </span>
                 <button
                   type="button"
-                  disabled={sending || !draft.trim()}
+                  disabled={
+                    sending ||
+                    !draft.trim() ||
+                    (room?.type !== "direct" &&
+                      agentAction === "propose-task" &&
+                      !mentionedAgents.length)
+                  }
                   onClick={() => void send()}
                   className="grid size-8 place-items-center rounded-xl bg-cyan-300 text-cyan-950 disabled:opacity-30"
                 >

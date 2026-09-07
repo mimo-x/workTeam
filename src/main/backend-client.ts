@@ -95,11 +95,22 @@ type CloudMessage = {
 type CloudTask = {
   id: string;
   title: string;
+  objective: string;
+  expectedResult: string;
+  plan: string[];
+  acceptanceCriteria: string[];
+  requestedAccess: "read" | "write";
   creatorId: string;
+  requestedByUserId?: string | null;
+  proposedByAgentId?: string | null;
   sourceRoomId: string;
   taskRoomId: string;
   anchorMessageId: string;
   status: AgentTask["status"];
+  revision: number;
+  approvedReviewId?: string | null;
+  startedByUserId?: string | null;
+  startedAt?: string | null;
   contextVersion: number;
   latestSourceSeq: number | string;
   createdAt: string;
@@ -119,6 +130,16 @@ type CloudTask = {
     messageId: string;
     sourceSeq: number | string;
     createdAt: string;
+  }>;
+  reviews: Array<{
+    id: string;
+    taskId: string;
+    taskRevision: number;
+    reviewerUserId: string;
+    reviewerName: string;
+    decision: "approved" | "changes_requested" | "rejected";
+    comment?: string;
+    reviewedAt: string;
   }>;
 };
 
@@ -453,13 +474,29 @@ export class BackendClient {
       return {
         id: task.id,
         title: task.title,
+        objective: task.objective || task.title,
+        expectedResult: task.expectedResult || task.title,
+        plan: Array.isArray(task.plan) ? task.plan : [],
+        acceptanceCriteria: Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria : [],
+        requestedAccess: task.requestedAccess === "write" ? "write" : "read",
         creatorId: mapUserId(task.creatorId),
+        requestedByUserId: task.requestedByUserId ? mapUserId(task.requestedByUserId) : undefined,
+        proposedByAgentId: task.proposedByAgentId ?? undefined,
         sourceRoomId: task.sourceRoomId,
         anchorMessageId: task.anchorMessageId,
         anchorSeq: Number(anchor?.sourceSeq) || 1,
         taskRoomId: task.taskRoomId,
         assigneeIds: task.assignees.map((agent) => agent.id),
         status: task.status,
+        revision: Number(task.revision) || 1,
+        reviews: (task.reviews ?? []).map((review) => ({
+          ...review,
+          reviewerUserId: mapUserId(review.reviewerUserId),
+          reviewedAt: timestamp(review.reviewedAt),
+        })),
+        approvedReviewId: task.approvedReviewId ?? undefined,
+        startedByUserId: task.startedByUserId ? mapUserId(task.startedByUserId) : undefined,
+        startedAt: task.startedAt ? timestamp(task.startedAt) : undefined,
         contextVersion: Number(task.contextVersion) || 1,
         latestSourceSeq: Number(task.latestSourceSeq) || Number(anchor?.sourceSeq) || 1,
         consumedContextVersionByAgent: Object.fromEntries(
@@ -478,7 +515,7 @@ export class BackendClient {
         syncSource: "backend",
       };
     });
-    return { workspace, agents, humans, rooms, tasks };
+    return { workspace, agents, humans, rooms, tasks, loops: [] };
   }
 
   async createRealtimeConnectionInfo() {

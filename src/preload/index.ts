@@ -29,12 +29,16 @@ const agentTeam: AgentTeamApi = {
   ingestExternalMessage: (options) =>
     ipcRenderer.invoke("agent-team:ingest-external-message", options),
   stopRun: (options) => ipcRenderer.invoke("agent-team:stop-run", options),
+  promoteAgents: (options) => ipcRenderer.invoke("agent-team:promote-agents", options),
+  controlLoop: (options) => ipcRenderer.invoke("agent-team:control-loop", options),
   saveAgents: (options) => ipcRenderer.invoke("agent-team:save-agents", options),
   saveHumans: (options) => ipcRenderer.invoke("agent-team:save-humans", options),
   createRoom: (options) => ipcRenderer.invoke("agent-team:create-room", options),
   updateRoom: (options) => ipcRenderer.invoke("agent-team:update-room", options),
   openDirectRoom: (options) => ipcRenderer.invoke("agent-team:open-direct-room", options),
   updateTaskStatus: (options) => ipcRenderer.invoke("agent-team:update-task-status", options),
+  reviewTask: (options) => ipcRenderer.invoke("agent-team:review-task", options),
+  startTask: (options) => ipcRenderer.invoke("agent-team:start-task", options),
   onEvent: (listener) => {
     const subscription = (_event: Electron.IpcRendererEvent, event: TeamEvent) => listener(event);
     ipcRenderer.on("agent-team:event", subscription);

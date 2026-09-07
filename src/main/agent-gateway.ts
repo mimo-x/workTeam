@@ -23,12 +23,18 @@ export class AgentGatewayPublisher {
       },
       body: JSON.stringify({
         agentId: agent.id,
+        senderOpenimId: agent.openimUserId ?? agent.id,
         senderName: agent.name,
         groupId: message.roomId,
         content: message.content,
         deliveryId: message.id,
         runId: message.runId,
         parentMessageId: message.replyTo,
+        atUserIds: message.atUserIds ?? [],
+        agentHop: message.agentHop ?? 1,
+        relayRootId: message.relayRootId,
+        loopId: message.loopId,
+        loopTurn: message.loopTurn,
       }),
       signal: AbortSignal.timeout(15_000),
     });
