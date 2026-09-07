@@ -1,0 +1,184 @@
+# Codex Desktop
+
+一个基于 Electron、React、assistant-ui 和 OpenIM 的 Codex 桌面聊天客户端。应用通过标准输入输出连接本机 `codex app-server`，并支持让多个自定义 Agent 作为群成员协作。
+
+## 当前能力
+
+- 自动发现并启动本机 Codex CLI
+- 读取 Codex 登录状态和可用模型
+- 选择项目目录，并以该目录作为会话工作区
+- 流式展示回答、思考摘要、命令执行和文件修改
+- 支持停止当前 turn
+- 命令执行或越界文件写入时显示审批卡片
+- 使用 `workspace-write` 沙箱和 `on-request` 审批策略
+- Agent 协作群：协调员、架构师、程序员和审查员拥有独立 Codex thread
+- 纵向通讯录：管理好友与自定义 Agent；Agent 支持公开/私有、运行位置与工作区权限
+- 好友与 Agent 私聊：一对一房间自动创建并复用；Agent 私聊保持独立连续 Codex 上下文
+- 统一消息列表：普通群、好友私聊、Agent 私聊与 Task 小群按最近活动时间排列
+- 设置中心：左下角统一入口，可即时切换并持久化白天/黑夜两套 UI 主题
+- 多群组：新建群组，并从通讯录邀请好友和 Agent
+- `@Agent` 或选择 Agent 下发任务时，自动创建独立 Task 小群与 TaskRun
+- Task 小群持续订阅来源群的新消息；下一次 Agent 执行会消费最新上下文
+- Task 看板：待处理、进行中、待验收与已结束四列，并支持验收和等待状态
+- 可在界面中添加、删除和修改 Agent 的名称、身份、角色指令及工作区权限
+- 每个 Agent 可设置 `none`、`allowlist` 或 `all` Skills 策略；本地执行前会和本机 Codex Skills 清单再次校验
+- 多 Agent 并行响应；同一工作区的写入 Agent 自动串行执行
+- 本地房间消息持久化；未部署 IM 服务时也能完整验证 Agent 群聊
+- 可选接入 OpenIM Electron FFI SDK，同步群消息与历史记录
+- 独立 Agent Gateway 通过 OpenIM Platform API 以 Agent 用户身份发布最终消息
+- 多用户业务后台：账号、好友申请、远程私聊/群聊、Agent 邀请审批、消息镜像、Task、设置和设备信息
+- 登录后自动同步云端通讯录和会话；OpenIM/后台事件会实时刷新桌面端，远程 Task 由本机 Agent Host 执行
+
+## 环境要求
+
+- Node.js 22 或更新版本
+- 已安装 Codex CLI，并且 `codex --version` 可正常运行
+- 已通过 Codex CLI 登录；如果未登录，也可以在应用中启动 ChatGPT 登录
+
+应用依次在 `CODEX_PATH`、`/opt/homebrew/bin/codex`、`/usr/local/bin/codex` 和系统 `PATH` 中查找 Codex。
+
+## 开发
+
+```bash
+npm install
+npm run dev
+```
+
+开发时直接使用 `npm run dev` 启动 Electron 即可，不需要反复构建或安装打包版本。
+
+常用检查：
+
+```bash
+npm run typecheck
+npm run lint
+npm run build
+```
+
+生成安装包：
+
+```bash
+npm run dist
+```
+
+产物会输出到 `release/`。
+
+## Agent 群聊
+
+启动后默认进入“消息”。可以创建多个普通群，并从通讯录邀请好友与 Agent。在输入框上方选择一个或多个 Agent，或直接输入：
+
+```text
+@架构师 设计消息和任务的数据模型
+@程序员 实现这个功能并运行测试
+@所有Agent 分别评估当前方案
+```
+
+普通消息只会进入聊天记录，并实时推进该群内活跃 Task 的上下文；选择或 `@` Agent 才会下发任务。下发后应用会创建 Task 小群并自动进入该小群。此后在 Task 小群里继续 `@Agent` 会创建新的 `TaskRun`，而不是新 Task。
+
+“通讯录”可以管理好友、创建 Agent，并设置 Agent 的公开或私有属性。公开表示可被其他用户发现和邀请，不会公开角色指令、凭据或本机工作区权限。群聊右上角可以管理当前群的好友与 Agent 成员。
+
+通讯录按好友、私有 Agent、公开 Agent 纵向排列。点击联系人右侧的“私聊”会创建或复用同一个一对一房间：好友消息只保留为私聊记录；Agent 会在该私聊内自动回复，并复用独立 Codex thread 保持连续上下文，不会自动创建 Task。所有私聊与群聊都会出现在“消息”的统一会话列表中。
+
+每个当前用户拥有的 Agent 卡片都有独立“编辑”入口，可以修改显示名称、角色、提及名称、简介、角色指令、可见性、工作区权限、运行位置和外观。Agent ID 创建后保持稳定。其他用户拥有的公开 Agent 只能查看和邀请，渲染层与主进程都会拒绝越权修改或删除。
+
+“Task 面板”展示所有任务的状态、来源群、负责人、最后活动时间和未消费上下文。Task 运行期间到达的新主群消息会立即进入关联上下文；为了避免中断正在进行的命令或文件写入，Agent 会在下一次 TaskRun 开始时消费这些新增消息。
+
+每个 Agent 的业务 `id` 是稳定 UUID；其 `openimUserId` 是独立的 OpenIM 身份。桌面同步层会完成映射，不能把两者混用。
+
+架构师、审查员等只读角色使用 Codex `read-only` 沙箱。写入角色使用 `workspace-write`，同一工作区的写入任务通过队列串行执行。所有命令和文件越界审批仍在桌面端完成，群聊消息不能绕过审批。
+
+## 接入 OpenIM
+
+### 多用户后台（推荐）
+
+业务数据由 `services/chat-api` 管理，PostgreSQL 保存持久数据，Redis 提供一次性实时连接票据，OpenIM 负责消息投递。先生成开发密钥并启动服务：
+
+```bash
+cp .env.backend.example .env.backend.local
+openssl rand -base64 32
+# 将输出填入 ENCRYPTION_MASTER_KEY，并修改 JWT_SECRET、OpenIM 管理 Token/回调 Token
+docker compose -f deploy/docker-compose.yml up --build
+```
+
+OpenIMServer 需按官方方式单独部署。把 before/after 消息回调配置到：
+
+```text
+http://<chat-api>:8790/internal/openim/callbacks/message/before?token=<OPENIM_CALLBACK_TOKEN>
+http://<chat-api>:8790/internal/openim/callbacks/message/after?token=<OPENIM_CALLBACK_TOKEN>
+```
+
+随后运行 `npm run dev`，在左下角“设置中心 → 账号与同步”填写后台地址并注册或登录。首次从纯本地版本迁移时点击“导入当前工作区”；以后好友、Agent、群聊、消息和 Task 会从云端自动同步。本机 Agent Host 会随已登录工作区自动连接，无需安装桌面安装包。
+
+只开发业务 API 时可运行：
+
+```bash
+npm run backend:migrate -- --env-file=.env.backend.local
+npm run backend:dev -- --env-file=.env.backend.local
+npm run backend:worker -- --env-file=.env.backend.local
+```
+
+生产环境必须使用 HTTPS、独立强 JWT/回调密钥和 `KEY_PROVIDER=vault-transit`；OpenIM 管理 Token 只放在服务端。当前首个可运行版本执行本机 Agent，`hosted` 字段仅为后续云 Worker 保留。
+
+### 手动连接单个 OpenIM 群（兼容模式）
+
+1. 按 [OpenIM 官方 Docker Compose 部署文档](https://docs.openim.io/zh/docs/guides/deployment/docker-compose) 部署 OpenIMServer。
+2. 通过可信业务后端创建一个普通用户、群组及各 Agent 用户，并将它们加入群组。
+3. 在群聊右上角打开 OpenIM 设置，填写 API 地址、WebSocket 地址、普通用户 Token 和群组 ID。
+4. 部署下面的 Agent Gateway，并填写 Gateway 地址和密钥。
+
+桌面端只保存普通用户 Token。系统支持安全存储时，Token 和 Gateway 密钥会加密落盘；OpenIM 管理员 Token 永远不进入 Electron。
+
+如果希望其他群成员也能通过 `@Agent` 触发这台电脑上的 Codex，可以开启“作为这个群的 Agent Host”。同一群只能有一个 Agent Host，否则多台电脑会重复响应。
+
+### Agent Gateway
+
+复制示例配置并填入 OpenIM 管理员 Token：
+
+```bash
+cp .env.gateway.example .env.gateway.local
+npm run gateway:dev
+```
+
+健康检查：
+
+```bash
+curl http://127.0.0.1:8787/health
+```
+
+Gateway 只监听本机地址，使用 Bearer 密钥校验桌面端请求，并通过 `/msg/send_msg` 将最终结果以对应 Agent 的 `sendID` 发到群里。生产环境应放在 HTTPS 反向代理后，并使用网络访问控制。
+
+### OpenIM 许可证
+
+OpenIMServer 仓库使用 Apache-2.0；当前接入的 `@openim/electron-client-sdk` 和 `@openim/wasm-client-sdk` 包声明为 AGPL-3.0-only。若准备闭源或商业分发桌面客户端，应在发布前完成许可证评估，或向 OpenIM 获取适用的商业许可。
+
+## 结构
+
+- `src/main/codex-app-server.ts`：Codex App Server 子进程和 JSONL RPC 客户端
+- `src/main/agent-team.ts`：通讯录、群组、Task/TaskRun、实时上下文、Agent 调度和工作区持久化
+- `src/main/backend-client.ts`：后台认证、安全刷新令牌、云端快照与 OpenIM 会话
+- `src/main/remote-agent-host.ts`：实时任务租约、本机 Codex 执行、进度回传和上下文 steer
+- `src/main/im-config.ts`：OpenIM 配置与系统安全存储
+- `src/main/agent-gateway.ts`：桌面端到 Agent Gateway 的受限发布客户端
+- `src/main/index.ts`：Electron 窗口、目录选择和受限 IPC 接口
+- `src/preload/index.ts`：渲染进程安全桥接
+- `src/renderer/src/codex-runtime.ts`：Codex 事件到 assistant-ui 消息流的适配
+- `src/renderer/src/openim-transport.ts`：OpenIM 登录、收发消息和历史同步适配
+- `src/renderer/src/team-chat.tsx`：多 Agent 群聊和 Agent/OpenIM 设置界面
+- `src/renderer/src/app.tsx`：桌面界面、项目和模型选择、审批卡片
+- `gateway/server.mjs`：持有 OpenIM 管理员 Token 的最小 Gateway 服务
+- `services/chat-api/`：Fastify 业务 API、PostgreSQL schema、OpenIM 回调和 outbox worker
+- `deploy/docker-compose.yml`：PostgreSQL、Redis、迁移、API 和 worker 的单机编排
+- `components/assistant-ui/`：聊天消息、输入框和 Markdown 组件
+
+## 安全边界
+
+渲染进程启用了 `contextIsolation` 和沙箱，并关闭 Node.js 集成；它只能调用 preload 中明确列出的 Codex 操作。主进程会校验工作目录、消息和审批参数。默认不会使用 `danger-full-access`，也不会自动批准命令。
+
+## 原 DeepSeek 网页版
+
+此前的 Next.js + DeepSeek 实现仍保留在 `app/` 中，作为可选示例：
+
+```bash
+npm run web:dev
+```
+
+它使用 `.env.local` 中的 `DEEPSEEK_API_KEY`。桌面版 Codex 链路不会读取这个密钥。
