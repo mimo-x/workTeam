@@ -53,12 +53,12 @@ echo ">>> 2/5 创建配置文件 ..."
 
 cd "$SCRIPT_DIR"
 
-JWT_SECRET=$(openssl rand -base64 32)
-ENCRYPTION_KEY=$(openssl rand -base64 32)
-CALLBACK_TOKEN=$(openssl rand -base64 32)
-GATEWAY_SECRET=$(openssl rand -base64 32)
+if [ ! -f .env.backend.local ]; then
+  JWT_SECRET=$(openssl rand -base64 32)
+  ENCRYPTION_KEY=$(openssl rand -base64 32)
+  CALLBACK_TOKEN=$(openssl rand -base64 32)
 
-cat > .env.backend.local <<EOF
+  cat > .env.backend.local <<EOF
 NODE_ENV=development
 HOST=0.0.0.0
 PORT=8790
@@ -77,8 +77,15 @@ OPENIM_PLATFORM_ID=4
 HOST_LEASE_SECONDS=30
 HOST_HEARTBEAT_SECONDS=10
 EOF
+  echo "  .env.backend.local 已创建"
+else
+  echo "  .env.backend.local 已存在，保留现有配置"
+  CALLBACK_TOKEN=$(grep '^OPENIM_CALLBACK_TOKEN=' .env.backend.local | cut -d '=' -f2-)
+fi
 
-cat > .env.gateway.local <<EOF
+if [ ! -f .env.gateway.local ]; then
+  GATEWAY_SECRET=$(openssl rand -base64 32)
+  cat > .env.gateway.local <<EOF
 AGENT_GATEWAY_PORT=8787
 AGENT_GATEWAY_SECRET=${GATEWAY_SECRET}
 OPENIM_API_ADDR=http://openim-server:10002
@@ -86,9 +93,10 @@ OPENIM_ADMIN_TOKEN=openIM123
 AGENT_IDS=agent_coordinator,agent_architect,agent_coder,agent_reviewer
 OPENIM_GROUP_IDS=
 EOF
-
-echo "  .env.backend.local 已创建"
-echo "  .env.gateway.local 已创建"
+  echo "  .env.gateway.local 已创建"
+else
+  echo "  .env.gateway.local 已存在，保留现有配置"
+fi
 
 # 3. 启动后台
 echo ""
@@ -97,10 +105,19 @@ echo ">>> 3/5 启动业务后台 ..."
 docker compose -f deploy/docker-compose.yml up -d --build
 
 echo "  等待后台就绪..."
+READY=false
 for i in $(seq 1 30); do
-  if curl -sf http://localhost:8790/health/live > /dev/null 2>&1; then break; fi
+  if curl -sf http://localhost:8790/health/live > /dev/null 2>&1; then
+    READY=true
+    break
+  fi
   sleep 2
 done
+
+if [ "$READY" = false ]; then
+  echo "  错误: 业务后台启动超时！请检查容器日志: docker compose -f deploy/docker-compose.yml logs api"
+  exit 1
+fi
 echo "  后台就绪"
 
 # 4. 网络互通
@@ -126,9 +143,20 @@ python3 -c "
 import re
 with open('webhooks.yml', 'r') as f:
     content = f.read()
-content = content.replace('url: http://127.0.0.1:10006/callbackExample', 'url: http://api:8790/internal/openim/callbacks/message')
-content = content.replace('beforeSendGroupMsg:\n  enable: false', 'beforeSendGroupMsg:\n  enable: true')
-content = content.replace('afterSendGroupMsg:\n  enable: false', 'afterSendGroupMsg:\n  enable: true')
+callback_token = '${CALLBACK_TOKEN}'
+before_url = f'http://api:8790/internal/openim/callbacks/message/before?token={callback_token}'
+after_url = f'http://api:8790/internal/openim/callbacks/message/after?token={callback_token}'
+
+content = re.sub(
+    r'beforeSendGroupMsg:\s*\n\s*enable:\s*(?:true|false)\s*\n\s*url:[^\n]*',
+    f'beforeSendGroupMsg:\n  enable: true\n  url: \"{before_url}\"',
+    content
+)
+content = re.sub(
+    r'afterSendGroupMsg:\s*\n\s*enable:\s*(?:true|false)\s*\n\s*url:[^\n]*',
+    f'afterSendGroupMsg:\n  enable: true\n  url: \"{after_url}\"',
+    content
+)
 with open('webhooks.yml', 'w') as f:
     f.write(content)
 "

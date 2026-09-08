@@ -143,6 +143,7 @@ const server = createServer(async (request, response) => {
   }
 });
 
-server.listen(port, "127.0.0.1", () => {
-  console.log(`Agent Gateway listening on http://127.0.0.1:${port}`);
+const host = process.env.AGENT_GATEWAY_HOST || "0.0.0.0";
+server.listen(port, host, () => {
+  console.log(`Agent Gateway listening on http://${host}:${port}`);
 });
