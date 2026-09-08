@@ -1,4 +1,4 @@
-import { safeStorage } from "electron";
+import { app, safeStorage } from "electron";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -166,11 +166,10 @@ const cleanApiUrl = (value: string) => {
   } catch {
     throw new Error("聊天后台地址无效。");
   }
-  if (
-    url.protocol !== "https:" &&
-    !(url.protocol === "http:" && ["127.0.0.1", "localhost"].includes(url.hostname))
-  ) {
-    throw new Error("远程聊天后台必须使用 HTTPS；本机开发地址可以使用 HTTP。");
+  const isLocal = ["localhost", "127.0.0.1"].includes(url.hostname);
+  const isDev = !app.isPackaged || process.env.NODE_ENV === "development";
+  if (url.protocol !== "https:" && !isLocal && !isDev) {
+    throw new Error("生产环境中远程聊天后台必须使用 HTTPS；开发环境或本机地址可以使用 HTTP。");
   }
   return trimmed;
 };
