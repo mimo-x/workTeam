@@ -34,6 +34,7 @@ import type {
   CodexStatus,
 } from "../../shared/codex";
 import type { BackendState, RemoteAgentHostState } from "../../shared/backend";
+import { formatErrorMessage } from "../../shared/error";
 import { useCodexRuntime } from "./codex-runtime";
 import { TeamChat, type TeamView } from "./team-chat";
 
@@ -116,7 +117,7 @@ const AuthenticationScreen = ({
             });
       onAuthenticated(state);
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : String(submitError));
+      setError(formatErrorMessage(submitError));
     } finally {
       setBusy(false);
     }
@@ -368,12 +369,12 @@ const SettingsCenter = ({
       setBackend(state);
       if (state.authenticated && workspace) {
         await window.backend.startHost({ workspace }).catch((error) => {
-          setBackendError(error instanceof Error ? error.message : String(error));
+          setBackendError(formatErrorMessage(error));
         });
       }
       setPassword("");
     } catch (error) {
-      setBackendError(error instanceof Error ? error.message : String(error));
+      setBackendError(formatErrorMessage(error));
     } finally {
       setBackendBusy(false);
     }
@@ -407,7 +408,7 @@ const SettingsCenter = ({
         `已导入 ${result.imported.agents} 个 Agent、${result.imported.rooms} 个会话、${result.imported.messages} 条消息和 ${result.imported.tasks} 个 Task。${result.warnings.length ? ` ${result.warnings.join(" ")}` : ""}`,
       );
     } catch (error) {
-      setBackendError(error instanceof Error ? error.message : String(error));
+      setBackendError(formatErrorMessage(error));
     } finally {
       setBackendBusy(false);
     }
@@ -832,7 +833,7 @@ const AuthenticatedApp = () => {
         ...current,
         connected: false,
         connecting: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: formatErrorMessage(error),
       }));
     }
   }, []);

@@ -20,6 +20,7 @@ import type {
   TeamWorkspaceSnapshot,
 } from "../shared/agent-team";
 import type { CodexEvent } from "../shared/codex";
+import { formatErrorMessage } from "../shared/error";
 import { CodexAppServer } from "./codex-app-server";
 
 type RuntimeRun = {
@@ -132,7 +133,7 @@ const SYSTEM_MAX_LOOP_TURNS = Math.max(
   Math.min(1_000, Number(process.env.AGENT_TEAM_MAX_LOOP_TURNS) || 100),
 );
 const clone = <T>(value: T): T => structuredClone(value);
-const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
+const errorMessage = (error: unknown) => formatErrorMessage(error, "Codex 执行失败。");
 
 type TaskProposal = {
   title: string;

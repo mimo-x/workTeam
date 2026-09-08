@@ -8,6 +8,7 @@ import {
 import { useEffect, useMemo, useRef } from "react";
 
 import type { CodexEvent } from "../../shared/codex";
+import { formatErrorMessage } from "../../shared/error";
 
 type RuntimeConfig = {
   workspace: string;
@@ -128,11 +129,7 @@ const contentSnapshot = (
   return content;
 };
 
-const turnErrorMessage = (value: unknown) => {
-  if (!value || typeof value !== "object") return "Codex 执行失败。";
-  const error = value as Record<string, unknown>;
-  return String(error.message ?? error.additionalDetails ?? "Codex 执行失败。");
-};
+const turnErrorMessage = (value: unknown) => formatErrorMessage(value, "Codex 执行失败。");
 
 export const useCodexRuntime = (config: RuntimeConfig) => {
   const configRef = useRef(config);

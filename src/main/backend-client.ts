@@ -20,6 +20,7 @@ import type {
   TeamRoomSnapshot,
   TeamWorkspaceSnapshot,
 } from "../shared/agent-team";
+import { formatErrorMessage } from "../shared/error";
 
 type StoredBackendConfig = {
   apiUrl: string;
@@ -551,7 +552,7 @@ export class BackendClient {
       this.user = me.user;
       this.error = null;
     } catch (error) {
-      this.error = error instanceof Error ? error.message : String(error);
+      this.error = formatErrorMessage(error);
       throw error;
     }
   }

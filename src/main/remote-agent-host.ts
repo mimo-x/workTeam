@@ -4,6 +4,7 @@ import { isAbsolute } from "node:path";
 import type { BackendClient } from "./backend-client";
 import type { CodexAppServer } from "./codex-app-server";
 import type { CodexEvent } from "../shared/codex";
+import { formatErrorMessage } from "../shared/error";
 import type { RemoteAgentHostState } from "../shared/backend";
 
 type RemoteAgent = {
@@ -159,7 +160,7 @@ export class RemoteAgentHost {
     } catch (error) {
       this.update({
         status: "error",
-        error: error instanceof Error ? error.message : String(error),
+        error: formatErrorMessage(error),
       });
       this.scheduleReconnect();
       throw error;
@@ -245,7 +246,7 @@ export class RemoteAgentHost {
         type: "run.fail",
         runId: assignment.id,
         leaseToken: assignment.leaseToken,
-        error: error instanceof Error ? error.message : String(error),
+        error: formatErrorMessage(error),
       });
     }
   }
@@ -296,9 +297,7 @@ export class RemoteAgentHost {
           type: "run.fail",
           runId,
           leaseToken: run.assignment.leaseToken,
-          error: String(
-            (turn.error as { message?: unknown } | undefined)?.message ?? "Codex 执行失败。",
-          ),
+          error: formatErrorMessage(turn.error, "Codex 执行失败。"),
         });
       } else {
         this.send({

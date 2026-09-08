@@ -43,6 +43,7 @@ import type {
   TeamRoomSnapshot,
   TeamWorkspaceSnapshot,
 } from "../../shared/agent-team";
+import { formatErrorMessage } from "../../shared/error";
 import { openImTransport, type OpenImConnectionState } from "./openim-transport";
 
 export type TeamView = "messages" | "contacts" | "tasks";
@@ -346,7 +347,7 @@ const MessageRow = ({
           {message.error && (
             <div className="mt-2 flex items-start gap-2 rounded-lg bg-red-400/7 px-3 py-2 text-xs leading-5 text-red-300/80">
               <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
-              <span>{message.error}</span>
+              <span>{formatErrorMessage(message.error, "执行失败")}</span>
             </div>
           )}
         </div>
@@ -399,7 +400,7 @@ const ImSettings = ({
       onSaved(await window.im.saveConfig(form));
       onClose();
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      setError(formatErrorMessage(nextError));
     } finally {
       setSaving(false);
     }
@@ -597,7 +598,7 @@ const AgentSettings = ({
       onSaved(snapshot);
       await refreshInvitations();
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      setError(formatErrorMessage(nextError));
     }
   };
   const save = async () => {
@@ -660,7 +661,7 @@ const AgentSettings = ({
       onSaved(snapshot);
       onClose();
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      setError(formatErrorMessage(nextError));
     } finally {
       setSaving(false);
     }
@@ -992,9 +993,7 @@ const ContactSettings = ({
     setRequests(response.data);
   }, [cloudMode]);
   useEffect(() => {
-    void refreshRequests().catch((nextError) =>
-      setError(nextError instanceof Error ? nextError.message : String(nextError)),
-    );
+    void refreshRequests().catch((nextError) => setError(formatErrorMessage(nextError)));
   }, [refreshRequests]);
   const add = () => {
     const suffix = Date.now().toString(36);
@@ -1023,7 +1022,7 @@ const ContactSettings = ({
       });
       setResults(response.data);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      setError(formatErrorMessage(nextError));
     } finally {
       setSearching(false);
     }
@@ -1039,7 +1038,7 @@ const ContactSettings = ({
       setResults((current) => current.filter((result) => result.id !== receiverId));
       await refreshRequests();
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      setError(formatErrorMessage(nextError));
     }
   };
   const acceptRequest = async (requestId: string) => {
@@ -1054,7 +1053,7 @@ const ContactSettings = ({
       onSaved(snapshot);
       await refreshRequests();
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      setError(formatErrorMessage(nextError));
     }
   };
   const remove = async (human: HumanContact) => {
@@ -1072,7 +1071,7 @@ const ContactSettings = ({
       setDrafts(structuredClone(snapshot.humans));
       onSaved(snapshot);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      setError(formatErrorMessage(nextError));
     }
   };
   const save = async () => {
@@ -1083,7 +1082,7 @@ const ContactSettings = ({
       onSaved(snapshot);
       onClose();
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      setError(formatErrorMessage(nextError));
     } finally {
       setSaving(false);
     }
@@ -1372,7 +1371,7 @@ const RoomDialog = ({
       onSaved(next);
       onClose();
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      setError(formatErrorMessage(nextError));
     } finally {
       setSaving(false);
     }
@@ -1842,9 +1841,7 @@ export const TeamChat = ({
       .then((snapshot) => {
         if (!cancelled) setState(snapshot);
       })
-      .catch((nextError) =>
-        setError(nextError instanceof Error ? nextError.message : String(nextError)),
-      );
+      .catch((nextError) => setError(formatErrorMessage(nextError)));
     const unsubscribe = window.agentTeam.onEvent((event) => {
       if (
         (event.type === "workspace-snapshot" ? event.snapshot.workspace : event.workspace) !==
@@ -1891,8 +1888,7 @@ export const TeamChat = ({
               : (snapshot.rooms.find((room) => room.syncSource === "backend")?.roomId ?? current),
           );
         } catch (nextError) {
-          if (!cancelled)
-            setError(nextError instanceof Error ? nextError.message : String(nextError));
+          if (!cancelled) setError(formatErrorMessage(nextError));
         }
         let attempt = 0;
         const connectCloudIm = async () => {
@@ -1903,7 +1899,7 @@ export const TeamChat = ({
             await openImTransport.connect(runtime);
           } catch (nextError) {
             if (cancelled) return;
-            const message = nextError instanceof Error ? nextError.message : String(nextError);
+            const message = formatErrorMessage(nextError);
             if (message.includes("OpenIM 尚未配置")) return;
             setError(message);
             attempt += 1;
@@ -1942,7 +1938,7 @@ export const TeamChat = ({
         });
       }
     })().catch((nextError) => {
-      if (!cancelled) setError(nextError instanceof Error ? nextError.message : String(nextError));
+      if (!cancelled) setError(formatErrorMessage(nextError));
     });
     return () => {
       cancelled = true;
@@ -1969,9 +1965,7 @@ export const TeamChat = ({
       }
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
-        void syncCloudWorkspace().catch((nextError) =>
-          setError(nextError instanceof Error ? nextError.message : String(nextError)),
-        );
+        void syncCloudWorkspace().catch((nextError) => setError(formatErrorMessage(nextError)));
       }, 350);
     });
     return () => {
@@ -2004,7 +1998,7 @@ export const TeamChat = ({
                 message: { ...message, roomId: existing?.roomId ?? directRoom.roomId },
               });
             } catch (nextError) {
-              setError(nextError instanceof Error ? nextError.message : String(nextError));
+              setError(formatErrorMessage(nextError));
             }
           })();
           return;
@@ -2176,7 +2170,7 @@ export const TeamChat = ({
         }
       }
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      setError(formatErrorMessage(nextError));
     }
   };
   const send = async () => {
@@ -2258,7 +2252,7 @@ export const TeamChat = ({
       setMention(null);
     } catch (nextError) {
       setDraft(text);
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      setError(formatErrorMessage(nextError));
     } finally {
       setSending(false);
     }
@@ -2276,7 +2270,7 @@ export const TeamChat = ({
         await window.agentTeam.updateTaskStatus({ workspace, taskId: nextTask.id, status });
       }
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      setError(formatErrorMessage(nextError));
     }
   };
   const reviewTask = async (nextTask: AgentTask, decision: "approved" | "changes_requested") => {
@@ -2308,7 +2302,7 @@ export const TeamChat = ({
         });
       }
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      setError(formatErrorMessage(nextError));
     }
   };
   const startTask = async (nextTask: AgentTask) => {
@@ -2325,7 +2319,7 @@ export const TeamChat = ({
         await window.agentTeam.startTask({ workspace, taskId: nextTask.id, model });
       }
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      setError(formatErrorMessage(nextError));
     }
   };
   const controlLoop = async (nextLoop: AgentLoopSession, action: "pause" | "resume" | "cancel") => {
@@ -2338,7 +2332,7 @@ export const TeamChat = ({
         model,
       });
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      setError(formatErrorMessage(nextError));
     }
   };
 

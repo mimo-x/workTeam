@@ -13,6 +13,7 @@ class FakeCodex {
   threadStarts = 0;
   prompts: string[] = [];
   responses: string[] = [];
+  nextTurnError?: unknown;
 
   onEvent(listener: (event: CodexEvent) => void) {
     this.listeners.add(listener);
@@ -29,6 +30,15 @@ class FakeCodex {
     const turnId = `turn_${this.prompts.length}`;
     const response = this.responses.shift() ?? `reply_${this.prompts.length}`;
     queueMicrotask(() => {
+      if (this.nextTurnError !== undefined) {
+        const err = this.nextTurnError;
+        this.nextTurnError = undefined;
+        this.emit({
+          method: "turn/completed",
+          params: { turn: { id: turnId, status: "failed", error: err } },
+        });
+        return;
+      }
       this.emit({
         method: "item/completed",
         params: { turnId, item: { type: "agentMessage", text: response } },
@@ -421,6 +431,45 @@ test("promoting a local Agent to cloud identity preserves local conversations", 
       cloudAgentId,
     );
     await reloaded.flush();
+  } finally {
+    await service.flush();
+    await rm(storeDir, { recursive: true, force: true });
+  }
+});
+
+test("Agent execution failure with error object produces humanized error instead of [object Object]", async () => {
+  const storeDir = await mkdtemp(join(tmpdir(), "agent-team-error-"));
+  const workspace = "/tmp/error-message-workspace";
+  const codex = new FakeCodex();
+  codex.nextTurnError = {
+    message:
+      'unexpected status 404 Not Found: Model "gpt-6-astra" is not supported by any configured account in this group',
+    codex_error_info: "other",
+  };
+  const service = new AgentTeamService(codex as unknown as CodexAppServer, storeDir);
+
+  try {
+    const room = await service.openDirectRoom(workspace, "agent_coordinator");
+    await service.sendMessage({
+      workspace,
+      roomId: room.roomId,
+      text: "测试调用",
+    });
+
+    await waitFor(async () => {
+      const current = await service.getWorkspace(workspace);
+      const targetRoom = current.rooms.find((candidate) => candidate.roomId === room.roomId);
+      const agentMessage = targetRoom?.messages.find((message) => message.senderType === "agent");
+      return agentMessage?.status === "error";
+    });
+
+    const current = await service.getWorkspace(workspace);
+    const targetRoom = current.rooms.find((candidate) => candidate.roomId === room.roomId)!;
+    const agentMessage = targetRoom.messages.find((message) => message.senderType === "agent")!;
+
+    assert.equal(agentMessage.status, "error");
+    assert.notEqual(agentMessage.error, "[object Object]");
+    assert.ok(agentMessage.error?.includes('当前账号未配置或不支持模型 "gpt-6-astra"'));
   } finally {
     await service.flush();
     await rm(storeDir, { recursive: true, force: true });
