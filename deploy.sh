@@ -126,7 +126,7 @@ echo ">>> 4/5 配置网络互通 ..."
 
 OPENIM_NET=$(docker network ls --format '{{.Name}}' | grep openim || true)
 if [ -n "$OPENIM_NET" ]; then
-  for svc in deploy-api-1 deploy-outbox-worker-1 deploy-gateway-1; do
+  for svc in agent-team-backend-api-1 agent-team-backend-outbox-worker-1 agent-team-backend-gateway-1 deploy-api-1 deploy-outbox-worker-1 deploy-gateway-1; do
     docker network connect "$OPENIM_NET" "$svc" 2>/dev/null || true
   done
   echo "  网络已连接"
