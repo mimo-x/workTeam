@@ -3,6 +3,8 @@ name: agent-team-backend
 services:
   postgres:
     image: postgres:17-alpine
+    security_opt:
+      - seccomp:unconfined
     environment:
       POSTGRES_DB: agent_team
       POSTGRES_USER: agent_team
@@ -35,8 +37,7 @@ services:
       context: ..
       dockerfile: services/chat-api/Dockerfile
     env_file:
-      - path: ../.env.backend.local
-        required: false
+      - ../.env.backend.local
     environment:
       DATABASE_URL: postgres://agent_team:agent_team@postgres:5432/agent_team
       REDIS_URL: redis://redis:6379
@@ -51,8 +52,7 @@ services:
       context: ..
       dockerfile: services/chat-api/Dockerfile
     env_file:
-      - path: ../.env.backend.local
-        required: false
+      - ../.env.backend.local
     environment:
       DATABASE_URL: postgres://agent_team:agent_team@postgres:5432/agent_team
       REDIS_URL: redis://redis:6379
@@ -70,8 +70,7 @@ services:
       context: ..
       dockerfile: services/chat-api/Dockerfile
     env_file:
-      - path: ../.env.backend.local
-        required: false
+      - ../.env.backend.local
     environment:
       DATABASE_URL: postgres://agent_team:agent_team@postgres:5432/agent_team
       REDIS_URL: redis://redis:6379
@@ -79,6 +78,18 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    restart: unless-stopped
+
+  gateway:
+    image: node:24-bookworm-slim
+    working_dir: /app
+    env_file:
+      - ../.env.gateway.local
+    command: ["node", "gateway/server.mjs"]
+    ports:
+      - "8787:8787"
+    volumes:
+      - ../gateway:/app/gateway:ro
     restart: unless-stopped
 
 volumes:
