@@ -469,7 +469,9 @@ test("Agent execution failure with error object produces humanized error instead
 
     assert.equal(agentMessage.status, "error");
     assert.notEqual(agentMessage.error, "[object Object]");
-    assert.ok(agentMessage.error?.includes('当前账号未配置或不支持模型 "gpt-6-astra"'));
+    assert.ok(agentMessage.error?.includes('模型 "gpt-6-astra" 不受支持'));
+    assert.ok(agentMessage.error?.includes("当前群组没有任何已配置账号支持该模型"));
+    assert.ok(agentMessage.error?.includes("原始报错："));
   } finally {
     await service.flush();
     await rm(storeDir, { recursive: true, force: true });

@@ -9,7 +9,7 @@ test("humanizeErrorMessage translates unsupported model errors", () => {
   const humanized = humanizeErrorMessage(raw);
   assert.equal(
     humanized,
-    '当前账号未配置或不支持模型 "gpt-6-astra"，请在应用设置中切换为其他可用模型。',
+    '模型 "gpt-6-astra" 不受支持（HTTP 404）：当前群组没有任何已配置账号支持该模型。请切换模型，或检查当前群组的模型账号配置。原始报错：unexpected status 404 Not Found: Model "gpt-6-astra" is not supported by any configured account in this group',
   );
 });
 
@@ -17,13 +17,13 @@ test("humanizeErrorMessage translates quota and rate limit errors", () => {
   const quota = "insufficient_quota: you exceeded your current quota";
   assert.equal(
     humanizeErrorMessage(quota),
-    "模型调用额度超限或受调用频率限制，请稍后重试或切换模型。",
+    "模型调用额度超限或受调用频率限制。原始报错：insufficient_quota: you exceeded your current quota",
   );
 
   const rate = "429 Too Many Requests: rate_limit_exceeded";
   assert.equal(
     humanizeErrorMessage(rate),
-    "模型调用额度超限或受调用频率限制，请稍后重试或切换模型。",
+    "模型调用额度超限或受调用频率限制。原始报错：429 Too Many Requests: rate_limit_exceeded",
   );
 });
 
@@ -38,8 +38,10 @@ test("formatErrorMessage handles various error shapes safely", () => {
     formatErrorMessage({
       message: 'Model "gpt-6-astra" is not supported by any configured account in this group',
     }),
-    '当前账号未配置或不支持模型 "gpt-6-astra"，请在应用设置中切换为其他可用模型。',
+    '模型 "gpt-6-astra" 不受支持：当前群组没有任何已配置账号支持该模型。请切换模型，或检查当前群组的模型账号配置。原始报错：Model "gpt-6-astra" is not supported by any configured account in this group',
   );
+
+  assert.equal(formatErrorMessage({ message: "[object Object]", errMsg: "真实错误" }), "真实错误");
 
   assert.equal(formatErrorMessage({ additionalDetails: "任务执行超时" }), "任务执行超时");
   assert.equal(formatErrorMessage({ errMsg: "OpenIM 网络故障" }), "OpenIM 网络故障");
