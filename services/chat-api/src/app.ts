@@ -111,7 +111,11 @@ export const createApp = async (config: AppConfig, overrides: AppOverrides = {})
     } catch (error) {
       if (error instanceof OpenImUnavailableError)
         throw new ApiError(503, "OPENIM_UNAVAILABLE", error.message);
-      throw error;
+      throw new ApiError(
+        502,
+        "OPENIM_ERROR",
+        error instanceof Error ? error.message : String(error),
+      );
     }
   });
 

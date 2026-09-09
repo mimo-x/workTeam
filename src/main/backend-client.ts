@@ -193,6 +193,7 @@ export class BackendClient {
   private volatileRefreshToken = "";
   private user: BackendUser | null = null;
   private error: string | null = null;
+  private refreshPromise: Promise<void> | null = null;
 
   constructor(
     private readonly filePath: string,
@@ -565,7 +566,12 @@ export class BackendClient {
 
   private async ensureAccessToken() {
     if (this.accessToken) return;
-    await this.refresh();
+    if (!this.refreshPromise) {
+      this.refreshPromise = this.refresh().finally(() => {
+        this.refreshPromise = null;
+      });
+    }
+    await this.refreshPromise;
   }
 
   private async refresh() {
@@ -584,6 +590,14 @@ export class BackendClient {
       this.error = null;
     } catch (error) {
       this.error = formatErrorMessage(error);
+      if (error instanceof BackendHttpError && error.code === "INVALID_REFRESH_TOKEN") {
+        const stored = await this.read();
+        delete stored.encryptedRefreshToken;
+        this.volatileRefreshToken = "";
+        this.accessToken = "";
+        this.user = null;
+        await this.persist();
+      }
       throw error;
     }
   }
