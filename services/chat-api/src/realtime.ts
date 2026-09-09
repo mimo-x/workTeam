@@ -233,17 +233,22 @@ export class RealtimeHub implements EventPublisher {
   private async onMessage(connection: Connection, raw: Buffer | string) {
     try {
       const message = incomingSchema.parse(JSON.parse(raw.toString()));
-      if (message.type === "host.register") return this.registerHost(connection, message);
+      if (message.type === "host.register") return await this.registerHost(connection, message);
       if (!connection.deviceId)
         throw new ApiError(400, "HOST_NOT_REGISTERED", "请先注册 Host 设备。");
-      if (message.type === "host.heartbeat") return this.heartbeat(connection);
+      if (message.type === "host.heartbeat") return await this.heartbeat(connection);
       if (message.type === "run.accept")
-        return this.acceptRun(connection, message.runId, message.leaseToken);
-      if (message.type === "run.progress") return this.progressRun(connection, message);
+        return await this.acceptRun(connection, message.runId, message.leaseToken);
+      if (message.type === "run.progress") return await this.progressRun(connection, message);
       if (message.type === "run.complete")
-        return this.completeRun(connection, message.runId, message.leaseToken, message.content);
+        return await this.completeRun(
+          connection,
+          message.runId,
+          message.leaseToken,
+          message.content,
+        );
       if (message.type === "run.fail")
-        return this.failRun(connection, message.runId, message.leaseToken, message.error);
+        return await this.failRun(connection, message.runId, message.leaseToken, message.error);
     } catch (error) {
       this.send(connection, {
         type: "error",
@@ -266,7 +271,7 @@ export class RealtimeHub implements EventPublisher {
     if (allowed.size !== new Set(message.agentIds).size) {
       throw new ApiError(403, "INVALID_HOST_AGENTS", "Host 只能托管当前用户拥有的本地 Agent。");
     }
-    const result = message.deviceId
+    let result = message.deviceId
       ? await this.pool.query<{ id: string }>(
           `UPDATE devices SET name = $1, platform = $2, is_agent_host = true,
                   last_seen_at = now(), updated_at = now()
@@ -278,7 +283,15 @@ export class RealtimeHub implements EventPublisher {
            VALUES ($1, $2, $3, true) RETURNING id`,
           [connection.userId, message.name, message.platform],
         );
-    if (!result.rows[0]) throw new ApiError(404, "DEVICE_NOT_FOUND", "设备不存在。");
+    if (!result.rows[0] && message.deviceId) {
+      result = await this.pool.query<{ id: string }>(
+        `INSERT INTO devices(user_id, name, platform, is_agent_host)
+         VALUES ($1, $2, $3, true) RETURNING id`,
+        [connection.userId, message.name, message.platform],
+      );
+    }
+    if (!result.rows[0])
+      throw new ApiError(500, "DEVICE_REGISTRATION_FAILED", "Host 设备注册失败。");
     connection.deviceId = result.rows[0].id;
     connection.agentIds = allowed;
     if (allowed.size) {
