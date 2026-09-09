@@ -42,6 +42,7 @@ type OpenCodeSession = {
   cancelRequested: boolean;
   content: string;
   permissionRequests: Map<RpcRequestId, Record<string, unknown>>;
+  stderrTail: string;
 };
 
 const capabilities: readonly AgentCapability[] = ["chat", "stream_progress", "read_workspace"];
@@ -239,19 +240,24 @@ export class OpenCodeRuntime implements AgentRuntime {
       cancelRequested: false,
       content: "",
       permissionRequests: new Map(),
+      stderrTail: "",
     };
     session.lines.on("line", (line) => this.handleLine(session, line));
     child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk) =>
+    child.stderr.on("data", (chunk) => {
+      session.stderrTail = `${session.stderrTail}${String(chunk)}`.slice(-4_000);
       this.emit({
         method: "provider/event",
         sessionId: session.id,
         params: { stderr: String(chunk).slice(-4_000) },
         raw: chunk,
-      }),
-    );
+      });
+    });
     child.once("exit", (code, signal) => {
-      const error = `OpenCode ACP 已退出（code=${code}, signal=${signal}）。`;
+      const stderr = session.stderrTail.trim();
+      const error = stderr
+        ? `OpenCode ACP 已退出（code=${code}, signal=${signal}）：${stderr}`
+        : `OpenCode ACP 已退出（code=${code}, signal=${signal}）。`;
       for (const pending of session.pending.values()) pending.reject(new Error(error));
       session.pending.clear();
       if (session.activeTurnId) {

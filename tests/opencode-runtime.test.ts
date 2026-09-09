@@ -33,3 +33,22 @@ test("OpenCodeRuntime rejects write sessions until ACP permission bridge is enab
       (error as { provider?: string }).provider === "opencode",
   );
 });
+
+test("OpenCodeRuntime includes stderr in process exit failures", async () => {
+  const runtime = new OpenCodeRuntime({
+    command: process.execPath,
+    argsPrefix: ["-e", "console.error('模拟 ACP 错误'); process.exit(1)"],
+    timeoutMs: 100,
+  });
+  const errors: string[] = [];
+  runtime.onEvent((event) => {
+    if (event.method === "runtime/status" && event.params.error)
+      errors.push(String(event.params.error));
+  });
+  await assert.rejects(
+    runtime.startSession({ workspace: process.cwd(), access: "read-only" }),
+    /模拟 ACP 错误/,
+  );
+  assert.match(errors.join("\n"), /模拟 ACP 错误/);
+  runtime.dispose();
+});
