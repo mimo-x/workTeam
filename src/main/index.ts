@@ -6,10 +6,16 @@ import { stat } from "node:fs/promises";
 
 import { AgentGatewayPublisher } from "./agent-gateway";
 import { AgentTeamService } from "./agent-team";
+import { AntigravityRuntime } from "./antigravity-runtime";
+import { ClaudeRuntime } from "./claude-runtime";
+import { CodexRuntime } from "./codex-runtime";
 import { BackendClient, backendConfigPath } from "./backend-client";
 import { CodexAppServer } from "./codex-app-server";
 import { ImConfigStore, imConfigPath } from "./im-config";
 import { RemoteAgentHost } from "./remote-agent-host";
+import { AgentRuntimeRegistry } from "./runtime-registry";
+import { OpenCodeRuntime } from "./opencode-runtime";
+import { RuntimeCredentialStore, runtimeCredentialsPath } from "./runtime-credentials";
 import type {
   AgentDefinition,
   AgentMessageAction,
@@ -27,10 +33,17 @@ import type {
 } from "../shared/backend";
 
 const codex = new CodexAppServer();
+const runtime = new CodexRuntime(codex);
+const runtimeRegistry = new AgentRuntimeRegistry();
+runtimeRegistry.register("codex", runtime);
+runtimeRegistry.register("claude", new ClaudeRuntime());
+runtimeRegistry.register("opencode", new OpenCodeRuntime());
+runtimeRegistry.register("antigravity", new AntigravityRuntime());
 let mainWindow: BrowserWindow | null = null;
 let openImSdk: OpenIMSdkMain | null = null;
 let imConfig: ImConfigStore;
 let agentTeam: AgentTeamService;
+let runtimeCredentials: RuntimeCredentialStore;
 let backend: BackendClient;
 let remoteAgentHost: RemoteAgentHost;
 
@@ -332,6 +345,21 @@ const registerIpc = () => {
     },
   );
   ipcMain.handle(
+    "agent-team:get-runtime-credential-status",
+    async (_event, options: { agentId?: unknown }) => ({
+      configured: await runtimeCredentials.has(requireString(options?.agentId, "Agent ID", 128)),
+    }),
+  );
+  ipcMain.handle(
+    "agent-team:save-runtime-credential",
+    async (_event, options: { agentId?: unknown; token?: unknown }) => {
+      const agentId = requireString(options?.agentId, "Agent ID", 128);
+      const token = typeof options?.token === "string" ? options.token.slice(0, 20_000) : "";
+      await runtimeCredentials.save(agentId, token);
+      runtimeRegistry.setCredential(agentId, runtimeCredentials.get(agentId));
+    },
+  );
+  ipcMain.handle(
     "agent-team:save-humans",
     async (_event, options: { workspace?: unknown; humans?: unknown }) => {
       const workspace = await requireDirectory(options.workspace);
@@ -463,6 +491,7 @@ const registerIpc = () => {
     const state = await backend.logout();
     remoteAgentHost.stop();
     agentTeam.clearRemoteWorkspaces();
+    runtimeRegistry.clearCredentials();
     sendToRenderer("backend:event", { type: "auth.changed", authenticated: false });
     return state;
   });
@@ -486,17 +515,21 @@ const registerIpc = () => {
   });
 };
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   const userDataPath = app.getPath("userData");
+  runtimeCredentials = new RuntimeCredentialStore(runtimeCredentialsPath(userDataPath));
+  await runtimeCredentials.load();
+  runtimeRegistry.setCredentialResolver((agentId) => runtimeCredentials.get(agentId));
   imConfig = new ImConfigStore(imConfigPath(userDataPath));
   backend = new BackendClient(
     backendConfigPath(userDataPath),
     join(userDataPath, "openim-cloud-data"),
+    (agentId, token) => runtimeRegistry.setCredential(agentId, token),
   );
-  remoteAgentHost = new RemoteAgentHost(backend, codex);
+  remoteAgentHost = new RemoteAgentHost(backend, runtimeRegistry);
   const publisher = new AgentGatewayPublisher(imConfig);
   agentTeam = new AgentTeamService(
-    codex,
+    runtimeRegistry,
     join(userDataPath, "agent-team-rooms"),
     (message, agent) => publisher.publish(message, agent),
   );
@@ -518,6 +551,7 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   remoteAgentHost?.stop();
+  runtimeRegistry.dispose();
   openImSdk?.dispose();
   codex.dispose();
 });

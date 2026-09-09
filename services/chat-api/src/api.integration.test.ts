@@ -31,6 +31,8 @@ test("two users can become friends, create an Agent room, and sync settings", as
     );
   await pool.query(migration);
   await pool.query(await readFile(join(migrationsDir, "0002_task_review.sql"), "utf8"));
+  await pool.query(await readFile(join(migrationsDir, "0003_agent_registry.sql"), "utf8"));
+  await pool.query(await readFile(join(migrationsDir, "0004_agent_runtime_config.sql"), "utf8"));
   const config = loadConfig({
     NODE_ENV: "test",
     JWT_SECRET: "test-jwt-secret-with-at-least-32-characters",
@@ -107,9 +109,15 @@ test("two users can become friends, create an Agent room, and sync settings", as
         description: "实现任务",
         instructions: "只处理被分配的编码任务。",
         secrets: { token: "encrypted-value" },
-        visibility: "private",
+        visibility: "public",
         workspaceAccess: "write",
         executionTarget: "local",
+        provider: "codex",
+        protocol: "app-server",
+        runtimeModel: "gpt-5.5",
+        runtimeEndpoint: "https://agent.example.com",
+        runtimeAuth: "bearer",
+        capabilities: ["chat", "read_workspace", "write_workspace"],
         skillPolicy: "allowlist",
         skillRefs: [{ name: "test-skill", path: "/private/SKILL.md" }],
       },
@@ -117,6 +125,33 @@ test("two users can become friends, create an Agent room, and sync settings", as
     assert.equal(createdAgent.statusCode, 201, createdAgent.body);
     const agent = createdAgent.json();
     assert.equal(agent.secrets.token, "encrypted-value");
+    assert.equal(agent.provider, "codex");
+    assert.equal(agent.protocol, "app-server");
+    assert.equal(agent.runtimeModel, "gpt-5.5");
+    assert.equal(agent.runtimeEndpoint, "https://agent.example.com");
+    assert.equal(agent.runtimeAuth, "bearer");
+    assert.deepEqual(agent.capabilities, ["chat", "read_workspace", "write_workspace"]);
+    assert.equal(agent.runtime.status, "offline");
+
+    const publicAgent = await app.inject({
+      method: "GET",
+      url: `/v1/agents/${agent.id}`,
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+    });
+    assert.equal(publicAgent.statusCode, 200, publicAgent.body);
+    assert.equal(publicAgent.json().provider, "codex");
+    assert.equal(publicAgent.json().runtime.status, "offline");
+    assert.equal("instructions" in publicAgent.json(), false);
+    assert.equal("secrets" in publicAgent.json(), false);
+
+    const searchedAgents = await app.inject({
+      method: "GET",
+      url: "/v1/agents?scope=available&q=程序",
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+    });
+    assert.equal(searchedAgents.statusCode, 200, searchedAgents.body);
+    assert.equal(searchedAgents.json().data.length, 1);
+    assert.equal(searchedAgents.json().data[0].id, agent.id);
 
     const room = await app.inject({
       method: "POST",

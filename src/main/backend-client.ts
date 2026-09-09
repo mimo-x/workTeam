@@ -11,6 +11,7 @@ import type {
   BackendUser,
 } from "../shared/backend";
 import type {
+  AgentCapability,
   AgentDefinition,
   AgentTask,
   HumanContact,
@@ -54,6 +55,17 @@ type CloudAgent = {
   visibility: "private" | "public";
   workspaceAccess?: "read" | "write";
   executionTarget: "local" | "hosted";
+  provider?: string;
+  protocol?: string;
+  runtimeModel?: string | null;
+  runtimeEndpoint?: string | null;
+  runtimeCommand?: string | null;
+  runtimeArgs?: string[];
+  runtimeAuth?: "bearer" | "none";
+  secrets?: Record<string, string>;
+  capabilities?: AgentCapability[];
+  runtimeStatus?: "online" | "offline" | "unknown";
+  runtimeLastSeenAt?: string | null;
   skillPolicy?: "none" | "allowlist" | "all";
   skillRefs?: Array<{ name: string; path?: string }>;
   version: number;
@@ -185,6 +197,7 @@ export class BackendClient {
   constructor(
     private readonly filePath: string,
     private readonly imDataDir: string,
+    private readonly onAgentCredential?: (agentId: string, token: string) => void,
   ) {}
 
   async getState(): Promise<BackendState> {
@@ -378,12 +391,30 @@ export class BackendClient {
       visibility: agent.visibility,
       ownerId: agent.ownerId === me.user.id ? "local_user" : agent.ownerId,
       executionLocation: agent.executionTarget,
+      source: "registry",
+      runtime: {
+        provider: agent.provider ?? "codex",
+        protocol: agent.protocol ?? "app-server",
+        target: agent.executionTarget,
+        model: agent.runtimeModel ?? undefined,
+        endpoint: agent.runtimeEndpoint ?? undefined,
+        command: agent.runtimeCommand ?? undefined,
+        args: agent.runtimeArgs ?? undefined,
+        auth: agent.runtimeAuth ?? "none",
+      },
+      capabilities: agent.capabilities ?? ["chat", "stream_progress", "read_workspace"],
+      runtimeStatus: agent.runtimeStatus ?? "unknown",
+      runtimeLastSeenAt: agent.runtimeLastSeenAt ? timestamp(agent.runtimeLastSeenAt) : undefined,
       openimUserId: agent.openimUserId,
       skillPolicy: agent.skillPolicy ?? "none",
       skillRefs: agent.skillRefs ?? [],
       version: agent.version,
       syncSource: "backend",
     }));
+    for (const agent of agentsResponse.data) {
+      const token = agent.secrets?.bearerToken ?? agent.secrets?.token;
+      if (token && agent.ownerId === me.user.id) this.onAgentCredential?.(agent.id, token);
+    }
     const humanById = new Map(humans.map((human) => [human.id, human]));
     const humanByOpenim = new Map(
       humans.flatMap((human) => (human.openimUserId ? [[human.openimUserId, human] as const] : [])),
@@ -515,7 +546,7 @@ export class BackendClient {
         syncSource: "backend",
       };
     });
-    return { workspace, agents, humans, rooms, tasks, loops: [] };
+    return { workspace, agents, sessions: [], humans, rooms, tasks, loops: [] };
   }
 
   async createRealtimeConnectionInfo() {

@@ -33,7 +33,9 @@ import type {
   AgentDefinition,
   AgentLoopSession,
   AgentMessageAction,
+  AgentRuntimeBinding,
   AgentTask,
+  AgentSession,
   HumanContact,
   ImConfigInput,
   ImPublicConfig,
@@ -71,6 +73,14 @@ const taskLabels: Record<TaskStatus, string> = {
   done: "已完成",
   failed: "执行失败",
   cancelled: "已取消",
+};
+const sessionLabels: Record<AgentSession["state"], string> = {
+  pending: "待处理",
+  running: "执行中",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+  waiting: "等待下一轮",
 };
 const taskTone: Record<TaskStatus, string> = {
   pending_review: "border-amber-300/15 bg-amber-300/7 text-amber-300",
@@ -133,7 +143,7 @@ const dateLabel = (timestamp: number) =>
     minute: "2-digit",
   }).format(timestamp);
 
-const cloudAgentBody = (agent: AgentDefinition) => ({
+const cloudAgentBody = (agent: AgentDefinition, runtimeToken = "") => ({
   name: agent.name,
   title: agent.title,
   mention: agent.mention,
@@ -142,13 +152,37 @@ const cloudAgentBody = (agent: AgentDefinition) => ({
   visibility: agent.visibility,
   workspaceAccess: agent.workspaceAccess,
   executionTarget: agent.executionLocation,
+  provider: agent.runtime?.provider ?? "codex",
+  protocol: agent.runtime?.protocol ?? "app-server",
+  runtimeModel: agent.runtime?.model,
+  runtimeEndpoint: agent.runtime?.endpoint,
+  runtimeCommand: agent.runtime?.command,
+  runtimeArgs: agent.runtime?.args ?? [],
+  runtimeAuth: agent.runtime?.auth ?? "none",
+  capabilities: agent.capabilities ?? [
+    "chat",
+    "stream_progress",
+    "read_workspace",
+    ...(agent.workspaceAccess === "write" ? ["write_workspace", "run_command"] : []),
+  ],
   skillPolicy: agent.skillPolicy ?? "none",
   skillRefs: agent.skillRefs ?? [],
-  secrets: {},
+  secrets: runtimeToken ? { bearerToken: runtimeToken } : {},
 });
-const cloudAgentUpdateBody = (agent: AgentDefinition) => {
+
+const runtimeProtocol = (provider: string) =>
+  provider === "codex"
+    ? "app-server"
+    : provider === "opencode"
+      ? "acp"
+      : provider === "custom-http"
+        ? "http"
+        : provider === "custom-cli"
+          ? "cli-jsonl"
+          : "cli-stream-json";
+const cloudAgentUpdateBody = (agent: AgentDefinition, runtimeToken?: string) => {
   const { secrets: _secrets, ...body } = cloudAgentBody(agent);
-  return body;
+  return runtimeToken === undefined ? body : { ...body, secrets: { bearerToken: runtimeToken } };
 };
 
 const upsertRoom = (rooms: TeamRoomSnapshot[], room: TeamRoomSnapshot) => {
@@ -175,6 +209,14 @@ const upsertLoop = (loops: AgentLoopSession[], loop: AgentLoopSession) => {
   return next;
 };
 
+const upsertSession = (sessions: AgentSession[], session: AgentSession) => {
+  const index = sessions.findIndex((candidate) => candidate.id === session.id);
+  if (index < 0) return [session, ...sessions];
+  const next = [...sessions];
+  next[index] = session;
+  return next;
+};
+
 const applyEvent = (state: TeamWorkspaceSnapshot, event: TeamEvent) => {
   if (event.type === "workspace-snapshot") return event.snapshot;
   if (event.type === "agents-upsert") return { ...state, agents: event.agents };
@@ -182,6 +224,9 @@ const applyEvent = (state: TeamWorkspaceSnapshot, event: TeamEvent) => {
   if (event.type === "room-upsert") return { ...state, rooms: upsertRoom(state.rooms, event.room) };
   if (event.type === "task-upsert") return { ...state, tasks: upsertTask(state.tasks, event.task) };
   if (event.type === "loop-upsert") return { ...state, loops: upsertLoop(state.loops, event.loop) };
+  if (event.type === "session-upsert") {
+    return { ...state, sessions: upsertSession(state.sessions, event.session) };
+  }
   const room = state.rooms.find((candidate) => candidate.roomId === event.roomId);
   if (!room) return state;
   const messages = [...room.messages];
@@ -347,7 +392,25 @@ const MessageRow = ({
           {message.error && (
             <div className="mt-2 flex items-start gap-2 rounded-lg bg-red-400/7 px-3 py-2 text-xs leading-5 text-red-300/80">
               <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
-              <span>{formatErrorMessage(message.error, "执行失败")}</span>
+              <div className="min-w-0 flex-1">
+                {(() => {
+                  const formatted = formatErrorMessage(message.error, "执行失败");
+                  const [summary, raw] = formatted.split("原始报错：", 2);
+                  return (
+                    <>
+                      <span className="block whitespace-pre-wrap">{summary.trim()}</span>
+                      {raw && (
+                        <details className="mt-1 text-[10px] text-red-200/55">
+                          <summary className="cursor-pointer select-none">查看原始报错</summary>
+                          <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono">
+                            {raw.trim()}
+                          </pre>
+                        </details>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
             </div>
           )}
         </div>
@@ -532,6 +595,10 @@ const AgentSettings = ({
   const [activeId, setActiveId] = useState(initialAgentId ?? agents[0]?.id ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [runtimeToken, setRuntimeToken] = useState("");
+  const [runtimeTokenConfigured, setRuntimeTokenConfigured] = useState(false);
+  const runtimeTokens = useRef(new Map<string, string>());
+  const runtimeCredentialChanges = useRef(new Set<string>());
   const [invitations, setInvitations] = useState<
     Array<{
       id: string;
@@ -550,11 +617,23 @@ const AgentSettings = ({
   useEffect(() => {
     void refreshInvitations().catch(() => undefined);
   }, [refreshInvitations]);
+  useEffect(() => {
+    setRuntimeToken(runtimeTokens.current.get(activeId) ?? "");
+    void window.agentTeam
+      .getRuntimeCredentialStatus({ agentId: activeId })
+      .then((result) => setRuntimeTokenConfigured(result.configured))
+      .catch(() => setRuntimeTokenConfigured(false));
+  }, [activeId]);
   const activeIndex = Math.max(
     0,
     drafts.findIndex((agent) => agent.id === activeId),
   );
   const active = drafts[activeIndex];
+  const activeRuntime: AgentRuntimeBinding = active?.runtime ?? {
+    provider: "codex",
+    protocol: "app-server",
+    target: active?.executionLocation ?? "local",
+  };
   const canEditActive = active?.ownerId === "local_user";
   const update = <K extends keyof AgentDefinition>(key: K, value: AgentDefinition[K]) =>
     canEditActive &&
@@ -577,6 +656,9 @@ const AgentSettings = ({
       visibility: "private",
       ownerId: "local_user",
       executionLocation: "local",
+      source: "local",
+      runtime: { provider: "codex", protocol: "app-server", target: "local" },
+      capabilities: ["chat", "stream_progress", "read_workspace"],
     };
     setDrafts((current) => [...current, next]);
     setActiveId(next.id);
@@ -621,23 +703,28 @@ const AgentSettings = ({
         }
         for (const agent of drafts) {
           const original = originalById.get(agent.id);
+          const tokenChanged = runtimeCredentialChanges.current.has(agent.id);
+          const token = runtimeTokens.current.get(agent.id)?.trim() ?? "";
           const cloudAgentId =
             agent.cloudAgentId ?? (agent.syncSource === "backend" ? agent.id : undefined);
           if (cloudAgentId && agent.ownerId === "local_user" && original) {
-            if (JSON.stringify(agent) !== JSON.stringify(original)) {
+            if (JSON.stringify(agent) !== JSON.stringify(original) || tokenChanged) {
               await window.backend.request({
                 method: "PATCH",
                 path: `/v1/agents/${encodeURIComponent(cloudAgentId)}`,
                 headers: { "if-match": String(agent.version ?? 1) },
-                body: cloudAgentUpdateBody(agent),
+                body: cloudAgentUpdateBody(agent, tokenChanged ? token : undefined),
               });
             }
           } else if (!original && agent.syncSource !== "backend") {
             await window.backend.request({
               method: "POST",
               path: "/v1/agents",
-              body: cloudAgentBody(agent),
+              body: cloudAgentBody(agent, token),
             });
+          }
+          if (tokenChanged && (!cloudMode || cloudAgentId)) {
+            await window.agentTeam.saveRuntimeCredential({ agentId: agent.id, token });
           }
         }
       }
@@ -830,12 +917,14 @@ const AgentSettings = ({
                   <select
                     disabled={!canEditActive}
                     value={active.executionLocation}
-                    onChange={(event) =>
-                      update(
-                        "executionLocation",
-                        event.target.value as AgentDefinition["executionLocation"],
-                      )
-                    }
+                    onChange={(event) => {
+                      const target = event.target.value as AgentDefinition["executionLocation"];
+                      update("executionLocation", target);
+                      update("runtime", {
+                        ...activeRuntime,
+                        target,
+                      });
+                    }}
                     className="w-full rounded-xl border border-white/8 bg-[#11151e] px-3 py-2.5 text-xs"
                   >
                     <option value="local">本机</option>
@@ -843,6 +932,147 @@ const AgentSettings = ({
                   </select>
                 </label>
               </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label>
+                  <span className="mb-1.5 block text-[10px] text-zinc-500 uppercase">
+                    执行 Runtime
+                  </span>
+                  <select
+                    disabled={!canEditActive}
+                    value={activeRuntime.provider}
+                    onChange={(event) => {
+                      const provider = event.target.value;
+                      const currentRuntime = activeRuntime;
+                      update("runtime", {
+                        ...currentRuntime,
+                        provider,
+                        protocol: runtimeProtocol(provider),
+                        target: active.executionLocation,
+                      });
+                    }}
+                    className="w-full rounded-xl border border-white/8 bg-[#11151e] px-3 py-2.5 text-xs"
+                  >
+                    <option value="codex">Codex（内置）</option>
+                    <option value="claude">Claude（内置）</option>
+                    <option value="opencode">OpenCode（内置）</option>
+                    <option value="antigravity">Antigravity（内置）</option>
+                    <option value="custom-http">自定义 HTTP Agent</option>
+                    <option value="custom-cli">自定义 CLI Agent</option>
+                  </select>
+                </label>
+                <label>
+                  <span className="mb-1.5 block text-[10px] text-zinc-500 uppercase">
+                    Runtime 模型（可选）
+                  </span>
+                  <input
+                    disabled={!canEditActive}
+                    value={activeRuntime.model ?? ""}
+                    onChange={(event) =>
+                      update("runtime", {
+                        ...activeRuntime,
+                        model: event.target.value.trim() || undefined,
+                      })
+                    }
+                    placeholder="留空使用 Runtime 默认模型"
+                    className="w-full rounded-xl border border-white/8 bg-black/20 px-3 py-2.5 text-xs disabled:opacity-45"
+                  />
+                </label>
+              </div>
+              {(activeRuntime.provider === "custom-http" ||
+                activeRuntime.provider === "custom-cli") && (
+                <>
+                  <label>
+                    <span className="mb-1.5 block text-[10px] text-zinc-500 uppercase">
+                      {activeRuntime.provider === "custom-http" ? "Agent Endpoint" : "Agent 命令"}
+                    </span>
+                    <input
+                      disabled={!canEditActive}
+                      value={
+                        activeRuntime.provider === "custom-http"
+                          ? (activeRuntime.endpoint ?? "")
+                          : (activeRuntime.command ?? "")
+                      }
+                      onChange={(event) =>
+                        update("runtime", {
+                          ...activeRuntime,
+                          ...(activeRuntime.provider === "custom-http"
+                            ? { endpoint: event.target.value.trim() || undefined }
+                            : { command: event.target.value.trim() || undefined }),
+                        })
+                      }
+                      placeholder={
+                        activeRuntime.provider === "custom-http"
+                          ? "https://agent.example.com"
+                          : "例如：my-agent --protocol jsonl"
+                      }
+                      className="w-full rounded-xl border border-white/8 bg-black/20 px-3 py-2.5 text-xs disabled:opacity-45"
+                    />
+                  </label>
+                  {activeRuntime.provider === "custom-http" && (
+                    <div className="grid gap-3 sm:grid-cols-[10rem_1fr]">
+                      <label>
+                        <span className="mb-1.5 block text-[10px] text-zinc-500 uppercase">
+                          认证方式
+                        </span>
+                        <select
+                          disabled={!canEditActive}
+                          value={activeRuntime.auth ?? "none"}
+                          onChange={(event) =>
+                            update("runtime", {
+                              ...activeRuntime,
+                              auth: event.target.value === "bearer" ? "bearer" : "none",
+                            })
+                          }
+                          className="w-full rounded-xl border border-white/8 bg-[#11151e] px-3 py-2.5 text-xs"
+                        >
+                          <option value="none">无需认证</option>
+                          <option value="bearer">Bearer Token</option>
+                        </select>
+                      </label>
+                      {activeRuntime.auth === "bearer" && (
+                        <label>
+                          <span className="mb-1.5 block text-[10px] text-zinc-500 uppercase">
+                            Bearer Token
+                          </span>
+                          <div className="flex gap-2">
+                            <input
+                              disabled={!canEditActive}
+                              type="password"
+                              autoComplete="off"
+                              value={runtimeToken}
+                              onChange={(event) => {
+                                const value = event.target.value;
+                                runtimeTokens.current.set(activeId, value);
+                                runtimeCredentialChanges.current.add(activeId);
+                                setRuntimeToken(value);
+                              }}
+                              placeholder={
+                                runtimeTokenConfigured ? "已配置，留空保持不变" : "输入 Token"
+                              }
+                              className="min-w-0 flex-1 rounded-xl border border-white/8 bg-black/20 px-3 py-2.5 text-xs disabled:opacity-45"
+                            />
+                            {runtimeTokenConfigured && (
+                              <button
+                                type="button"
+                                disabled={!canEditActive}
+                                onClick={() => {
+                                  runtimeTokens.current.set(activeId, "");
+                                  runtimeCredentialChanges.current.add(activeId);
+                                  setRuntimeToken("");
+                                  setRuntimeTokenConfigured(false);
+                                }}
+                                className="shrink-0 px-2 text-[10px] text-red-300/70 hover:text-red-300 disabled:opacity-40"
+                              >
+                                清除
+                              </button>
+                            )}
+                          </div>
+                        </label>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
               <div className="grid gap-4 sm:grid-cols-[12rem_1fr]">
                 <label>
                   <span className="mb-1.5 block text-[10px] text-zinc-500 uppercase">
@@ -1489,10 +1719,24 @@ const ContactsView = ({
   onEditHumans: () => void;
   onOpenDirect: (principalId: string) => void;
 }) => {
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const matches = (agent: AgentDefinition) =>
+    !normalizedQuery ||
+    [agent.name, agent.title, agent.description, agent.runtime?.provider]
+      .filter(Boolean)
+      .some((value) => value!.toLocaleLowerCase().includes(normalizedQuery));
   const privateAgents = state.agents.filter((agent) => agent.visibility === "private");
   const publicAgents = state.agents.filter((agent) => agent.visibility === "public");
   const AgentCard = ({ agent }: { agent: AgentDefinition }) => {
     const owned = agent.ownerId === "local_user";
+    const registryOffline = agent.source === "registry" && agent.runtimeStatus !== "online";
+    const runtimeStatus =
+      agent.runtimeStatus === "online"
+        ? "在线"
+        : agent.runtimeStatus === "offline"
+          ? "离线"
+          : "状态未知";
     return (
       <article className="rounded-2xl border border-white/7 bg-white/[0.025] p-4 transition hover:border-white/12 hover:bg-white/[0.04]">
         <div className="flex items-start gap-3">
@@ -1511,7 +1755,7 @@ const ContactsView = ({
               )}
             </div>
             <p className="mt-0.5 text-[10px] text-zinc-600">
-              {agent.title} · {agent.executionLocation === "local" ? "本机在线" : "托管运行"}
+              {agent.title} · {agent.runtime?.provider ?? "codex"} · {runtimeStatus}
             </p>
           </div>
           <span className={`size-2 rounded-full ${themeClasses[agent.theme].dot}`} />
@@ -1526,8 +1770,10 @@ const ContactsView = ({
           </span>
           <button
             type="button"
+            disabled={registryOffline}
             onClick={() => onOpenDirect(agent.id)}
-            className="ml-auto flex items-center gap-1.5 rounded-lg border border-cyan-300/15 bg-cyan-300/5 px-2 py-1 text-[9px] text-cyan-200 hover:bg-cyan-300/10"
+            title={registryOffline ? "Agent 当前离线，暂时不能执行" : undefined}
+            className="ml-auto flex items-center gap-1.5 rounded-lg border border-cyan-300/15 bg-cyan-300/5 px-2 py-1 text-[9px] text-cyan-200 hover:bg-cyan-300/10 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <MessageSquareMoreIcon className="size-3" />
             私聊
@@ -1556,6 +1802,16 @@ const ContactsView = ({
           <p className="mt-0.5 text-[10px] text-zinc-600">好友与 Agent 工作者使用统一身份</p>
         </div>
         <div className="electron-no-drag flex items-center gap-2">
+          <label className="flex items-center gap-2 rounded-xl border border-white/9 bg-white/5 px-3 py-2">
+            <SearchIcon className="size-3.5 text-zinc-600" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="搜索 Agent"
+              aria-label="搜索 Agent"
+              className="w-36 bg-transparent text-xs text-zinc-300 outline-none placeholder:text-zinc-700"
+            />
+          </label>
           <button
             type="button"
             onClick={onEditHumans}
@@ -1617,7 +1873,7 @@ const ContactsView = ({
             <span className="text-[10px] text-zinc-700">{privateAgents.length}</span>
           </div>
           <div className="space-y-2">
-            {privateAgents.map((agent) => (
+            {privateAgents.filter(matches).map((agent) => (
               <AgentCard key={agent.id} agent={agent} />
             ))}
           </div>
@@ -1629,10 +1885,13 @@ const ContactsView = ({
             <span className="text-[10px] text-zinc-700">{publicAgents.length}</span>
           </div>
           <div className="space-y-2">
-            {publicAgents.map((agent) => (
+            {publicAgents.filter(matches).map((agent) => (
               <AgentCard key={agent.id} agent={agent} />
             ))}
           </div>
+          {normalizedQuery && !state.agents.some(matches) && (
+            <p className="mt-3 text-center text-[10px] text-zinc-700">没有匹配的 Agent</p>
+          )}
         </section>
       </div>
     </div>
@@ -1694,6 +1953,9 @@ const TaskBoard = ({
                     const agents = state.agents.filter((agent) =>
                       task.assigneeIds.includes(agent.id),
                     );
+                    const session = state.sessions
+                      .filter((candidate) => candidate.taskId === task.id)
+                      .sort((first, second) => second.updatedAt - first.updatedAt)[0];
                     const consumed = agents.length
                       ? Math.min(
                           ...agents.map(
@@ -1724,6 +1986,12 @@ const TaskBoard = ({
                           <p className="mt-2 truncate text-[10px] text-zinc-600">
                             来自 # {room?.name ?? "未知群组"}
                           </p>
+                          {session && (
+                            <p className="mt-1 truncate font-mono text-[9px] text-zinc-700">
+                              Session {sessionLabels[session.state]} · {session.provider}
+                              {session.error ? ` · ${session.error}` : ""}
+                            </p>
+                          )}
                           <div className="mt-3 flex items-center justify-between">
                             <div className="flex -space-x-1">
                               {agents.map((agent) => (

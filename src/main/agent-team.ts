@@ -3,11 +3,15 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type {
+  AgentCapability,
   AgentDefinition,
   AgentLoopCompletionPolicy,
   AgentLoopMode,
   AgentLoopSession,
   AgentMessageAction,
+  AgentSession,
+  AgentSessionState,
+  AgentRuntimeBinding,
   AgentTask,
   ExternalTeamMessage,
   HumanContact,
@@ -19,12 +23,14 @@ import type {
   TeamRoomSnapshot,
   TeamWorkspaceSnapshot,
 } from "../shared/agent-team";
-import type { CodexEvent } from "../shared/codex";
 import { formatErrorMessage } from "../shared/error";
-import { CodexAppServer } from "./codex-app-server";
+import type { AgentRuntime, AgentRuntimeEvent } from "./agent-runtime";
+import type { AgentRuntimeRegistry } from "./runtime-registry";
 
 type RuntimeRun = {
   id: string;
+  workspace: string;
+  sessionId: string;
   threadId: string | null;
   turnId: string | null;
   messageId: string;
@@ -33,7 +39,7 @@ type RuntimeRun = {
   loopId?: string;
 };
 
-type StoredWorkspace = TeamWorkspaceSnapshot & { version: 3 };
+type StoredWorkspace = TeamWorkspaceSnapshot & { version: number };
 type LegacyRoom = Partial<TeamRoomSnapshot> & {
   workspace: string;
   roomId: string;
@@ -44,10 +50,10 @@ type LegacyRoom = Partial<TeamRoomSnapshot> & {
 type AgentMessagePublisher = (message: TeamMessage, agent: AgentDefinition) => Promise<void>;
 
 class EventQueue {
-  private values: CodexEvent[] = [];
-  private waiters: Array<(value: CodexEvent) => void> = [];
+  private values: AgentRuntimeEvent[] = [];
+  private waiters: Array<(value: AgentRuntimeEvent) => void> = [];
 
-  push(value: CodexEvent) {
+  push(value: AgentRuntimeEvent) {
     const waiter = this.waiters.shift();
     if (waiter) waiter(value);
     else this.values.push(value);
@@ -56,9 +62,24 @@ class EventQueue {
   next() {
     const value = this.values.shift();
     if (value) return Promise.resolve(value);
-    return new Promise<CodexEvent>((resolve) => this.waiters.push(resolve));
+    return new Promise<AgentRuntimeEvent>((resolve) => this.waiters.push(resolve));
   }
 }
+
+const STORAGE_VERSION = 4;
+const defaultRuntime: AgentRuntimeBinding = {
+  provider: "codex",
+  protocol: "app-server",
+  target: "local",
+};
+const defaultCapabilities = (
+  workspaceAccess: AgentDefinition["workspaceAccess"],
+): AgentCapability[] => [
+  "chat",
+  "stream_progress",
+  "read_workspace",
+  ...(workspaceAccess === "write" ? ["write_workspace", "run_command"] : []),
+];
 
 export const DEFAULT_AGENTS: AgentDefinition[] = [
   {
@@ -73,6 +94,9 @@ export const DEFAULT_AGENTS: AgentDefinition[] = [
     visibility: "private",
     ownerId: "local_user",
     executionLocation: "local",
+    source: "builtin",
+    runtime: defaultRuntime,
+    capabilities: defaultCapabilities("read"),
     instructions:
       "你是多 Agent 群聊里的协调员。先理解目标和上下文，再给出清晰的任务拆解、取舍与下一步。你不能假装已经调用其他 Agent；需要其他角色时，应明确建议用户 @ 对应角色。",
   },
@@ -88,6 +112,9 @@ export const DEFAULT_AGENTS: AgentDefinition[] = [
     visibility: "public",
     ownerId: "local_user",
     executionLocation: "local",
+    source: "builtin",
+    runtime: defaultRuntime,
+    capabilities: defaultCapabilities("read"),
     instructions:
       "你是多 Agent 群聊里的架构师。聚焦系统边界、接口、数据流、可靠性和技术取舍。可以读取项目，但不要修改文件。回答要能直接指导实现。",
   },
@@ -103,6 +130,9 @@ export const DEFAULT_AGENTS: AgentDefinition[] = [
     visibility: "private",
     ownerId: "local_user",
     executionLocation: "local",
+    source: "builtin",
+    runtime: defaultRuntime,
+    capabilities: defaultCapabilities("write"),
     instructions:
       "你是多 Agent 群聊里的程序员。负责在当前工作区完成明确要求的代码改动并验证结果。修改前理解现有实现，保护用户已有改动，完成后简洁汇报文件和检查结果。",
   },
@@ -118,6 +148,9 @@ export const DEFAULT_AGENTS: AgentDefinition[] = [
     visibility: "public",
     ownerId: "local_user",
     executionLocation: "local",
+    source: "builtin",
+    runtime: defaultRuntime,
+    capabilities: defaultCapabilities("read"),
     instructions:
       "你是多 Agent 群聊里的代码审查员。以发现真实缺陷为优先，检查正确性、安全性、并发、边界条件和测试缺口。可以读取项目，但不要修改文件。结论按严重程度排列，并引用具体文件。",
   },
@@ -266,39 +299,34 @@ const requestedLoopControl = (value: string) => {
   return undefined;
 };
 
-const eventTurnId = (event: CodexEvent) => {
+const eventTurnId = (event: AgentRuntimeEvent) => {
   if (typeof event.params.turnId === "string") return event.params.turnId;
   const turn = event.params.turn as Record<string, unknown> | undefined;
   return typeof turn?.id === "string" ? turn.id : null;
 };
 
-const completedAgentText = (event: CodexEvent) => {
-  if (event.method !== "item/completed") return null;
-  const item = event.params.item as Record<string, unknown> | undefined;
-  return item?.type === "agentMessage" && typeof item.text === "string" ? item.text : null;
+const completedAgentText = (event: AgentRuntimeEvent) => {
+  if (event.method !== "message/completed") return null;
+  return typeof event.params.text === "string" ? event.params.text : null;
 };
 
-const activityForEvent = (event: CodexEvent) => {
-  if (event.method !== "item/started") return null;
-  const item = event.params.item as Record<string, unknown> | undefined;
-  if (item?.type === "commandExecution") return "正在运行命令…";
-  if (item?.type === "fileChange") return "正在修改文件…";
-  if (item?.type === "mcpToolCall") return "正在调用工具…";
-  return null;
+const activityForEvent = (event: AgentRuntimeEvent) => {
+  if (event.method !== "activity") return null;
+  return typeof event.params.activity === "string" ? event.params.activity : null;
 };
 
 export class AgentTeamService {
   private workspaces = new Map<string, TeamWorkspaceSnapshot>();
   private loadPromises = new Map<string, Promise<TeamWorkspaceSnapshot>>();
   private listeners = new Set<(event: TeamEvent) => void>();
-  private threads = new Map<string, string>();
+  private sessions = new Map<string, AgentSession>();
   private runs = new Map<string, RuntimeRun>();
   private writerTails = new Map<string, Promise<void>>();
   private agentTails = new Map<string, Promise<void>>();
   private persistTails = new Map<string, Promise<void>>();
 
   constructor(
-    private readonly codex: CodexAppServer,
+    private readonly runtimeSource: AgentRuntime | AgentRuntimeRegistry,
     private readonly storeDir: string,
     private readonly publishAgentMessage?: AgentMessagePublisher,
   ) {}
@@ -388,6 +416,19 @@ export class AgentTeamService {
 
   clearRemoteWorkspaces() {
     for (const state of this.workspaces.values()) {
+      const remoteAgentIds = new Set(
+        state.agents.filter((agent) => agent.syncSource === "backend").map((agent) => agent.id),
+      );
+      for (const [runId, run] of this.runs) {
+        if (!remoteAgentIds.has(run.agentId)) continue;
+        const runtime = this.runtimeForAgentId(state, run.agentId);
+        if (runtime && run.threadId && run.turnId)
+          void runtime.interruptTurn(run.threadId, run.turnId).catch(() => undefined);
+        this.runs.delete(runId);
+      }
+      for (const [key, session] of this.sessions) {
+        if (remoteAgentIds.has(session.agentId)) this.sessions.delete(key);
+      }
       state.agents = state.agents.filter((agent) => agent.syncSource !== "backend");
       state.humans = state.humans.filter((human) => human.syncSource !== "backend");
       state.rooms = state.rooms.filter((room) => room.syncSource !== "backend");
@@ -580,7 +621,15 @@ export class AgentTeamService {
   async stopRun(runId: string) {
     const run = this.runs.get(runId);
     if (!run?.threadId || !run.turnId) throw new Error("这个 Agent 当前没有可停止的任务。");
-    await this.codex.interruptTurn(run.threadId, run.turnId);
+    const state = await this.loadWorkspace(run.workspace);
+    const runtime = this.runtimeForAgentId(state, run.agentId);
+    if (!runtime) throw new Error("找不到这个 Agent 的 Runtime。");
+    await runtime.interruptTurn(run.threadId, run.turnId);
+    const session = state.sessions.find((candidate) => candidate.id === run.sessionId);
+    if (session) {
+      this.transitionSession(session, "cancelled");
+      this.emitSession(state, session);
+    }
   }
 
   async controlLoop(
@@ -603,7 +652,13 @@ export class AgentTeamService {
       loop.endReason = "由用户终止。";
       for (const run of this.runs.values()) {
         if (run.loopId === loop.id && run.threadId && run.turnId) {
-          void this.codex.interruptTurn(run.threadId, run.turnId).catch(() => undefined);
+          const runtime = this.runtimeForAgentId(state, run.agentId);
+          if (runtime) void runtime.interruptTurn(run.threadId, run.turnId).catch(() => undefined);
+          const session = state.sessions.find((candidate) => candidate.id === run.sessionId);
+          if (session) {
+            this.transitionSession(session, "cancelled");
+            this.emitSession(state, session);
+          }
         }
       }
     } else {
@@ -732,14 +787,22 @@ export class AgentTeamService {
       if (loop.currentAgentId) loop.currentAgentId = mapId(loop.currentAgentId);
       if (loop.nextAgentId) loop.nextAgentId = mapId(loop.nextAgentId);
     }
-    for (const [key, threadId] of this.threads) {
+    for (const session of state.sessions) {
+      session.agentId = mapId(session.agentId);
+    }
+    const remappedSessions = new Map<string, AgentSession>();
+    for (const [key, session] of this.sessions) {
       const parts = key.split("\u0000");
       const mappedAgentId = ids.get(parts[2]);
-      if (!mappedAgentId) continue;
-      this.threads.delete(key);
+      if (!mappedAgentId) {
+        remappedSessions.set(key, session);
+        continue;
+      }
+      session.agentId = mappedAgentId;
       parts[2] = mappedAgentId;
-      this.threads.set(parts.join("\u0000"), threadId);
+      remappedSessions.set(parts.join("\u0000"), session);
     }
+    this.sessions = remappedSessions;
     this.persist(state);
     const snapshot = clone(state);
     this.emit({ type: "workspace-snapshot", snapshot });
@@ -910,6 +973,9 @@ export class AgentTeamService {
     const taskRoom = this.requireRoom(state, task.taskRoomId);
     const agents = state.agents.filter((agent) => task.assigneeIds.includes(agent.id));
     if (!agents.length) throw new Error("Task 没有可执行的 Agent。");
+    if (agents.some((agent) => agent.executionLocation === "hosted")) {
+      throw new Error("Task 包含托管 Agent，但云端 Worker 尚未接入，当前不能开始执行。");
+    }
     const reviewer = state.humans.find((human) => human.id === approval.reviewerUserId);
     const instruction = this.createMessage(state, taskRoom, {
       senderId: "local_user",
@@ -941,7 +1007,21 @@ export class AgentTeamService {
     action: AgentMessageAction = "chat",
   ) {
     if (!targets.length) return { messageId: message.id, runIds: [] };
-    const runIds = targets.map((agent) =>
+    const executable = targets.filter((agent) => agent.executionLocation !== "hosted");
+    for (const agent of targets.filter((candidate) => candidate.executionLocation === "hosted")) {
+      const response = this.createMessage(state, room, {
+        senderId: agent.id,
+        senderName: agent.name,
+        senderType: "agent",
+        content: "",
+        status: "error",
+        error: "该 Agent 由托管 Runtime 执行，但云端 Worker 尚未接入。",
+        replyTo: message.id,
+        transport: message.transport,
+      });
+      this.upsertMessage(state, room, response);
+    }
+    const runIds = executable.map((agent) =>
       this.scheduleAgent(state, room, message, agent, undefined, model, action === "propose-task"),
     );
     return { messageId: message.id, runIds };
@@ -1238,6 +1318,8 @@ export class AgentTeamService {
     }
     this.runs.set(runId, {
       id: runId,
+      workspace: state.workspace,
+      sessionId: "",
       threadId: null,
       turnId: null,
       messageId: response.id,
@@ -1264,7 +1346,7 @@ export class AgentTeamService {
       agent.workspaceAccess === "write"
         ? this.enqueue(this.writerTails, state.workspace, execute)
         : execute();
-    const queueKey = `${state.workspace}\u0000${task?.id ?? room.roomId}\u0000${agent.id}\u0000${model ?? "default"}`;
+    const queueKey = `${state.workspace}\u0000${task?.id ?? room.roomId}\u0000${agent.id}\u0000${agent.runtime?.model ?? model ?? "default"}`;
     void this.enqueue(this.agentTails, queueKey, executeWithWorkspacePolicy);
     return runId;
   }
@@ -1281,8 +1363,21 @@ export class AgentTeamService {
     proposalRequested = false,
   ) {
     const queue = new EventQueue();
-    const unsubscribe = this.codex.onEvent((event) => queue.push(event));
+    let runtime: AgentRuntime;
+    const effectiveModel = agent.runtime?.model ?? model;
+    let unsubscribe = () => {};
+    let activeSession: AgentSession | undefined;
     try {
+      runtime = this.runtimeForAgent(agent);
+      if ("assertCapabilities" in this.runtimeSource) {
+        this.runtimeSource.assertCapabilities(runtime, [
+          "chat",
+          ...(task && agent.workspaceAccess === "write" && task.requestedAccess === "write"
+            ? ["write_workspace"]
+            : []),
+        ]);
+      }
+      unsubscribe = runtime.onEvent((event) => queue.push(event));
       if (response.loopId) {
         const scheduledLoop = state.loops.find((candidate) => candidate.id === response.loopId);
         if (!scheduledLoop || scheduledLoop.status !== "running") {
@@ -1294,23 +1389,75 @@ export class AgentTeamService {
           return;
         }
       }
-      const threadKey = `${state.workspace}\u0000${task?.id ?? room.roomId}\u0000${agent.id}\u0000${model ?? "default"}`;
-      let threadId = this.threads.get(threadKey);
-      if (!threadId) {
-        const thread = await this.codex.startThread(
-          state.workspace,
-          model,
-          task && agent.workspaceAccess === "write" && task.requestedAccess === "write"
-            ? "workspace-write"
-            : "read-only",
-        );
-        threadId = thread.threadId;
-        this.threads.set(threadKey, threadId);
+      const threadKey = this.sessionKey(
+        state.workspace,
+        task?.id ?? room.roomId,
+        agent.id,
+        effectiveModel,
+      );
+      let session = this.sessions.get(threadKey);
+      activeSession = session;
+      const providerSessionId = session?.providerThread?.providerSessionId;
+      const shouldStartSession =
+        !session ||
+        session.providerThread?.provider !== runtime.provider ||
+        (providerSessionId !== undefined && runtime.hasSession?.(providerSessionId) === false);
+      const runtimeSession = shouldStartSession
+        ? await runtime.startSession({
+            workspace: state.workspace,
+            model: effectiveModel,
+            access:
+              task && agent.workspaceAccess === "write" && task.requestedAccess === "write"
+                ? "workspace-write"
+                : "read-only",
+            providerSessionId,
+          })
+        : {
+            sessionId: providerSessionId!,
+            providerSessionId: providerSessionId!,
+          };
+      if (!session) {
+        session = {
+          id: randomUUID(),
+          agentId: agent.id,
+          workspace: state.workspace,
+          roomId: room.roomId,
+          taskId: task?.id,
+          provider: runtime.provider,
+          model: effectiveModel,
+          providerThread: {
+            provider: runtime.provider,
+            providerSessionId: runtimeSession.providerSessionId,
+          },
+          state: "pending",
+          contextVersion: taskRun?.contextVersion ?? 1,
+          consumedContextVersion: 0,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        activeSession = session;
+        this.sessions.set(threadKey, session);
+        state.sessions.push(session);
+        this.emitSession(state, session);
+      } else {
+        session.provider = runtime.provider;
+        session.providerThread = {
+          provider: runtime.provider,
+          providerSessionId: runtimeSession.providerSessionId,
+        };
       }
+      activeSession = session;
+      const threadId = session.providerThread?.providerSessionId;
+      if (!threadId) throw new Error("Agent Session 缺少 Provider Thread。");
 
       const runtimeRun = this.runs.get(response.runId!);
       if (!runtimeRun) return;
+      runtimeRun.sessionId = session.id;
       runtimeRun.threadId = threadId;
+      response.sessionId = session.id;
+      this.transitionSession(session, "running");
+      session.contextVersion = Math.max(session.contextVersion, taskRun?.contextVersion ?? 1);
+      this.emitSession(state, session);
       response.status = "streaming";
       response.activity = "正在思考…";
       response.updatedAt = Date.now();
@@ -1323,10 +1470,7 @@ export class AgentTeamService {
       this.upsertMessage(state, room, response);
       if (task) this.emitTask(state, task);
 
-      const availableSkills =
-        task && this.codex.listSkills
-          ? await this.codex.listSkills(state.workspace).catch(() => [])
-          : [];
+      const availableSkills = task ? await runtime.listSkills(state.workspace).catch(() => []) : [];
       const requestedSkills =
         agent.skillPolicy === "all" ? availableSkills : (agent.skillRefs ?? []);
       const skills =
@@ -1346,7 +1490,7 @@ export class AgentTeamService {
               )
               .map(({ name, path }) => ({ name, path }));
 
-      const turn = await this.codex.startTurn(
+      const turn = await runtime.startTurn(
         threadId,
         state.workspace,
         task && taskRun
@@ -1361,7 +1505,7 @@ export class AgentTeamService {
                 ? state.loops.find((candidate) => candidate.id === response.loopId)
                 : undefined,
             ),
-        model,
+        effectiveModel,
         skills,
       );
       runtimeRun.turnId = turn.turnId;
@@ -1373,7 +1517,7 @@ export class AgentTeamService {
         const turnId = eventTurnId(event);
         if (turnId && turnId !== turn.turnId) continue;
 
-        if (event.method === "item/agentMessage/delta") {
+        if (event.method === "message/delta") {
           response.content += String(event.params.delta ?? "");
           response.activity = undefined;
           response.updatedAt = Date.now();
@@ -1395,8 +1539,8 @@ export class AgentTeamService {
           this.upsertMessage(state, room, response);
         }
 
-        if (event.method === "desktop/status/changed" && event.params.connected === false) {
-          throw new Error(String(event.params.error ?? "Codex App Server 连接已断开。"));
+        if (event.method === "runtime/status" && event.params.connected === false) {
+          throw new Error(String(event.params.error ?? "Agent Runtime 连接已断开。"));
         }
 
         if (event.method === "turn/completed") {
@@ -1405,6 +1549,18 @@ export class AgentTeamService {
           if (status === "failed")
             throw new Error(errorMessage(turnResult.error ?? "Codex 执行失败。"));
           response.status = status === "interrupted" ? "cancelled" : "complete";
+          if (activeSession.state !== "cancelled") {
+            this.transitionSession(
+              activeSession,
+              response.status === "cancelled" ? "cancelled" : "waiting",
+            );
+          }
+          activeSession.consumedContextVersion = Math.max(
+            activeSession.consumedContextVersion,
+            taskRun?.contextVersion ?? activeSession.contextVersion,
+          );
+          activeSession.updatedAt = Date.now();
+          this.emitSession(state, activeSession);
           response.activity = undefined;
           response.updatedAt = Date.now();
           if (!response.content && response.status === "complete")
@@ -1559,6 +1715,14 @@ export class AgentTeamService {
       response.activity = undefined;
       response.error = errorMessage(error);
       response.updatedAt = Date.now();
+      if (activeSession) {
+        if (activeSession.state !== "cancelled" && activeSession.state !== "completed") {
+          this.transitionSession(activeSession, "failed", response.error);
+        }
+        activeSession.error = response.error;
+        activeSession.updatedAt = response.updatedAt;
+        this.emitSession(state, activeSession);
+      }
       if (task && taskRun) {
         taskRun.status = "error";
         taskRun.error = response.error;
@@ -1863,7 +2027,9 @@ export class AgentTeamService {
       const delta = `群聊出现新的实时消息：\n${message.senderName}（${this.memberMention(state, message.senderId)}）: ${message.content}`;
       for (const run of this.runs.values()) {
         if (run.loopId === loop.id && run.threadId && run.turnId) {
-          void this.codex.steerTurn(run.threadId, run.turnId, delta).catch(() => undefined);
+          const runtime = this.runtimeForAgentId(state, run.agentId);
+          if (runtime)
+            void runtime.steerTurn(run.threadId, run.turnId, delta).catch(() => undefined);
         }
       }
     }
@@ -1897,7 +2063,9 @@ export class AgentTeamService {
       const delta = `来源群出现新的实时消息：\n${message.senderName}: ${message.content}`;
       for (const run of this.runs.values()) {
         if (run.taskId === task.id && run.threadId && run.turnId) {
-          void this.codex.steerTurn(run.threadId, run.turnId, delta).catch(() => undefined);
+          const runtime = this.runtimeForAgentId(state, run.agentId);
+          if (runtime)
+            void runtime.steerTurn(run.threadId, run.turnId, delta).catch(() => undefined);
         }
       }
     }
@@ -1950,6 +2118,41 @@ export class AgentTeamService {
       visibility: raw.visibility === "public" ? "public" : "private",
       ownerId: String(raw.ownerId ?? "local_user"),
       executionLocation: raw.executionLocation === "hosted" ? "hosted" : "local",
+      source:
+        raw.source === "builtin" || raw.source === "registry"
+          ? raw.source
+          : raw.syncSource === "backend"
+            ? "registry"
+            : "local",
+      runtime: {
+        provider: String(raw.runtime?.provider ?? "codex").trim() || "codex",
+        protocol: String(raw.runtime?.protocol ?? "app-server").trim() || "app-server",
+        target: raw.runtime?.target === "hosted" ? "hosted" : "local",
+        model: raw.runtime?.model ? String(raw.runtime.model).trim() : undefined,
+        version: raw.runtime?.version ? String(raw.runtime.version).trim() : undefined,
+        endpoint: raw.runtime?.endpoint ? String(raw.runtime.endpoint).trim() : undefined,
+        command: raw.runtime?.command ? String(raw.runtime.command).trim() : undefined,
+        args: Array.isArray(raw.runtime?.args)
+          ? raw.runtime.args
+              .map(String)
+              .map((value) => value.trim())
+              .filter(Boolean)
+              .slice(0, 32)
+          : undefined,
+        auth: raw.runtime?.auth === "bearer" ? "bearer" : "none",
+      },
+      capabilities:
+        Array.isArray(raw.capabilities) && raw.capabilities.length
+          ? [
+              ...new Set(
+                raw.capabilities.map((capability) => String(capability).trim()).filter(Boolean),
+              ),
+            ]
+          : defaultCapabilities(raw.workspaceAccess === "write" ? "write" : "read"),
+      runtimeStatus: ["online", "offline", "unknown"].includes(String(raw.runtimeStatus))
+        ? (raw.runtimeStatus as AgentDefinition["runtimeStatus"])
+        : "unknown",
+      runtimeLastSeenAt: Number(raw.runtimeLastSeenAt) || undefined,
       openimUserId: raw.openimUserId ? String(raw.openimUserId) : undefined,
       cloudAgentId: raw.cloudAgentId ? String(raw.cloudAgentId) : undefined,
       skillPolicy: ["none", "allowlist", "all"].includes(String(raw.skillPolicy))
@@ -2024,16 +2227,30 @@ export class AgentTeamService {
       let state = this.blankWorkspace(workspace);
       try {
         const raw = await readFile(this.workspacePath(workspace), "utf8");
-        state = this.normalizeWorkspace(JSON.parse(raw) as StoredWorkspace, workspace);
+        const stored = JSON.parse(raw) as StoredWorkspace;
+        state = this.normalizeWorkspace(stored, workspace);
+        for (const session of state.sessions) {
+          this.sessions.set(
+            this.sessionKey(
+              session.workspace,
+              session.taskId ?? session.roomId,
+              session.agentId,
+              session.model,
+            ),
+            session,
+          );
+        }
+        if (Number(stored.version) < STORAGE_VERSION) this.persist(state);
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code !== "ENOENT") throw error;
         state = await this.migrateLegacyRoom(state);
       }
       this.workspaces.set(workspace, state);
-      this.loadPromises.delete(workspace);
       return state;
-    })();
+    })().finally(() => {
+      this.loadPromises.delete(workspace);
+    });
     this.loadPromises.set(workspace, promise);
     return promise;
   }
@@ -2043,6 +2260,7 @@ export class AgentTeamService {
     return {
       workspace,
       agents,
+      sessions: [],
       humans: [
         { id: "local_user", name: "本机用户", initials: "我", title: "Owner", status: "online" },
         {
@@ -2107,6 +2325,49 @@ export class AgentTeamService {
           contextEvents: Array.isArray(task.contextEvents) ? task.contextEvents : [],
           runs,
         };
+      });
+    }
+    if (Array.isArray(stored.sessions)) {
+      const knownAgentIds = new Set(state.agents.map((agent) => agent.id));
+      const knownRoomIds = new Set(state.rooms.map((room) => room.roomId));
+      const knownTaskIds = new Set(state.tasks.map((task) => task.id));
+      state.sessions = stored.sessions.flatMap((raw) => {
+        if (!knownAgentIds.has(raw.agentId) || !knownRoomIds.has(raw.roomId)) return [];
+        const stateValue: AgentSessionState = [
+          "pending",
+          "running",
+          "completed",
+          "failed",
+          "cancelled",
+          "waiting",
+        ].includes(raw.state)
+          ? raw.state
+          : "failed";
+        const interrupted = stateValue === "pending" || stateValue === "running";
+        return [
+          {
+            ...raw,
+            workspace,
+            agentId: String(raw.agentId),
+            roomId: String(raw.roomId),
+            taskId: raw.taskId && knownTaskIds.has(raw.taskId) ? raw.taskId : undefined,
+            provider: String(raw.provider || "codex"),
+            model: raw.model ? String(raw.model) : undefined,
+            providerThread:
+              raw.providerThread && raw.providerThread.providerSessionId
+                ? {
+                    provider: String(raw.providerThread.provider || raw.provider || "codex"),
+                    providerSessionId: String(raw.providerThread.providerSessionId),
+                  }
+                : undefined,
+            state: interrupted ? "failed" : stateValue,
+            contextVersion: Math.max(1, Number(raw.contextVersion) || 1),
+            consumedContextVersion: Math.max(0, Number(raw.consumedContextVersion) || 0),
+            error: interrupted ? "应用上次退出时 Session 仍在运行。" : raw.error,
+            createdAt: Number(raw.createdAt) || Date.now(),
+            updatedAt: Number(raw.updatedAt) || Date.now(),
+          },
+        ];
       });
     }
     if (Array.isArray(stored.loops)) {
@@ -2264,12 +2525,13 @@ export class AgentTeamService {
         const temporary = `${target}.tmp`;
         const localState: TeamWorkspaceSnapshot = {
           ...clone(state),
+          sessions: state.sessions.filter((session) => session.workspace === state.workspace),
           agents: state.agents.filter((agent) => agent.syncSource !== "backend"),
           humans: state.humans.filter((human) => human.syncSource !== "backend"),
           rooms: state.rooms.filter((room) => room.syncSource !== "backend"),
           tasks: state.tasks.filter((task) => task.syncSource !== "backend"),
         };
-        const stored: StoredWorkspace = { version: 3, ...localState };
+        const stored: StoredWorkspace = { version: STORAGE_VERSION, ...localState };
         await writeFile(temporary, JSON.stringify(stored, null, 2), "utf8");
         await rename(temporary, target);
       });
@@ -2284,6 +2546,19 @@ export class AgentTeamService {
 
   private workspaceKey(workspace: string) {
     return createHash("sha256").update(workspace).digest("hex").slice(0, 24);
+  }
+
+  private sessionKey(workspace: string, scopeId: string, agentId: string, model?: string) {
+    return `${workspace}\u0000${scopeId}\u0000${agentId}\u0000${model ?? "default"}`;
+  }
+
+  private runtimeForAgent(agent: AgentDefinition): AgentRuntime {
+    return "resolve" in this.runtimeSource ? this.runtimeSource.resolve(agent) : this.runtimeSource;
+  }
+
+  private runtimeForAgentId(state: TeamWorkspaceSnapshot, agentId: string) {
+    const agent = state.agents.find((candidate) => candidate.id === agentId);
+    return agent ? this.runtimeForAgent(agent) : undefined;
   }
 
   private roomKey(workspace: string, roomId: string) {
@@ -2316,6 +2591,33 @@ export class AgentTeamService {
   private emitLoop(state: TeamWorkspaceSnapshot, loop: AgentLoopSession) {
     this.emit({ type: "loop-upsert", workspace: state.workspace, loop: clone(loop) });
     this.persist(state);
+  }
+
+  private emitSession(state: TeamWorkspaceSnapshot, session: AgentSession) {
+    this.emit({ type: "session-upsert", workspace: state.workspace, session: clone(session) });
+    this.persist(state);
+  }
+
+  private transitionSession(session: AgentSession, next: AgentSessionState, error?: string) {
+    if (session.state === next) {
+      if (error) session.error = error;
+      session.updatedAt = Date.now();
+      return;
+    }
+    const allowed: Record<AgentSessionState, AgentSessionState[]> = {
+      pending: ["running", "failed", "cancelled"],
+      running: ["completed", "failed", "cancelled", "waiting"],
+      waiting: ["running", "failed", "cancelled"],
+      completed: [],
+      failed: [],
+      cancelled: [],
+    };
+    if (!allowed[session.state].includes(next)) {
+      throw new Error(`Agent Session 不能从 ${session.state} 转换为 ${next}。`);
+    }
+    session.state = next;
+    if (error) session.error = error;
+    session.updatedAt = Date.now();
   }
 
   private emit(event: TeamEvent) {

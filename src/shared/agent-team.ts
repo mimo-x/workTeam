@@ -1,6 +1,32 @@
 export type AgentTheme = "cyan" | "violet" | "amber" | "emerald";
 export type AgentVisibility = "private" | "public";
 export type AgentExecutionLocation = "local" | "hosted";
+export type AgentSource = "builtin" | "local" | "registry";
+export type AgentCapability =
+  | "chat"
+  | "stream_progress"
+  | "read_workspace"
+  | "write_workspace"
+  | "run_command"
+  | "review_code"
+  | (string & {});
+
+export type AgentRuntimeBinding = {
+  provider: string;
+  protocol: string;
+  target: AgentExecutionLocation;
+  model?: string;
+  version?: string;
+  endpoint?: string;
+  command?: string;
+  args?: string[];
+  auth?: "bearer" | "none";
+};
+
+export type AgentPermissionProfile = {
+  workspaceAccess: "read" | "write";
+  requiresApproval: boolean;
+};
 
 export type AgentDefinition = {
   id: string;
@@ -15,12 +41,69 @@ export type AgentDefinition = {
   visibility: AgentVisibility;
   ownerId: string;
   executionLocation: AgentExecutionLocation;
+  source?: AgentSource;
+  runtime?: AgentRuntimeBinding;
+  capabilities?: AgentCapability[];
+  runtimeStatus?: "online" | "offline" | "unknown";
+  runtimeLastSeenAt?: number;
   openimUserId?: string;
   cloudAgentId?: string;
   skillPolicy?: "none" | "allowlist" | "all";
   skillRefs?: Array<{ name: string; path?: string }>;
   version?: number;
   syncSource?: "local" | "backend";
+};
+
+export type AgentManifest = {
+  protocolVersion: 1;
+  agentId: string;
+  name: string;
+  title: string;
+  mention: string;
+  description: string;
+  ownerId: string;
+  visibility: AgentVisibility;
+  source: AgentSource;
+  capabilities: AgentCapability[];
+  permissions: AgentPermissionProfile;
+  runtime: AgentRuntimeBinding;
+  version: number;
+};
+
+export const AGENT_MANIFEST_PROTOCOL_VERSION = 1 as const;
+
+export const agentManifestFromDefinition = (agent: AgentDefinition): AgentManifest => {
+  const workspaceAccess = agent.workspaceAccess === "write" ? "write" : "read";
+  const capabilities = agent.capabilities?.length
+    ? [...new Set(agent.capabilities)]
+    : [
+        "chat",
+        "stream_progress",
+        "read_workspace",
+        ...(workspaceAccess === "write" ? ["write_workspace", "run_command"] : []),
+      ];
+  return {
+    protocolVersion: AGENT_MANIFEST_PROTOCOL_VERSION,
+    agentId: agent.id,
+    name: agent.name,
+    title: agent.title,
+    mention: agent.mention,
+    description: agent.description,
+    ownerId: agent.ownerId,
+    visibility: agent.visibility,
+    source: agent.source ?? (agent.syncSource === "backend" ? "registry" : "local"),
+    capabilities,
+    permissions: {
+      workspaceAccess,
+      requiresApproval: true,
+    },
+    runtime: agent.runtime ?? {
+      provider: "codex",
+      protocol: "app-server",
+      target: agent.executionLocation,
+    },
+    version: Math.max(1, Number(agent.version) || 1),
+  };
 };
 
 export type HumanContact = {
@@ -36,6 +119,17 @@ export type HumanContact = {
 
 export type TeamMessageStatus = "pending" | "streaming" | "complete" | "error" | "cancelled";
 export type AgentMessageAction = "chat" | "propose-task";
+export type AgentSessionState =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "waiting";
+export type ProviderThread = {
+  provider: string;
+  providerSessionId: string;
+};
 export type AgentLoopStatus = "running" | "paused" | "completed" | "cancelled" | "failed";
 export type AgentLoopMode = "handoff" | "round-robin" | "goal-driven";
 export type AgentLoopCompletionPolicy = "turn-target" | "agent-complete" | "consensus";
@@ -54,6 +148,7 @@ export type TeamMessage = {
   updatedAt: number;
   status: TeamMessageStatus;
   runId?: string;
+  sessionId?: string;
   turnId?: string;
   replyTo?: string;
   targetAgentIds?: string[];
@@ -119,6 +214,23 @@ export type TaskRun = {
   createdAt: number;
   updatedAt: number;
   error?: string;
+};
+
+export type AgentSession = {
+  id: string;
+  agentId: string;
+  workspace: string;
+  roomId: string;
+  taskId?: string;
+  provider: string;
+  model?: string;
+  providerThread?: ProviderThread;
+  state: AgentSessionState;
+  contextVersion: number;
+  consumedContextVersion: number;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
 };
 
 export type TaskReviewDecision = "approved" | "changes_requested" | "rejected";
@@ -195,6 +307,7 @@ export type AgentLoopSession = {
 export type TeamWorkspaceSnapshot = {
   workspace: string;
   agents: AgentDefinition[];
+  sessions: AgentSession[];
   humans: HumanContact[];
   rooms: TeamRoomSnapshot[];
   tasks: AgentTask[];
@@ -208,6 +321,7 @@ export type TeamEvent =
   | { type: "task-upsert"; workspace: string; task: AgentTask }
   | { type: "loop-upsert"; workspace: string; loop: AgentLoopSession }
   | { type: "agents-upsert"; workspace: string; agents: AgentDefinition[] }
+  | { type: "session-upsert"; workspace: string; session: AgentSession }
   | { type: "humans-upsert"; workspace: string; humans: HumanContact[] };
 
 export type ExternalTeamMessage = {
@@ -273,6 +387,8 @@ export type AgentTeamApi = {
     workspace: string;
     agents: AgentDefinition[];
   }) => Promise<TeamWorkspaceSnapshot>;
+  getRuntimeCredentialStatus: (options: { agentId: string }) => Promise<{ configured: boolean }>;
+  saveRuntimeCredential: (options: { agentId: string; token: string }) => Promise<void>;
   saveHumans: (options: {
     workspace: string;
     humans: HumanContact[];

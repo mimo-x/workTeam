@@ -65,6 +65,14 @@ type AgentForRun = {
   description: string;
   workspace_access: string;
   execution_target: string;
+  provider: string;
+  protocol: string;
+  runtime_model: string | null;
+  runtime_endpoint: string | null;
+  runtime_command: string | null;
+  runtime_args: string[];
+  runtime_auth: string;
+  capabilities: unknown;
   skill_policy: string;
   skill_refs: unknown;
   private_config: unknown;
@@ -79,6 +87,14 @@ const snapshotAgent = (agent: AgentForRun) => ({
   description: agent.description,
   workspaceAccess: agent.workspace_access,
   executionTarget: agent.execution_target,
+  provider: agent.provider,
+  protocol: agent.protocol,
+  model: agent.runtime_model,
+  runtimeEndpoint: agent.runtime_endpoint,
+  runtimeCommand: agent.runtime_command,
+  runtimeArgs: agent.runtime_args,
+  runtimeAuth: agent.runtime_auth,
+  capabilities: agent.capabilities,
   skillPolicy: agent.skill_policy,
   skillRefs: agent.skill_refs,
   privateConfig: agent.private_config,
@@ -473,6 +489,13 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
         [id],
       );
       if (!agents.rows.length) throw new ApiError(409, "NO_ASSIGNEES", "Task 没有执行 Agent。");
+      if (agents.rows.some((agent) => agent.execution_target !== "local")) {
+        throw new ApiError(
+          409,
+          "UNSUPPORTED_EXECUTION_TARGET",
+          "Task 包含托管 Agent，但云端 Worker 尚未接入。",
+        );
+      }
       for (const agent of agents.rows) {
         const runId = randomUUID();
         runIds.push(runId);

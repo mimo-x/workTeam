@@ -33,6 +33,12 @@ test("formatErrorMessage handles various error shapes safely", () => {
   assert.equal(formatErrorMessage(""), "未知错误");
   assert.equal(formatErrorMessage("[object Object]"), "未知错误");
   assert.equal(formatErrorMessage(new Error("普通错误")), "普通错误");
+  const fetchError = new TypeError("fetch failed", {
+    cause: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8787"), {
+      code: "ECONNREFUSED",
+    }),
+  });
+  assert.match(formatErrorMessage(fetchError), /ECONNREFUSED 127\.0\.0\.1:8787/);
 
   assert.equal(
     formatErrorMessage({

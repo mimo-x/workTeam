@@ -149,6 +149,19 @@ export const agents = pgTable(
     visibility: text("visibility").notNull().default("private"),
     workspaceAccess: text("workspace_access").notNull().default("read"),
     executionTarget: text("execution_target").notNull().default("local"),
+    provider: text("provider").notNull().default("codex"),
+    protocol: text("protocol").notNull().default("app-server"),
+    runtimeModel: text("runtime_model"),
+    runtimeEndpoint: text("runtime_endpoint"),
+    runtimeCommand: text("runtime_command"),
+    runtimeArgs: jsonb("runtime_args").$type<string[]>().notNull().default([]),
+    runtimeAuth: text("runtime_auth").notNull().default("none"),
+    capabilities: jsonb("capabilities")
+      .$type<string[]>()
+      .notNull()
+      .default(["chat", "stream_progress", "read_workspace"]),
+    runtimeStatus: text("runtime_status").notNull().default("offline"),
+    runtimeLastSeenAt: timestamp("runtime_last_seen_at", { withTimezone: true }),
     skillPolicy: text("skill_policy").notNull().default("none"),
     skillRefs: jsonb("skill_refs")
       .$type<Array<{ name: string; path?: string }>>()

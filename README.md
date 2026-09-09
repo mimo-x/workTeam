@@ -1,10 +1,11 @@
 # Codex Desktop
 
-一个基于 Electron、React、assistant-ui 和 OpenIM 的 Codex 桌面聊天客户端。应用通过标准输入输出连接本机 `codex app-server`，并支持让多个自定义 Agent 作为群成员协作。
+一个基于 Electron、React、assistant-ui 和 OpenIM 的本地优先 Agent 开发工作台。应用通过内置 Runtime 连接 Codex、Claude、OpenCode 或 Antigravity，并支持从注册中心发现自定义 Agent，让多个具名 Agent 作为群成员协作。
 
 ## 当前能力
 
 - 自动发现并启动本机 Codex CLI
+- 内置 Codex、Claude、OpenCode 和 Antigravity Runtime；各 Runtime 按已验证能力声明读写、命令和审批边界
 - 读取 Codex 登录状态和可用模型
 - 选择项目目录，并以该目录作为会话工作区
 - 流式展示回答、思考摘要、命令执行和文件修改
@@ -26,6 +27,8 @@
 - 本地房间消息持久化；未部署 IM 服务时也能完整验证 Agent 群聊
 - 可选接入 OpenIM Electron FFI SDK，同步群消息与历史记录
 - 独立 Agent Gateway 通过 OpenIM Platform API 以 Agent 用户身份发布最终消息
+- 支持通过版本化 Manifest 接入自定义 HTTP 或 CLI JSONL Agent；协议说明见 [docs/custom-agent-protocol.md](docs/custom-agent-protocol.md)
+- 自定义 HTTP Agent 可配置 Bearer Token；Token 不写入工作区快照，使用系统安全存储或云端密文保存
 - 多用户业务后台：账号、好友申请、远程私聊/群聊、Agent 邀请审批、消息镜像、Task、设置和设备信息
 - 登录后自动同步云端通讯录和会话；OpenIM/后台事件会实时刷新桌面端，远程 Task 由本机 Agent Host 执行
 
@@ -157,6 +160,7 @@ OpenIMServer 仓库使用 Apache-2.0；当前接入的 `@openim/electron-client-
 - `src/main/backend-client.ts`：后台认证、安全刷新令牌、云端快照与 OpenIM 会话
 - `src/main/remote-agent-host.ts`：实时任务租约、本机 Codex 执行、进度回传和上下文 steer
 - `src/main/im-config.ts`：OpenIM 配置与系统安全存储
+- `src/main/runtime-credentials.ts`：自定义 Runtime 凭证的系统安全存储
 - `src/main/agent-gateway.ts`：桌面端到 Agent Gateway 的受限发布客户端
 - `src/main/index.ts`：Electron 窗口、目录选择和受限 IPC 接口
 - `src/preload/index.ts`：渲染进程安全桥接

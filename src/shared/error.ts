@@ -40,6 +40,18 @@ export const formatErrorMessage = (error: unknown, fallback = "未知错误"): s
   if (error instanceof Error) {
     const message = error.message?.trim();
     if (!message || message === "[object Object]") return fallback;
+    const cause = (error as Error & { cause?: unknown }).cause;
+    if (cause && cause !== error && !message.includes("原始报错：")) {
+      const causeMessage =
+        cause instanceof Error
+          ? cause.message?.trim()
+          : typeof cause === "string"
+            ? cause.trim()
+            : formatErrorMessage(cause, "");
+      if (causeMessage && causeMessage !== message && causeMessage !== "[object Object]") {
+        return `${humanizeErrorMessage(message)} 原始报错：${causeMessage}`;
+      }
+    }
     return humanizeErrorMessage(message);
   }
 

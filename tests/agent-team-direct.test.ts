@@ -1,21 +1,26 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { CodexEvent } from "../src/shared/codex";
-import { AgentTeamService } from "../src/main/agent-team";
-import type { CodexAppServer } from "../src/main/codex-app-server";
+import { AgentTeamService, DEFAULT_AGENTS } from "../src/main/agent-team";
+import { agentManifestFromDefinition } from "../src/shared/agent-team";
+import type { AgentRuntime, AgentRuntimeEvent } from "../src/main/agent-runtime";
 
 class FakeCodex {
-  private listeners = new Set<(event: CodexEvent) => void>();
+  readonly provider = "fake";
+  readonly capabilities = ["chat", "stream_progress"] as const;
+  private listeners = new Set<(event: AgentRuntimeEvent) => void>();
   threadStarts = 0;
   prompts: string[] = [];
   responses: string[] = [];
   nextTurnError?: unknown;
+  private readonly sessions = new Set<string>();
+  sessionInputs: Array<string | undefined> = [];
 
-  onEvent(listener: (event: CodexEvent) => void) {
+  onEvent(listener: (event: AgentRuntimeEvent) => void) {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
@@ -23,6 +28,17 @@ class FakeCodex {
   async startThread() {
     this.threadStarts += 1;
     return { threadId: `thread_${this.threadStarts}` };
+  }
+
+  hasSession(sessionId: string) {
+    return this.sessions.has(sessionId);
+  }
+
+  async startSession(input?: { providerSessionId?: string }) {
+    this.sessionInputs.push(input?.providerSessionId);
+    const threadId = input?.providerSessionId ?? (await this.startThread()).threadId;
+    this.sessions.add(threadId);
+    return { sessionId: threadId, providerSessionId: threadId };
   }
 
   async startTurn(_threadId: string, _workspace: string, prompt: string) {
@@ -40,8 +56,8 @@ class FakeCodex {
         return;
       }
       this.emit({
-        method: "item/completed",
-        params: { turnId, item: { type: "agentMessage", text: response } },
+        method: "message/completed",
+        params: { turnId, text: response },
       });
       this.emit({
         method: "turn/completed",
@@ -53,7 +69,15 @@ class FakeCodex {
 
   async interruptTurn() {}
 
-  private emit(event: CodexEvent) {
+  async steerTurn() {}
+
+  async listSkills() {
+    return [];
+  }
+
+  async resolveApproval() {}
+
+  private emit(event: AgentRuntimeEvent) {
     for (const listener of this.listeners) listener(event);
   }
 }
@@ -71,10 +95,28 @@ test("Agent and friend direct messages reuse rooms and do not create Tasks", asy
   const storeDir = await mkdtemp(join(tmpdir(), "agent-team-direct-"));
   const workspace = "/tmp/direct-message-workspace";
   const codex = new FakeCodex();
-  const service = new AgentTeamService(codex as unknown as CodexAppServer, storeDir);
+  const service = new AgentTeamService(codex as unknown as AgentRuntime, storeDir);
 
   try {
     const before = await service.getWorkspace(workspace);
+    const manifest = agentManifestFromDefinition(DEFAULT_AGENTS[2]);
+    assert.equal(manifest.agentId, "agent_coder");
+    assert.equal(manifest.source, "builtin");
+    assert.equal(manifest.runtime.provider, "codex");
+    assert.ok(manifest.capabilities.includes("write_workspace"));
+    assert.equal(manifest.permissions.requiresApproval, true);
+    const customManifest = agentManifestFromDefinition({
+      ...DEFAULT_AGENTS[2],
+      id: "custom_agent",
+      name: "外部 Agent",
+      ownerId: "user_123",
+      source: "registry",
+      runtime: { provider: "custom", protocol: "http", target: "hosted" },
+      capabilities: ["chat"],
+    });
+    assert.equal(customManifest.source, "registry");
+    assert.equal(customManifest.runtime.protocol, "http");
+    assert.deepEqual(customManifest.capabilities, ["chat"]);
     const firstRoom = await service.openDirectRoom(workspace, "agent_coordinator");
     const reusedRoom = await service.openDirectRoom(workspace, "agent_coordinator");
     assert.equal(firstRoom.roomId, reusedRoom.roomId);
@@ -97,6 +139,18 @@ test("Agent and friend direct messages reuse rooms and do not create Tasks", asy
           ),
       );
     });
+    const firstSnapshot = await service.getWorkspace(workspace);
+    const firstSession = firstSnapshot.sessions.find(
+      (session) => session.agentId === "agent_coordinator",
+    )!;
+    assert.equal(firstSession.state, "waiting");
+    assert.equal(firstSession.provider, "fake");
+    assert.ok(firstSession.providerThread?.providerSessionId);
+    assert.ok(
+      firstSnapshot.rooms
+        .find((room) => room.roomId === firstRoom.roomId)
+        ?.messages.some((message) => message.sessionId === firstSession.id),
+    );
 
     await service.sendMessage({
       workspace,
@@ -110,6 +164,12 @@ test("Agent and friend direct messages reuse rooms and do not create Tasks", asy
           .messages.filter(
             (message) => message.senderType === "agent" && message.status === "complete",
           ).length === 2,
+    );
+    const secondSnapshot = await service.getWorkspace(workspace);
+    assert.equal(
+      secondSnapshot.sessions.filter((session) => session.agentId === "agent_coordinator").length,
+      1,
+      "the Agent direct room should reuse one product Session",
     );
 
     const friendRoom = await service.openDirectRoom(workspace, "friend_demo");
@@ -131,11 +191,173 @@ test("Agent and friend direct messages reuse rooms and do not create Tasks", asy
   }
 });
 
+test("legacy workspace data is upgraded without changing Agent identity or permissions", async () => {
+  const storeDir = await mkdtemp(join(tmpdir(), "agent-domain-migration-"));
+  const workspace = "/tmp/agent-domain-migration-workspace";
+  const seed = new AgentTeamService(new FakeCodex() as unknown as AgentRuntime, storeDir);
+
+  try {
+    const snapshot = await seed.getWorkspace(workspace);
+    const legacy = {
+      ...snapshot,
+      version: 3,
+      agents: snapshot.agents.map(
+        ({ source: _source, runtime: _runtime, capabilities: _capabilities, ...agent }) => agent,
+      ),
+      sessions: [
+        {
+          id: "session_running",
+          agentId: "agent_coder",
+          workspace,
+          roomId: snapshot.rooms[0].roomId,
+          provider: "codex",
+          state: "running",
+          contextVersion: 2,
+          consumedContextVersion: 1,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          providerThread: { provider: "codex", providerSessionId: "thread_old" },
+        },
+      ],
+    };
+    const key = createHash("sha256").update(workspace).digest("hex").slice(0, 24);
+    await writeFile(join(storeDir, `workspace-${key}.json`), JSON.stringify(legacy), "utf8");
+
+    const restoredService = new AgentTeamService(
+      new FakeCodex() as unknown as AgentRuntime,
+      storeDir,
+    );
+    const restored = await restoredService.getWorkspace(workspace);
+    const coder = restored.agents.find((agent) => agent.id === "agent_coder")!;
+    assert.equal(coder.id, "agent_coder");
+    assert.equal(coder.workspaceAccess, "write");
+    assert.equal(coder.runtime?.provider, "codex");
+    assert.ok(coder.capabilities?.includes("write_workspace"));
+    const interrupted = restored.sessions.find((session) => session.id === "session_running")!;
+    assert.equal(interrupted.state, "failed");
+    assert.equal(interrupted.error, "应用上次退出时 Session 仍在运行。");
+    assert.throws(
+      () =>
+        (
+          restoredService as unknown as {
+            transitionSession(session: typeof interrupted, next: "running"): void;
+          }
+        ).transitionSession(interrupted, "running"),
+      /不能从 failed 转换为 running/,
+    );
+
+    await restoredService.flush();
+    const upgraded = JSON.parse(await readFile(join(storeDir, `workspace-${key}.json`), "utf8"));
+    assert.equal(upgraded.version, 4);
+  } finally {
+    await seed.flush();
+    await rm(storeDir, { recursive: true, force: true });
+  }
+});
+
+test("custom Runtime binding survives workspace normalization", async () => {
+  const storeDir = await mkdtemp(join(tmpdir(), "agent-runtime-binding-"));
+  const workspace = "/tmp/agent-runtime-binding-workspace";
+  const service = new AgentTeamService(new FakeCodex() as unknown as AgentRuntime, storeDir);
+  try {
+    const initial = await service.getWorkspace(workspace);
+    const custom = {
+      ...initial.agents[0],
+      id: "custom_http_agent",
+      runtime: {
+        provider: "custom-http",
+        protocol: "http",
+        target: "local" as const,
+        endpoint: "https://agent.example.com",
+        auth: "bearer" as const,
+        args: ["--strict"],
+      },
+    };
+    await service.saveAgents(workspace, [...initial.agents.slice(1), custom]);
+    const restored = await service.getWorkspace(workspace);
+    const runtime = restored.agents.find((agent) => agent.id === custom.id)?.runtime;
+    assert.equal(runtime?.provider, custom.runtime.provider);
+    assert.equal(runtime?.endpoint, custom.runtime.endpoint);
+    assert.equal(runtime?.auth, custom.runtime.auth);
+    assert.deepEqual(runtime?.args, custom.runtime.args);
+  } finally {
+    await service.flush();
+    await rm(storeDir, { recursive: true, force: true });
+  }
+});
+
+test("a persisted Session is reattached after Runtime restart", async () => {
+  const storeDir = await mkdtemp(join(tmpdir(), "agent-session-restart-"));
+  const workspace = "/tmp/agent-session-restart-workspace";
+  const firstRuntime = new FakeCodex();
+  const firstService = new AgentTeamService(firstRuntime as unknown as AgentRuntime, storeDir);
+  try {
+    const first = await firstService.getWorkspace(workspace);
+    const room = await firstService.openDirectRoom(workspace, first.agents[0].id);
+    await firstService.sendMessage({ workspace, roomId: room.roomId, text: "第一轮" });
+    await waitFor(async () =>
+      Boolean(
+        (await firstService.getWorkspace(workspace)).sessions.find(
+          (session) => session.agentId === first.agents[0].id,
+        ),
+      ),
+    );
+    await firstService.flush();
+
+    const secondRuntime = new FakeCodex();
+    const secondService = new AgentTeamService(secondRuntime as unknown as AgentRuntime, storeDir);
+    const restored = await secondService.getWorkspace(workspace);
+    const restoredRoom = restored.rooms.find((candidate) => candidate.type === "direct")!;
+    await secondService.sendMessage({ workspace, roomId: restoredRoom.roomId, text: "第二轮" });
+    await waitFor(async () => {
+      const current = await secondService.getWorkspace(workspace);
+      const messages =
+        current.rooms.find((candidate) => candidate.roomId === restoredRoom.roomId)?.messages ?? [];
+      return messages.some(
+        (message) => message.senderType === "agent" && message.status === "complete",
+      );
+    });
+    assert.equal(secondRuntime.threadStarts, 0);
+    assert.equal(secondRuntime.sessionInputs[0], "thread_1");
+    await secondService.flush();
+  } finally {
+    await firstService.flush();
+    await rm(storeDir, { recursive: true, force: true });
+  }
+});
+
+test("hosted Agents are reported as unavailable instead of running locally", async () => {
+  const storeDir = await mkdtemp(join(tmpdir(), "agent-hosted-boundary-"));
+  const workspace = "/tmp/agent-hosted-boundary-workspace";
+  const service = new AgentTeamService(new FakeCodex() as unknown as AgentRuntime, storeDir);
+  try {
+    const initial = await service.getWorkspace(workspace);
+    const hosted = {
+      ...initial.agents[0],
+      executionLocation: "hosted" as const,
+      runtime: { ...initial.agents[0].runtime!, target: "hosted" as const },
+    };
+    await service.saveAgents(workspace, [hosted, ...initial.agents.slice(1)]);
+    const room = await service.openDirectRoom(workspace, hosted.id);
+    const result = await service.sendMessage({ workspace, roomId: room.roomId, text: "执行任务" });
+    assert.deepEqual(result.runIds, []);
+    const snapshot = await service.getWorkspace(workspace);
+    assert.match(
+      snapshot.rooms.find((candidate) => candidate.roomId === room.roomId)?.messages.at(-1)
+        ?.error ?? "",
+      /云端 Worker 尚未接入/,
+    );
+  } finally {
+    await service.flush();
+    await rm(storeDir, { recursive: true, force: true });
+  }
+});
+
 test("group mentions stay in chat and an approved Task proposal starts explicitly", async () => {
   const storeDir = await mkdtemp(join(tmpdir(), "agent-team-task-review-"));
   const workspace = "/tmp/task-review-workspace";
   const codex = new FakeCodex();
-  const service = new AgentTeamService(codex as unknown as CodexAppServer, storeDir);
+  const service = new AgentTeamService(codex as unknown as AgentRuntime, storeDir);
 
   try {
     const initial = await service.getWorkspace(workspace);
@@ -194,7 +416,7 @@ test("Agents receive the room roster and can bring another Agent into the conver
   const storeDir = await mkdtemp(join(tmpdir(), "agent-team-collaboration-"));
   const workspace = "/tmp/agent-collaboration-workspace";
   const codex = new FakeCodex();
-  const service = new AgentTeamService(codex as unknown as CodexAppServer, storeDir);
+  const service = new AgentTeamService(codex as unknown as AgentRuntime, storeDir);
 
   try {
     const initial = await service.getWorkspace(workspace);
@@ -252,7 +474,7 @@ test("an explicit 15-turn Agent Loop completes exactly 15 replies", async () => 
   const storeDir = await mkdtemp(join(tmpdir(), "agent-team-loop-"));
   const workspace = "/tmp/agent-loop-workspace";
   const codex = new FakeCodex();
-  const service = new AgentTeamService(codex as unknown as CodexAppServer, storeDir);
+  const service = new AgentTeamService(codex as unknown as AgentRuntime, storeDir);
 
   try {
     const initial = await service.getWorkspace(workspace);
@@ -305,7 +527,7 @@ test("ad-hoc Agent relays stop on a repeated directed edge instead of a fixed ho
   const storeDir = await mkdtemp(join(tmpdir(), "agent-team-relay-breaker-"));
   const workspace = "/tmp/agent-relay-breaker-workspace";
   const codex = new FakeCodex();
-  const service = new AgentTeamService(codex as unknown as CodexAppServer, storeDir);
+  const service = new AgentTeamService(codex as unknown as AgentRuntime, storeDir);
 
   try {
     const initial = await service.getWorkspace(workspace);
@@ -339,7 +561,7 @@ test("a numeric multi-Agent request starts a Loop even when the first Agent omit
   const storeDir = await mkdtemp(join(tmpdir(), "agent-team-loop-fallback-"));
   const workspace = "/tmp/agent-loop-fallback-workspace";
   const codex = new FakeCodex();
-  const service = new AgentTeamService(codex as unknown as CodexAppServer, storeDir);
+  const service = new AgentTeamService(codex as unknown as AgentRuntime, storeDir);
 
   try {
     const initial = await service.getWorkspace(workspace);
@@ -375,7 +597,7 @@ test("promoting a local Agent to cloud identity preserves local conversations", 
   const storeDir = await mkdtemp(join(tmpdir(), "agent-team-promote-"));
   const workspace = "/tmp/agent-promote-workspace";
   const codex = new FakeCodex();
-  const service = new AgentTeamService(codex as unknown as CodexAppServer, storeDir);
+  const service = new AgentTeamService(codex as unknown as AgentRuntime, storeDir);
   const cloudAgentId = "123e4567-e89b-12d3-a456-426614174000";
 
   try {
@@ -424,7 +646,7 @@ test("promoting a local Agent to cloud identity preserves local conversations", 
     );
 
     await service.flush();
-    const reloaded = new AgentTeamService(new FakeCodex() as unknown as CodexAppServer, storeDir);
+    const reloaded = new AgentTeamService(new FakeCodex() as unknown as AgentRuntime, storeDir);
     const restored = await reloaded.getWorkspace(workspace);
     assert.equal(
       restored.agents.find((agent) => agent.id === cloudAgentId)?.cloudAgentId,
@@ -446,7 +668,7 @@ test("Agent execution failure with error object produces humanized error instead
       'unexpected status 404 Not Found: Model "gpt-6-astra" is not supported by any configured account in this group',
     codex_error_info: "other",
   };
-  const service = new AgentTeamService(codex as unknown as CodexAppServer, storeDir);
+  const service = new AgentTeamService(codex as unknown as AgentRuntime, storeDir);
 
   try {
     const room = await service.openDirectRoom(workspace, "agent_coordinator");

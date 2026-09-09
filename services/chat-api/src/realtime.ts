@@ -124,7 +124,10 @@ export class RealtimeHub implements EventPublisher {
           heartbeatSeconds: this.config.HOST_HEARTBEAT_SECONDS,
         });
         socket.on("message", (value) => void this.onMessage(connection, value));
-        socket.on("close", () => this.connections.delete(connection));
+        socket.on("close", () => {
+          this.connections.delete(connection);
+          void this.markAgentsOffline(connection);
+        });
       },
     );
 
@@ -278,6 +281,18 @@ export class RealtimeHub implements EventPublisher {
     if (!result.rows[0]) throw new ApiError(404, "DEVICE_NOT_FOUND", "设备不存在。");
     connection.deviceId = result.rows[0].id;
     connection.agentIds = allowed;
+    if (allowed.size) {
+      await this.pool.query(
+        `UPDATE agents SET runtime_status = 'online', runtime_last_seen_at = now(), updated_at = now()
+         WHERE owner_id = $1 AND id = ANY($2::uuid[]) AND archived_at IS NULL`,
+        [connection.userId, [...allowed]],
+      );
+      this.publishToUser(connection.userId, {
+        type: "agent.runtime.updated",
+        agentIds: [...allowed],
+        status: "online",
+      });
+    }
     this.send(connection, {
       type: "host.registered",
       deviceId: connection.deviceId,
@@ -296,7 +311,35 @@ export class RealtimeHub implements EventPublisher {
        WHERE device_id = $2 AND status IN ('leased', 'running') AND lease_expires_at > now()`,
       [this.config.HOST_LEASE_SECONDS, connection.deviceId],
     );
+    if (connection.agentIds.size) {
+      await this.pool.query(
+        `UPDATE agents SET runtime_status = 'online', runtime_last_seen_at = now(), updated_at = now()
+         WHERE owner_id = $1 AND id = ANY($2::uuid[]) AND archived_at IS NULL`,
+        [connection.userId, [...connection.agentIds]],
+      );
+    }
     this.send(connection, { type: "host.heartbeat.ack", at: new Date().toISOString() });
+  }
+
+  private async markAgentsOffline(connection: Connection) {
+    if (!connection.agentIds.size) return;
+    const stillOnline = new Set(
+      [...this.connections]
+        .filter((candidate) => candidate.userId === connection.userId)
+        .flatMap((candidate) => [...candidate.agentIds]),
+    );
+    const offline = [...connection.agentIds].filter((agentId) => !stillOnline.has(agentId));
+    if (!offline.length) return;
+    await this.pool.query(
+      `UPDATE agents SET runtime_status = 'offline', updated_at = now()
+       WHERE owner_id = $1 AND id = ANY($2::uuid[]) AND archived_at IS NULL`,
+      [connection.userId, offline],
+    );
+    this.publishToUser(connection.userId, {
+      type: "agent.runtime.updated",
+      agentIds: offline,
+      status: "offline",
+    });
   }
 
   private async verifyLease(
