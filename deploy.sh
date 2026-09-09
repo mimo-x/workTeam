@@ -6,7 +6,23 @@ set -e
 # 用法: ./deploy.sh
 # ============================================================
 
-SERVER_IP="${SERVER_IP:-$(curl -4 -fsS --connect-timeout 3 --max-time 8 https://api.ipify.org || true)}"
+get_public_ip() {
+  local candidate endpoint
+  for endpoint in \
+    "http://100.100.100.200/latest/meta-data/eipv4" \
+    "http://100.100.100.200/latest/meta-data/public-ipv4" \
+    "https://api.ipify.org" \
+    "https://ifconfig.me/ip"; do
+    candidate="$(curl -4 -fsS --connect-timeout 2 --max-time 5 "$endpoint" 2>/dev/null | tr -d '[:space:]' || true)"
+    if [[ "$candidate" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+SERVER_IP="${SERVER_IP:-$(get_public_ip || true)}"
 if [ -z "$SERVER_IP" ]; then
   echo "错误: 无法自动获取服务器公网 IP，请设置 SERVER_IP 后重试。"
   exit 1
