@@ -87,10 +87,9 @@ if [ -n "$OPENIM_ADMIN_TOKEN" ] && [ "$OPENIM_ADMIN_TOKEN" != "openIM123" ] && [
   if ! curl -fsS --connect-timeout 2 --max-time 5 \
     -H 'content-type: application/json' \
     -H "operationID: workteam-deploy-existing" \
-    -H "token: ${OPENIM_ADMIN_TOKEN}" \
-    -d '{"userID":"imAdmin","platformID":4}' \
-    "http://127.0.0.1:${OPENIM_API_PORT}/auth/get_user_token" \
-    | python3 -c 'import json,sys; value=json.load(sys.stdin); raise SystemExit(0 if not value.get("errCode") and (value.get("data") or {}).get("token") else 1)'; then
+    -d "{\"token\":\"${OPENIM_ADMIN_TOKEN}\"}" \
+    "http://127.0.0.1:${OPENIM_API_PORT}/auth/parse_token" \
+    | python3 -c 'import json,sys; value=json.load(sys.stdin); raise SystemExit(0 if not value.get("errCode") and (value.get("data") or {}).get("userID") else 1)'; then
     OPENIM_ADMIN_TOKEN=""
   else
     echo "  已复用现有 OpenIM 管理凭证"
@@ -242,10 +241,9 @@ echo "  验证 OpenIM 会话链路..."
 if ! curl -fsS --connect-timeout 3 --max-time 10 \
   -H 'content-type: application/json' \
   -H "operationID: workteam-deploy-health" \
-  -H "token: ${OPENIM_ADMIN_TOKEN}" \
-  -d '{"userID":"imAdmin","platformID":4}' \
-  "http://127.0.0.1:${OPENIM_API_PORT}/auth/get_user_token" \
-  | python3 -c 'import json,sys; value=json.load(sys.stdin); raise SystemExit(0 if not value.get("errCode") and (value.get("data") or {}).get("token") else 1)'; then
+  -d "{\"token\":\"${OPENIM_ADMIN_TOKEN}\"}" \
+  "http://127.0.0.1:${OPENIM_API_PORT}/auth/parse_token" \
+  | python3 -c 'import json,sys; value=json.load(sys.stdin); raise SystemExit(0 if not value.get("errCode") and (value.get("data") or {}).get("userID") else 1)'; then
   echo "  错误: OpenIM 管理 Token 校验失败，部署未完成。"
   exit 1
 fi
