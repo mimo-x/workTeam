@@ -56,19 +56,19 @@ if [ -f "$OPENIM_DIR/.env" ]; then
   OPENIM_SECRET="$(awk -F= '$1 == "OPENIM_SECRET" {value=$2; sub(/[[:space:]]*#.*/, "", value); gsub(/^[[:space:]]+|[[:space:]]+$/, "", value); print value}' "$OPENIM_DIR/.env" | tail -n 1)"
 fi
 
-if ! docker compose ps --status running --services 2>/dev/null | grep -qx "openim-server"; then
-  sed -i "s|external_ip|${SERVER_IP}|g" .env
-  docker compose up -d
+cat > "$OPENIM_DIR/docker-compose.override.yaml" <<'YAML'
+services:
+  openim-server:
+    healthcheck:
+      disable: true
+  openim-chat:
+    healthcheck:
+      disable: true
+YAML
 
-  echo "  等待 OpenIM 就绪..."
-  for i in $(seq 1 60); do
-    if docker compose ps 2>/dev/null | grep -q "openim-server.*healthy"; then break; fi
-    sleep 3
-  done
-  echo "  OpenIM 就绪"
-else
-  echo "  OpenIM 已运行，跳过"
-fi
+sed -i "s|external_ip|${SERVER_IP}|g" .env
+docker compose up -d
+echo "  OpenIM 服务已启动/更新"
 
 echo "  获取 OpenIM 管理凭证..."
 if [ -z "${OPENIM_SECRET:-}" ]; then

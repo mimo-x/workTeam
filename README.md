@@ -95,6 +95,14 @@ npm run dist
 
 业务数据由 `services/chat-api` 管理，PostgreSQL 保存持久数据，Redis 提供一次性实时连接票据，OpenIM 负责消息投递。先生成开发密钥并启动服务：
 
+服务器部署统一使用一键脚本：
+
+```bash
+./deploy.sh
+```
+
+脚本会自动处理 OpenIM 启动、管理员凭证、后台配置、数据库迁移、网络连接、回调和真实 API 探活。无需手工执行 Docker Compose 或数据库迁移命令。
+
 ```bash
 cp .env.backend.example .env.backend.local
 openssl rand -base64 32
