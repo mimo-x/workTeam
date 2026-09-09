@@ -27,6 +27,35 @@ import {
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type {
   ApprovalDecision,
   ApprovalRequest,
@@ -141,108 +170,110 @@ const AuthenticationScreen = ({
         </button>
       </div>
 
-      <section className="relative z-10 m-auto grid w-[min(920px,calc(100vw-48px))] grid-cols-[1.05fr_0.95fr] overflow-hidden rounded-[28px] border border-white/8 bg-[#0b0e15]/95 shadow-2xl shadow-black/30 max-[760px]:w-[min(460px,calc(100vw-32px))] max-[760px]:grid-cols-1">
-        <div className="relative flex min-h-[590px] flex-col justify-between overflow-hidden border-r border-white/7 p-10 max-[760px]:hidden">
-          <div className="pointer-events-none absolute -top-32 -left-24 size-80 rounded-full bg-cyan-400/10 blur-3xl" />
+      <Card className="relative z-10 m-auto grid w-[min(920px,calc(100vw-48px))] grid-cols-[1.05fr_0.95fr] overflow-hidden rounded-2xl border-border bg-card p-0 shadow-2xl max-[760px]:w-[min(460px,calc(100vw-32px))] max-[760px]:grid-cols-1">
+        <div className="relative flex min-h-[590px] flex-col justify-between overflow-hidden border-r border-border bg-muted/30 p-10 max-[760px]:hidden">
+          <div className="pointer-events-none absolute -top-32 -left-24 size-80 rounded-full bg-primary/5 blur-3xl" />
           <div className="relative">
             <div className="flex items-center gap-3">
-              <div className="grid size-11 place-items-center rounded-2xl bg-gradient-to-br from-emerald-400 to-cyan-500 text-sm font-bold text-slate-950 shadow-[0_12px_40px_rgba(45,212,191,0.22)]">
+              <div className="grid size-11 place-items-center rounded-2xl bg-gradient-to-br from-emerald-500 to-cyan-600 text-sm font-bold text-white shadow-md">
                 CX
               </div>
               <div>
-                <div className="text-sm font-semibold text-zinc-100">Codex Desktop</div>
-                <div className="mt-0.5 text-[10px] tracking-[0.18em] text-zinc-600 uppercase">
+                <div className="text-sm font-semibold text-foreground">Codex Desktop</div>
+                <div className="mt-0.5 text-[10px] tracking-[0.18em] text-muted-foreground uppercase">
                   Agent collaboration workspace
                 </div>
               </div>
             </div>
-            <h1 className="mt-20 max-w-sm text-3xl leading-[1.25] font-semibold tracking-tight text-zinc-100">
+            <h1 className="mt-20 max-w-sm text-3xl leading-[1.25] font-semibold tracking-tight text-foreground">
               和你的团队与 Agent，
               <br />
               在同一个空间工作。
             </h1>
-            <p className="mt-5 max-w-sm text-sm leading-7 text-zinc-500">
+            <p className="mt-5 max-w-sm text-sm leading-7 text-muted-foreground">
               登录后访问好友、群聊、Agent 工作者和 Task。你的会话会安全地同步到聊天后台。
             </p>
           </div>
-          <div className="relative flex items-center gap-2 text-[10px] text-zinc-600">
-            <KeyRoundIcon className="size-3.5 text-emerald-400/70" />
+          <div className="relative flex items-center gap-2 text-[11px] text-muted-foreground">
+            <KeyRoundIcon className="size-3.5 text-emerald-500" />
             账号认证已启用 · 登录状态安全保存在本机
           </div>
         </div>
 
         <div className="flex min-h-[590px] flex-col justify-center p-10 max-[520px]:p-6">
           <div className="mb-8 hidden items-center gap-3 max-[760px]:flex">
-            <div className="grid size-10 place-items-center rounded-2xl bg-gradient-to-br from-emerald-400 to-cyan-500 text-sm font-bold text-slate-950">
+            <div className="grid size-10 place-items-center rounded-2xl bg-gradient-to-br from-emerald-500 to-cyan-600 text-sm font-bold text-white">
               CX
             </div>
-            <div className="text-sm font-semibold text-zinc-100">Codex Desktop</div>
+            <div className="text-sm font-semibold text-foreground">Codex Desktop</div>
           </div>
           <div>
-            <h2 className="text-xl font-semibold tracking-tight text-zinc-100">
+            <h2 className="text-xl font-semibold tracking-tight text-foreground">
               {mode === "login" ? "欢迎回来" : "创建你的账号"}
             </h2>
-            <p className="mt-2 text-xs leading-5 text-zinc-500">
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">
               {mode === "login"
                 ? "登录后继续访问你的消息和 Agent 工作区。"
                 : "只需填写账号资料，无需邮箱或短信验证。"}
             </p>
           </div>
 
-          <div className="mt-7 grid grid-cols-2 rounded-xl bg-white/4 p-1">
-            {(["login", "register"] as const).map((value) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => switchMode(value)}
-                className={`rounded-lg px-3 py-2 text-xs font-medium transition ${mode === value ? "bg-white/9 text-zinc-100 shadow-sm" : "text-zinc-600 hover:text-zinc-300"}`}
-              >
-                {value === "login" ? "登录" : "注册"}
-              </button>
-            ))}
-          </div>
+          <Tabs
+            value={mode}
+            onValueChange={(val) => switchMode(val as AuthMode)}
+            className="mt-7 w-full"
+          >
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="login" className="text-xs font-medium">
+                登录
+              </TabsTrigger>
+              <TabsTrigger value="register" className="text-xs font-medium">
+                注册
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
 
           <form className="mt-6 space-y-4" onSubmit={(event) => void submit(event)}>
             {mode === "register" && (
               <div className="grid grid-cols-2 gap-3">
-                <label className="text-[10px] text-zinc-500">
-                  用户名
-                  <input
+                <div className="space-y-1.5">
+                  <Label className="text-xs">用户名</Label>
+                  <Input
                     value={handle}
                     onChange={(event) => setHandle(event.target.value)}
                     autoComplete="username"
                     placeholder="alice"
-                    className="mt-1.5 w-full rounded-xl border border-white/8 bg-white/[0.035] px-3 py-2.5 text-xs text-zinc-200 outline-none transition placeholder:text-zinc-700 focus:border-cyan-300/35"
+                    className="text-xs"
                   />
-                </label>
-                <label className="text-[10px] text-zinc-500">
-                  昵称
-                  <input
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">昵称</Label>
+                  <Input
                     value={displayName}
                     onChange={(event) => setDisplayName(event.target.value)}
                     autoComplete="name"
                     placeholder="Alice"
-                    className="mt-1.5 w-full rounded-xl border border-white/8 bg-white/[0.035] px-3 py-2.5 text-xs text-zinc-200 outline-none transition placeholder:text-zinc-700 focus:border-cyan-300/35"
+                    className="text-xs"
                   />
-                </label>
+                </div>
               </div>
             )}
-            <label className="block text-[10px] text-zinc-500">
-              邮箱
-              <input
+            <div className="space-y-1.5">
+              <Label className="text-xs">邮箱</Label>
+              <Input
                 type="email"
                 required
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 autoComplete="email"
                 placeholder="name@example.com"
-                className="mt-1.5 w-full rounded-xl border border-white/8 bg-white/[0.035] px-3 py-2.5 text-xs text-zinc-200 outline-none transition placeholder:text-zinc-700 focus:border-cyan-300/35"
+                className="text-xs"
               />
-            </label>
-            <label className="block text-[10px] text-zinc-500">
-              密码
-              <span className="relative mt-1.5 block">
-                <input
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">密码</Label>
+              <div className="relative">
+                <Input
                   type={showPassword ? "text" : "password"}
                   required
                   minLength={12}
@@ -250,64 +281,67 @@ const AuthenticationScreen = ({
                   onChange={(event) => setPassword(event.target.value)}
                   autoComplete={mode === "login" ? "current-password" : "new-password"}
                   placeholder="至少 12 位"
-                  className="w-full rounded-xl border border-white/8 bg-white/[0.035] px-3 py-2.5 pr-10 text-xs text-zinc-200 outline-none transition placeholder:text-zinc-700 focus:border-cyan-300/35"
+                  className="pr-10 text-xs"
                 />
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="icon-sm"
                   onClick={() => setShowPassword((visible) => !visible)}
                   aria-label={showPassword ? "隐藏密码" : "显示密码"}
-                  className="absolute top-1/2 right-3 -translate-y-1/2 text-zinc-600 hover:text-zinc-300"
+                  className="absolute top-1/2 right-1.5 -translate-y-1/2 text-muted-foreground hover:bg-transparent hover:text-foreground"
                 >
                   {showPassword ? (
                     <EyeOffIcon className="size-3.5" />
                   ) : (
                     <EyeIcon className="size-3.5" />
                   )}
-                </button>
-              </span>
-            </label>
+                </Button>
+              </div>
+            </div>
 
-            <button
+            <Button
               type="submit"
               disabled={!canSubmit || busy}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-300 px-4 py-3 text-xs font-semibold text-cyan-950 transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-40"
+              className="w-full font-medium"
             >
-              {busy && <LoaderCircleIcon className="size-3.5 animate-spin" />}
+              {busy && <LoaderCircleIcon className="size-3.5 animate-spin mr-2" />}
               {busy ? "正在连接…" : mode === "login" ? "登录并进入" : "注册并进入"}
-            </button>
+            </Button>
           </form>
 
           {mode === "register" && handle && !validHandle && (
-            <p className="mt-3 text-[10px] leading-5 text-amber-300/80">
+            <p className="mt-3 text-[11px] leading-5 text-amber-600 dark:text-amber-400">
               用户名需为 3–32 位字母、数字、下划线或连字符。
             </p>
           )}
           {error && (
-            <p className="mt-3 rounded-xl border border-red-300/10 bg-red-300/5 p-3 text-[10px] leading-5 text-red-300/80">
+            <div className="mt-3 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-[11px] leading-5 text-destructive">
               {error}
-            </p>
+            </div>
           )}
 
-          <button
+          <Button
             type="button"
+            variant="link"
             onClick={() => setShowServer((visible) => !visible)}
-            className="mt-5 self-start text-[10px] text-zinc-600 hover:text-zinc-400"
+            className="mt-3 h-auto p-0 self-start text-xs text-muted-foreground hover:text-foreground"
           >
             {showServer ? "隐藏服务设置" : "服务设置"}
-          </button>
+          </Button>
           {showServer && (
-            <label className="mt-3 block text-[10px] text-zinc-500">
-              聊天后台地址
-              <input
+            <div className="mt-3 space-y-1.5">
+              <Label className="text-xs text-muted-foreground">聊天后台地址</Label>
+              <Input
                 value={apiUrl}
                 onChange={(event) => setApiUrl(event.target.value)}
                 placeholder="http://127.0.0.1:8790"
-                className="mt-1.5 w-full rounded-xl border border-white/8 bg-white/[0.035] px-3 py-2.5 font-mono text-[10px] text-zinc-300 outline-none focus:border-cyan-300/35"
+                className="font-mono text-xs"
               />
-            </label>
+            </div>
           )}
         </div>
-      </section>
+      </Card>
     </div>
   );
 };
@@ -423,7 +457,7 @@ const SettingsCenter = ({
 
   return (
     <div
-      className="settings-backdrop fixed inset-0 z-[100] grid place-items-center bg-black/70 p-6 backdrop-blur-sm"
+      className="fixed inset-0 z-[100] grid place-items-center bg-black/50 p-6 backdrop-blur-sm"
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
@@ -433,14 +467,14 @@ const SettingsCenter = ({
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-title"
-        className="settings-dialog flex h-[min(620px,calc(100vh-48px))] w-[min(820px,calc(100vw-48px))] overflow-hidden rounded-3xl border border-white/10 bg-[#0b0e15] shadow-2xl shadow-black/30"
+        className="flex h-[min(620px,calc(100vh-48px))] w-[min(820px,calc(100vw-48px))] overflow-hidden rounded-2xl border border-border bg-card text-card-foreground shadow-2xl"
       >
-        <aside className="settings-nav w-48 shrink-0 border-r border-white/7 bg-black/15 p-4">
+        <aside className="w-48 shrink-0 border-r border-border bg-muted/40 p-4">
           <div className="px-2 pt-2 pb-5">
-            <div id="settings-title" className="text-sm font-semibold text-zinc-100">
+            <div id="settings-title" className="text-sm font-semibold text-foreground">
               设置中心
             </div>
-            <div className="mt-1 text-[10px] text-zinc-600">Codex Desktop</div>
+            <div className="mt-1 text-[10px] text-muted-foreground">Codex Desktop</div>
           </div>
           {(
             [
@@ -452,7 +486,11 @@ const SettingsCenter = ({
               key={value}
               type="button"
               onClick={() => setSection(value)}
-              className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs ${section === value ? "bg-cyan-300/8 text-cyan-200" : "text-zinc-500 hover:bg-white/5 hover:text-zinc-200"}`}
+              className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium transition ${
+                section === value
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              }`}
             >
               <Icon className="size-4" />
               {label}
@@ -461,31 +499,33 @@ const SettingsCenter = ({
         </aside>
 
         <div className="min-w-0 flex-1">
-          <header className="electron-drag flex h-16 items-center justify-between border-b border-white/7 px-6">
+          <header className="electron-drag flex h-16 items-center justify-between border-b border-border px-6">
             <div>
-              <div className="text-sm font-medium text-zinc-200">
+              <div className="text-sm font-medium text-foreground">
                 {section === "appearance" ? "外观" : "账号与同步"}
               </div>
-              <div className="mt-0.5 text-[10px] text-zinc-600">
+              <div className="mt-0.5 text-[10px] text-muted-foreground">
                 {section === "appearance"
                   ? "选择你喜欢的界面主题"
                   : "连接聊天后台并同步好友、Agent、消息与 Task"}
               </div>
             </div>
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon-sm"
               onClick={onClose}
               aria-label="关闭设置中心"
-              className="electron-no-drag grid size-8 place-items-center rounded-xl text-zinc-500 hover:bg-white/6 hover:text-zinc-200"
+              className="electron-no-drag text-muted-foreground hover:text-foreground"
             >
               <XIcon className="size-4" />
-            </button>
+            </Button>
           </header>
 
           {section === "appearance" ? (
             <div className="p-6">
-              <div className="text-xs font-medium text-zinc-300">主题模式</div>
-              <p className="mt-1 text-[11px] leading-5 text-zinc-600">
+              <div className="text-xs font-medium text-foreground">主题模式</div>
+              <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
                 设置会保存在当前电脑，下次启动自动恢复。
               </p>
               <div className="mt-5 grid grid-cols-2 gap-4">
@@ -512,34 +552,60 @@ const SettingsCenter = ({
                       type="button"
                       onClick={() => onThemeChange(value)}
                       aria-pressed={selected}
-                      className={`overflow-hidden rounded-2xl border p-3 text-left transition ${selected ? "border-cyan-300/35 bg-cyan-300/7" : "border-white/8 bg-white/[0.025] hover:border-white/15"}`}
+                      className={`overflow-hidden rounded-xl border p-3 text-left transition ${
+                        selected
+                          ? "border-primary bg-primary/5 ring-1 ring-primary"
+                          : "border-border bg-card hover:border-border/80 hover:bg-muted/30"
+                      }`}
                     >
                       <div
-                        className={`relative h-32 overflow-hidden rounded-xl border ${value === "light" ? "border-slate-200 bg-slate-100" : "theme-preview-dark border-white/8 bg-[#080b12]"}`}
+                        className={`relative h-32 overflow-hidden rounded-lg border ${
+                          value === "light"
+                            ? "border-slate-200 bg-slate-100"
+                            : "border-zinc-800 bg-[#09090b]"
+                        }`}
                       >
                         <div
-                          className={`absolute inset-y-0 left-0 w-12 border-r ${value === "light" ? "border-slate-200 bg-white" : "border-white/7 bg-[#0b0e15]"}`}
+                          className={`absolute inset-y-0 left-0 w-12 border-r ${
+                            value === "light"
+                              ? "border-slate-200 bg-white"
+                              : "border-zinc-800 bg-zinc-900"
+                          }`}
                         />
                         <div
-                          className={`absolute top-4 right-4 left-16 h-3 rounded-full ${value === "light" ? "bg-white" : "bg-white/7"}`}
+                          className={`absolute top-4 right-4 left-16 h-3 rounded-full ${
+                            value === "light" ? "bg-slate-200" : "bg-zinc-800"
+                          }`}
                         />
                         <div
-                          className={`absolute top-12 right-9 left-16 h-12 rounded-lg border ${value === "light" ? "border-slate-200 bg-white" : "border-white/7 bg-white/3"}`}
+                          className={`absolute top-12 right-9 left-16 h-12 rounded-lg border ${
+                            value === "light"
+                              ? "border-slate-200 bg-white"
+                              : "border-zinc-800 bg-zinc-900"
+                          }`}
                         />
-                        <div className="absolute right-5 bottom-4 h-2 w-20 rounded-full bg-cyan-400/60" />
+                        <div className="absolute right-5 bottom-4 h-2 w-20 rounded-full bg-primary/60" />
                       </div>
                       <div className="mt-3 flex items-center gap-3 px-1 pb-1">
                         <div
-                          className={`grid size-8 place-items-center rounded-xl ${selected ? "bg-cyan-300/12 text-cyan-300" : "bg-white/5 text-zinc-500"}`}
+                          className={`grid size-8 place-items-center rounded-lg ${
+                            selected
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-muted text-muted-foreground"
+                          }`}
                         >
                           <Icon className="size-4" />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <div className="text-xs font-medium text-zinc-200">{label}</div>
-                          <div className="mt-0.5 text-[10px] text-zinc-600">{description}</div>
+                          <div className="text-xs font-medium text-foreground">{label}</div>
+                          <div className="mt-0.5 text-[10px] text-muted-foreground">{description}</div>
                         </div>
                         <span
-                          className={`size-3 rounded-full border-2 ${selected ? "border-cyan-300 bg-cyan-300 shadow-[inset_0_0_0_2px_var(--theme-radio-inner)]" : "border-white/15"}`}
+                          className={`size-3 rounded-full border-2 ${
+                            selected
+                              ? "border-primary bg-primary"
+                              : "border-muted-foreground/30"
+                          }`}
                         />
                       </div>
                     </button>
@@ -549,43 +615,43 @@ const SettingsCenter = ({
             </div>
           ) : (
             <div className="space-y-5 p-6">
-              <div>
-                <label className="text-xs font-medium text-zinc-300" htmlFor="backend-url">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium" htmlFor="backend-url">
                   聊天后台地址
-                </label>
-                <input
+                </Label>
+                <Input
                   id="backend-url"
                   value={apiUrl}
                   onChange={(event) => setApiUrl(event.target.value)}
                   placeholder="https://chat.example.com"
-                  className="mt-2 w-full rounded-xl border border-white/8 bg-white/[0.035] px-3 py-2.5 text-xs text-zinc-200 outline-none focus:border-cyan-300/30"
+                  className="text-xs"
                 />
-                <p className="mt-1.5 text-[10px] text-zinc-600">
+                <p className="mt-1 text-[10px] text-muted-foreground">
                   远程地址必须使用 HTTPS；本机开发可以使用 http://127.0.0.1。
                 </p>
               </div>
 
               {backend?.authenticated && backend.user ? (
-                <div className="rounded-2xl border border-emerald-300/15 bg-emerald-300/[0.04] p-4">
+                <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
                   <div className="flex items-center gap-3">
-                    <div className="grid size-10 place-items-center rounded-xl bg-emerald-300/10 text-sm text-emerald-200">
+                    <div className="grid size-10 place-items-center rounded-lg bg-emerald-500/10 text-sm font-medium text-emerald-600 dark:text-emerald-400">
                       {backend.user.displayName.slice(0, 2)}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm text-zinc-200">
+                      <div className="truncate text-sm font-medium text-foreground">
                         {backend.user.displayName}
                       </div>
-                      <div className="mt-0.5 truncate text-[10px] text-zinc-600">
+                      <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
                         @{backend.user.handle} · {backend.user.email}
                       </div>
                     </div>
-                    <span className="rounded-full bg-emerald-300/10 px-2 py-1 text-[9px] text-emerald-300">
+                    <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
                       已连接
-                    </span>
+                    </Badge>
                   </div>
-                  <div className="mt-3 flex items-center gap-2 text-[9px] text-zinc-500">
+                  <div className="mt-3 flex items-center gap-2 text-[11px] text-muted-foreground">
                     <span
-                      className={`size-1.5 rounded-full ${hostState?.status === "connected" ? "bg-emerald-300" : hostState?.status === "connecting" ? "animate-pulse bg-amber-300" : "bg-zinc-600"}`}
+                      className={`size-1.5 rounded-full ${hostState?.status === "connected" ? "bg-emerald-500" : hostState?.status === "connecting" ? "animate-pulse bg-amber-500" : "bg-muted-foreground"}`}
                     />
                     Agent Host：
                     {hostState?.status === "connected"
@@ -595,80 +661,80 @@ const SettingsCenter = ({
                         : hostState?.error || "未启动"}
                   </div>
                   <div className="mt-4 flex gap-2">
-                    <button
+                    <Button
                       type="button"
+                      size="sm"
                       disabled={backendBusy || !workspace}
                       onClick={() => void importWorkspace()}
-                      className="rounded-lg bg-cyan-300 px-3 py-2 text-[10px] font-medium text-cyan-950 disabled:opacity-40"
                     >
                       同步当前项目
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
+                      variant="outline"
+                      size="sm"
                       disabled={backendBusy}
                       onClick={() => void runBackendAction(() => window.backend.logout())}
-                      className="rounded-lg border border-white/10 px-3 py-2 text-[10px] text-zinc-400 hover:text-white disabled:opacity-40"
                     >
                       退出后台账号
-                    </button>
+                    </Button>
                   </div>
                 </div>
               ) : (
                 <div className="grid grid-cols-2 gap-3">
-                  <label className="col-span-2 text-[10px] text-zinc-500">
-                    邮箱
-                    <input
+                  <div className="col-span-2 space-y-1.5">
+                    <Label className="text-xs">邮箱</Label>
+                    <Input
                       type="email"
                       value={email}
                       onChange={(event) => setEmail(event.target.value)}
-                      className="mt-1.5 w-full rounded-xl border border-white/8 bg-white/[0.035] px-3 py-2.5 text-xs text-zinc-200 outline-none focus:border-cyan-300/30"
+                      className="text-xs"
                     />
-                  </label>
-                  <label className="col-span-2 text-[10px] text-zinc-500">
-                    密码（至少 12 位）
-                    <input
+                  </div>
+                  <div className="col-span-2 space-y-1.5">
+                    <Label className="text-xs">密码（至少 12 位）</Label>
+                    <Input
                       type="password"
                       value={password}
                       onChange={(event) => setPassword(event.target.value)}
-                      className="mt-1.5 w-full rounded-xl border border-white/8 bg-white/[0.035] px-3 py-2.5 text-xs text-zinc-200 outline-none focus:border-cyan-300/30"
+                      className="text-xs"
                     />
-                  </label>
-                  <label className="text-[10px] text-zinc-500">
-                    新账号用户名
-                    <input
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">新账号用户名</Label>
+                    <Input
                       value={handle}
                       onChange={(event) => setHandle(event.target.value)}
                       placeholder="alice"
-                      className="mt-1.5 w-full rounded-xl border border-white/8 bg-white/[0.035] px-3 py-2.5 text-xs text-zinc-200 outline-none focus:border-cyan-300/30"
+                      className="text-xs"
                     />
-                  </label>
-                  <label className="text-[10px] text-zinc-500">
-                    新账号昵称
-                    <input
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">新账号昵称</Label>
+                    <Input
                       value={displayName}
                       onChange={(event) => setDisplayName(event.target.value)}
                       placeholder="Alice"
-                      className="mt-1.5 w-full rounded-xl border border-white/8 bg-white/[0.035] px-3 py-2.5 text-xs text-zinc-200 outline-none focus:border-cyan-300/30"
+                      className="text-xs"
                     />
-                  </label>
-                  <button
+                  </div>
+                  <Button
                     type="button"
                     disabled={backendBusy || !email || password.length < 12}
                     onClick={() => void login()}
-                    className="rounded-xl bg-cyan-300 px-4 py-2.5 text-xs font-medium text-cyan-950 disabled:opacity-40"
                   >
                     登录
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
+                    variant="outline"
                     disabled={
                       backendBusy || !email || password.length < 12 || !handle || !displayName
                     }
                     onClick={() => void register()}
-                    className="rounded-xl border border-white/10 px-4 py-2.5 text-xs text-zinc-300 hover:bg-white/5 disabled:opacity-40"
                   >
                     注册
-                  </button>
+                  </Button>
                 </div>
               )}
 
@@ -713,9 +779,9 @@ const ApprovalCard = ({
   };
 
   return (
-    <div className="pointer-events-auto w-[min(32rem,calc(100vw-2rem))] rounded-2xl border border-amber-300/20 bg-[#17130d]/96 p-4 shadow-2xl shadow-black/40 backdrop-blur-xl">
+    <Card className="pointer-events-auto w-[min(32rem,calc(100vw-2rem))] border-amber-500/30 bg-card p-4 shadow-2xl">
       <div className="flex items-start gap-3">
-        <div className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-amber-400/10 text-amber-300">
+        <div className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400">
           {approval.command ? (
             <TerminalSquareIcon className="size-4" />
           ) : (
@@ -723,47 +789,52 @@ const ApprovalCard = ({
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium text-zinc-100">{approval.title}</div>
+          <div className="text-sm font-medium text-foreground">{approval.title}</div>
           {approval.reason && (
-            <p className="mt-1 text-xs leading-5 text-zinc-400">{approval.reason}</p>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">{approval.reason}</p>
           )}
           {approval.command && (
-            <pre className="mt-3 max-h-32 overflow-auto rounded-xl border border-white/8 bg-black/35 p-3 font-mono text-xs leading-5 whitespace-pre-wrap text-zinc-300">
+            <pre className="mt-3 max-h-32 overflow-auto rounded-xl border border-border bg-muted/60 p-3 font-mono text-xs leading-5 whitespace-pre-wrap text-foreground">
               {approval.command}
             </pre>
           )}
           {approval.cwd && (
-            <div className="mt-2 truncate font-mono text-[10px] text-zinc-600">{approval.cwd}</div>
+            <div className="mt-2 truncate font-mono text-[10px] text-muted-foreground">{approval.cwd}</div>
           )}
           <div className="mt-4 flex flex-wrap justify-end gap-2">
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               disabled={busy}
               onClick={() => void resolve("decline")}
-              className="rounded-lg px-3 py-1.5 text-xs text-zinc-400 transition hover:bg-white/6 hover:text-white disabled:opacity-50"
+              className="text-xs text-muted-foreground hover:text-foreground"
             >
               拒绝
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="outline"
+              size="sm"
               disabled={busy}
               onClick={() => void resolve("accept")}
-              className="rounded-lg border border-white/10 bg-white/7 px-3 py-1.5 text-xs text-zinc-200 transition hover:bg-white/12 disabled:opacity-50"
+              className="text-xs"
             >
               仅允许本次
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              size="sm"
               disabled={busy}
               onClick={() => void resolve("acceptForSession")}
-              className="rounded-lg bg-amber-300 px-3 py-1.5 text-xs font-medium text-amber-950 transition hover:bg-amber-200 disabled:opacity-50"
+              className="bg-amber-500 text-xs font-medium text-white hover:bg-amber-600 dark:bg-amber-600 dark:text-white dark:hover:bg-amber-500"
             >
               本会话允许
-            </button>
+            </Button>
           </div>
         </div>
       </div>
-    </div>
+    </Card>
   );
 };
 
@@ -774,7 +845,7 @@ const AuthenticatedApp = () => {
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [theme, setTheme] = useState<AppearanceTheme>(() =>
-    localStorage.getItem("codex.theme") === "light" ? "light" : "dark",
+    localStorage.getItem("codex.theme") === "dark" ? "dark" : "light",
   );
   const [mode, setMode] = useState<TeamView | "solo">(() => {
     const saved = localStorage.getItem("codex.chat-mode");
@@ -906,180 +977,192 @@ const AuthenticatedApp = () => {
 
   return (
     <div className={`app-shell theme-${theme} flex h-dvh min-h-0 overflow-hidden`}>
-      <aside className="app-sidebar relative flex w-[286px] shrink-0 flex-col border-r border-white/7">
-        <div className="electron-drag flex h-16 shrink-0 items-center gap-3 border-b border-white/7 px-5 pl-[78px]">
-          <div className="electron-no-drag grid size-8 place-items-center rounded-xl bg-gradient-to-br from-emerald-400 to-cyan-500 text-xs font-bold text-slate-950 shadow-[0_8px_30px_rgba(45,212,191,0.16)]">
-            CX
+      <aside className="app-sidebar relative flex w-[240px] shrink-0 flex-col border-r border-border bg-muted/40 font-sans">
+        <div className="electron-drag flex h-12 shrink-0 items-center justify-between border-b border-border px-3 pl-[76px]">
+          <div className="flex items-center gap-2">
+            <span className="grid size-5 place-items-center rounded bg-foreground text-[10px] font-mono font-bold text-background">
+              CX
+            </span>
+            <span className="text-xs font-semibold tracking-tight text-foreground">Codex</span>
           </div>
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold tracking-tight">Codex Desktop</div>
-            <div className="text-[10px] tracking-[0.18em] text-zinc-600 uppercase">
-              local app server
-            </div>
-          </div>
+          <span className="rounded border border-border bg-background/80 px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">
+            v0.1
+          </span>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-4">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-2.5">
           <section>
-            <div className="mb-2 px-1 text-[10px] font-medium tracking-[0.16em] text-zinc-600 uppercase">
-              对话
+            <div className="mb-1.5 px-2 text-[10px] font-semibold tracking-wider text-muted-foreground/80 uppercase">
+              Views
             </div>
-            <div className="space-y-1">
+            <div className="space-y-0.5">
               {(
                 [
-                  ["messages", "消息", UsersRoundIcon],
-                  ["contacts", "通讯录", BookUserIcon],
-                  ["tasks", "Task 面板", ListTodoIcon],
+                  ["messages", "消息流", UsersRoundIcon],
+                  ["tasks", "Task 看板", ListTodoIcon],
+                  ["contacts", "通讯录与 Agent", BookUserIcon],
                 ] as const
-              ).map(([value, label, Icon]) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => changeMode(value)}
-                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-xs transition ${
-                    mode === value
-                      ? "bg-cyan-300/8 text-cyan-100"
-                      : "text-zinc-500 hover:bg-white/4 hover:text-zinc-300"
-                  }`}
-                >
-                  <Icon className="size-4" />
-                  {label}
-                </button>
-              ))}
+              ).map(([value, label, Icon]) => {
+                const isActive = mode === value;
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => changeMode(value)}
+                    className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs font-medium transition ${
+                      isActive
+                        ? "bg-background text-foreground shadow-xs ring-1 ring-border"
+                        : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                    }`}
+                  >
+                    <Icon className="size-3.5 shrink-0" />
+                    <span className="flex-1">{label}</span>
+                  </button>
+                );
+              })}
               <button
                 type="button"
                 onClick={() => changeMode("solo")}
-                className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-xs transition ${
+                className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs font-medium transition ${
                   mode === "solo"
-                    ? "bg-white/7 text-zinc-200"
-                    : "text-zinc-500 hover:bg-white/4 hover:text-zinc-300"
+                    ? "bg-background text-foreground shadow-xs ring-1 ring-border"
+                    : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
                 }`}
               >
-                <MessageSquareIcon className="size-4" />
-                Codex 私聊
+                <MessageSquareIcon className="size-3.5 shrink-0" />
+                <span className="flex-1">Codex 私聊</span>
               </button>
             </div>
           </section>
 
           <section>
-            <div className="mb-2 px-1 text-[10px] font-medium tracking-[0.16em] text-zinc-600 uppercase">
-              项目
+            <div className="mb-1.5 px-2 text-[10px] font-semibold tracking-wider text-muted-foreground/80 uppercase">
+              Workspace
             </div>
             <button
               type="button"
               onClick={() => void chooseWorkspace()}
-              className="group flex w-full items-center gap-3 rounded-xl border border-white/8 bg-white/3 p-3 text-left transition hover:border-white/15 hover:bg-white/5"
+              className="flex w-full items-center gap-2.5 rounded border border-border bg-background/80 p-2 text-left transition hover:bg-background hover:border-foreground/20"
             >
-              <div className="grid size-9 shrink-0 place-items-center rounded-lg bg-cyan-400/8 text-cyan-300">
-                <FolderIcon className="size-4" />
-              </div>
+              <FolderIcon className="size-4 shrink-0 text-muted-foreground" />
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium text-zinc-200">
-                  {workspace ? shortPath(workspace) : "选择项目目录"}
+                <div className="truncate text-xs font-medium text-foreground">
+                  {workspace ? shortPath(workspace) : "选择工作区目录"}
                 </div>
-                <div className="mt-0.5 truncate font-mono text-[10px] text-zinc-600">
-                  {workspace || "Codex 将在此目录中工作"}
+                <div className="mt-0.5 truncate font-mono text-[9px] text-muted-foreground">
+                  {workspace || "尚未指定目录"}
                 </div>
               </div>
             </button>
           </section>
 
           <section>
-            <div className="mb-2 px-1 text-[10px] font-medium tracking-[0.16em] text-zinc-600 uppercase">
-              模型
+            <div className="mb-1.5 px-2 text-[10px] font-semibold tracking-wider text-muted-foreground/80 uppercase">
+              Model
             </div>
-            <div className="relative">
-              <select
-                value={activeModel}
-                onChange={(event) => setSelectedModel(event.target.value)}
-                disabled={!status.models.length}
-                className="w-full appearance-none rounded-xl border border-white/8 bg-white/3 px-3 py-2.5 pr-8 text-xs text-zinc-300 outline-none transition focus:border-cyan-400/30 disabled:opacity-50"
-              >
-                {!status.models.length && <option value="">使用 Codex 默认模型</option>}
-                {status.models.map((model) => (
-                  <option key={model.id} value={model.model} className="bg-[#11151f]">
-                    {model.displayName}
-                  </option>
-                ))}
-              </select>
-              <ChevronDownIcon className="pointer-events-none absolute top-1/2 right-3 size-3.5 -translate-y-1/2 text-zinc-600" />
-            </div>
+            {status.models.length > 0 ? (
+              <Select value={activeModel} onValueChange={(val) => setSelectedModel(val ?? "")}>
+                <SelectTrigger className="h-8 w-full rounded text-xs font-mono">
+                  <SelectValue placeholder="选择模型" />
+                </SelectTrigger>
+                <SelectContent>
+                  {status.models.map((model) => (
+                    <SelectItem key={model.id} value={model.model} className="text-xs font-mono">
+                      {model.displayName}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <div className="rounded border border-border bg-background/50 px-2.5 py-1.5 font-mono text-[11px] text-muted-foreground">
+                Codex Default
+              </div>
+            )}
           </section>
 
-          <section className="mt-auto rounded-xl border border-white/7 bg-black/15 p-3">
-            <div className="flex items-center gap-2.5">
-              {status.connecting ? (
-                <LoaderCircleIcon className="size-4 animate-spin text-cyan-300" />
-              ) : status.connected ? (
-                <CheckCircle2Icon className="size-4 text-emerald-400" />
-              ) : (
-                <CircleAlertIcon className="size-4 text-red-400" />
-              )}
-              <div className="min-w-0 flex-1">
-                <div className="text-xs font-medium text-zinc-300">
-                  {status.connecting
-                    ? "正在连接 Codex"
+          <section className="mt-auto rounded border border-border bg-background/80 p-2.5">
+            <div className="flex items-center gap-2">
+              <span
+                className={`size-2 rounded-full ${
+                  status.connecting
+                    ? "animate-pulse bg-amber-500"
                     : status.connected
-                      ? "本机 Codex 已连接"
-                      : "连接失败"}
+                      ? "bg-emerald-600 dark:bg-emerald-400"
+                      : "bg-destructive"
+                }`}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-xs font-medium text-foreground">
+                  {status.connecting
+                    ? "Connecting Codex..."
+                    : status.connected
+                      ? "Engine Connected"
+                      : "Connection Failed"}
                 </div>
-                <div className="mt-0.5 truncate text-[10px] text-zinc-600">
-                  {status.connected ? accountLabel : status.error}
+                <div className="truncate font-mono text-[10px] text-muted-foreground">
+                  {status.connected ? accountLabel : (status.error ?? "Offline")}
                 </div>
               </div>
               {!status.connected && !status.connecting && (
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="icon-xs"
                   onClick={() => void connect()}
-                  className="text-zinc-500 hover:text-white"
+                  className="h-6 w-6 text-muted-foreground hover:text-foreground"
                   aria-label="重试连接"
                 >
-                  <RefreshCwIcon className="size-3.5" />
-                </button>
+                  <RefreshCwIcon className="size-3" />
+                </Button>
               )}
             </div>
             {needsLogin && (
-              <button
+              <Button
                 type="button"
+                size="sm"
                 onClick={() => void window.codex.login()}
-                className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-medium text-zinc-950 hover:bg-zinc-200"
+                className="mt-2 h-7 w-full gap-1.5 rounded text-xs font-medium"
               >
-                <LogInIcon className="size-3.5" />
+                <LogInIcon className="size-3" />
                 登录 ChatGPT
-              </button>
+              </Button>
             )}
           </section>
         </div>
-        <div className="shrink-0 border-t border-white/7 p-3">
-          <button
+        <div className="shrink-0 border-t border-border p-2">
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             onClick={() => setSettingsOpen(true)}
-            className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-xs text-zinc-500 transition hover:bg-white/5 hover:text-zinc-200"
+            className="flex h-8 w-full items-center justify-between rounded px-2 text-xs text-muted-foreground hover:bg-background hover:text-foreground"
           >
-            <Settings2Icon className="size-4" />
-            <span className="flex-1">设置</span>
-            <span className="flex items-center gap-1.5 rounded-full bg-white/5 px-2 py-1 text-[9px] text-zinc-600">
-              {theme === "dark" ? <MoonIcon className="size-3" /> : <SunIcon className="size-3" />}
-              {theme === "dark" ? "黑夜" : "白天"}
+            <span className="flex items-center gap-2">
+              <Settings2Icon className="size-3.5" />
+              设置中心
             </span>
-          </button>
+            <span className="font-mono text-[10px]">
+              {theme === "dark" ? "Dark" : "Light"}
+            </span>
+          </Button>
         </div>
       </aside>
 
-      <main className="relative min-w-0 flex-1">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_-20%,rgba(45,212,191,0.11),transparent_38%)]" />
+      <main className="relative min-w-0 flex-1 bg-background">
         {mode === "solo" && (
-          <header className="electron-drag relative z-10 flex h-16 items-center justify-between border-b border-white/7 px-6">
-            <div className="flex items-center gap-2 text-sm text-zinc-400">
-              <BotIcon className="size-4 text-cyan-300" />
-              <span>Codex</span>
-              {workspace && <span className="text-zinc-700">/</span>}
+          <header className="electron-drag relative z-10 flex h-12 items-center justify-between border-b border-border bg-background px-4">
+            <div className="flex items-center gap-2 font-mono text-xs text-foreground">
+              <BotIcon className="size-3.5 text-muted-foreground" />
+              <span className="font-semibold">codex</span>
+              {workspace && <span className="text-muted-foreground/40">/</span>}
               {workspace && (
-                <span className="max-w-64 truncate text-zinc-600">{shortPath(workspace)}</span>
+                <span className="max-w-72 truncate text-muted-foreground">{shortPath(workspace)}</span>
               )}
             </div>
-            <div className="rounded-full border border-emerald-400/12 bg-emerald-400/5 px-3 py-1 font-mono text-[9px] tracking-[0.14em] text-emerald-300/70 uppercase">
-              workspace write · ask first
+            <div className="flex items-center gap-2">
+              <span className="rounded border border-border bg-muted/60 px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
+                workspace:rw · prompt-confirm
+              </span>
             </div>
           </header>
         )}
@@ -1101,11 +1184,11 @@ const AuthenticatedApp = () => {
             <div className="grid h-full place-items-center px-8 text-center">
               <div className="max-w-sm">
                 {status.connecting ? (
-                  <LoaderCircleIcon className="mx-auto size-7 animate-spin text-cyan-300" />
+                  <LoaderCircleIcon className="mx-auto size-7 animate-spin text-primary" />
                 ) : (
-                  <CircleAlertIcon className="mx-auto size-7 text-zinc-600" />
+                  <CircleAlertIcon className="mx-auto size-7 text-muted-foreground" />
                 )}
-                <h2 className="mt-4 text-base font-medium text-zinc-200">
+                <h2 className="mt-4 text-base font-medium text-foreground">
                   {status.connecting
                     ? "正在启动本机 Codex…"
                     : needsLogin
@@ -1114,7 +1197,7 @@ const AuthenticatedApp = () => {
                         ? "请选择项目目录"
                         : "Codex 暂不可用"}
                 </h2>
-                <p className="mt-2 text-sm leading-6 text-zinc-600">
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
                   {status.error || "连接完成后，就可以让 Codex 读取、修改并运行这个项目。"}
                 </p>
               </div>
@@ -1146,7 +1229,7 @@ const AuthenticatedApp = () => {
 export const App = () => {
   const [backend, setBackend] = useState<BackendState | null>(null);
   const [theme, setTheme] = useState<AppearanceTheme>(() =>
-    localStorage.getItem("codex.theme") === "light" ? "light" : "dark",
+    localStorage.getItem("codex.theme") === "dark" ? "dark" : "light",
   );
 
   const changeTheme = (next: AppearanceTheme) => {

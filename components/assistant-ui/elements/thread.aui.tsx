@@ -87,7 +87,7 @@ export const Thread: FC<ThreadProps> = ({
       className="aui-root aui-thread-root @container flex h-full flex-col bg-transparent"
       style={{
         ["--thread-max-width" as string]: "48rem",
-        ["--composer-bg" as string]: "rgba(24, 28, 38, 0.92)",
+        ["--composer-bg" as string]: "var(--card)",
         ["--composer-radius" as string]: "1.5rem",
         ["--composer-padding" as string]: "8px",
       }}
@@ -116,8 +116,8 @@ export const Thread: FC<ThreadProps> = ({
 
           <ThreadPrimitive.ViewportFooter
             className={cn(
-              "aui-thread-viewport-footer flex flex-col gap-4 overflow-visible bg-[#080b12]/90 pb-4 backdrop-blur-xl md:pb-6",
-              !isEmpty && "sticky bottom-0 mt-auto rounded-t-(--composer-radius)",
+              "aui-thread-viewport-footer flex flex-col gap-4 overflow-visible bg-transparent pb-4 md:pb-6",
+              !isEmpty && "sticky bottom-0 mt-auto",
             )}
           >
             <ThreadScrollToBottom />
@@ -165,10 +165,10 @@ const ThreadWelcome: FC<Pick<ThreadProps, "badge" | "welcome" | "description">> 
       <div className="fade-in slide-in-from-bottom-1 animate-in mb-5 grid size-14 place-items-center rounded-2xl border border-blue-400/20 bg-blue-500/10 text-lg font-semibold text-blue-300 shadow-[0_16px_50px_rgba(37,99,235,0.14)] duration-200">
         {badge}
       </div>
-      <h1 className="aui-thread-welcome-message-inner fade-in slide-in-from-bottom-1 animate-in fill-mode-both bg-gradient-to-b from-white to-zinc-400 bg-clip-text text-3xl font-semibold tracking-tight text-transparent duration-200 md:text-4xl">
+      <h1 className="aui-thread-welcome-message-inner fade-in slide-in-from-bottom-1 animate-in fill-mode-both text-3xl font-semibold tracking-tight text-foreground duration-200 md:text-4xl">
         {welcome}
       </h1>
-      <p className="fade-in slide-in-from-bottom-1 animate-in mt-3 max-w-md text-sm leading-6 text-zinc-500 duration-300">
+      <p className="fade-in slide-in-from-bottom-1 animate-in mt-3 max-w-md text-sm leading-6 text-muted-foreground duration-300">
         {description}
       </p>
     </div>
@@ -189,7 +189,7 @@ const ThreadSuggestionItem: FC = () => {
       <SuggestionPrimitive.Trigger send asChild>
         <Button
           variant="ghost"
-          className="aui-thread-welcome-suggestion text-foreground hover:bg-muted border-border/60 h-auto gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-normal whitespace-nowrap transition-colors"
+          className="aui-thread-welcome-suggestion text-foreground hover:bg-muted border-border h-auto gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-normal whitespace-nowrap transition-colors"
         >
           <SuggestionPrimitive.Title className="aui-thread-welcome-suggestion-text-1" />
           <SuggestionPrimitive.Description className="aui-thread-welcome-suggestion-text-2 empty:hidden" />
@@ -204,11 +204,11 @@ const Composer: FC<Pick<ThreadProps, "placeholder">> = ({ placeholder }) => {
     <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
       <div
         data-slot="aui_composer-shell"
-        className="border-border/60 focus-within:border-border dark:border-muted-foreground/15 dark:focus-within:border-muted-foreground/30 flex w-full cursor-text flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) transition-[border-color]"
+        className="border-border focus-within:border-primary/50 flex w-full cursor-text flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) shadow-lg shadow-black/5 transition-[border-color]"
       >
         <ComposerPrimitive.Input
           placeholder={placeholder}
-          className="aui-composer-input placeholder:text-muted-foreground/60 max-h-48 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"
+          className="aui-composer-input placeholder:text-muted-foreground max-h-48 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 text-foreground outline-none"
           rows={1}
           autoFocus
           aria-label="消息输入框"
