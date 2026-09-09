@@ -82,6 +82,23 @@ read_env_value() {
   fi
 }
 
+echo "  等待 OpenIM API 就绪..."
+OPENIM_READY=false
+for i in $(seq 1 30); do
+  OPENIM_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 \
+    "http://127.0.0.1:${OPENIM_API_PORT}/auth/parse_token" 2>/dev/null || true)"
+  if [ "$OPENIM_STATUS" != "000" ] && [ -n "$OPENIM_STATUS" ]; then
+    OPENIM_READY=true
+    break
+  fi
+  sleep 2
+done
+if [ "$OPENIM_READY" = false ]; then
+  echo "  错误: OpenIM API 在等待窗口内不可达，请检查 openim-server 日志。"
+  exit 1
+fi
+echo "  OpenIM API 已就绪"
+
 OPENIM_ADMIN_TOKEN="$(read_env_value "$SCRIPT_DIR/.env.backend.local" OPENIM_ADMIN_TOKEN)"
 if [ -n "$OPENIM_ADMIN_TOKEN" ] && [ "$OPENIM_ADMIN_TOKEN" != "openIM123" ] && [ "$OPENIM_ADMIN_TOKEN" != "replace-with-openim-admin-token" ]; then
   if ! curl -fsS --connect-timeout 2 --max-time 5 \
@@ -89,7 +106,11 @@ if [ -n "$OPENIM_ADMIN_TOKEN" ] && [ "$OPENIM_ADMIN_TOKEN" != "openIM123" ] && [
     -H "operationID: workteam-deploy-existing" \
     -d "{\"token\":\"${OPENIM_ADMIN_TOKEN}\"}" \
     "http://127.0.0.1:${OPENIM_API_PORT}/auth/parse_token" \
-    | python3 -c 'import json,sys; value=json.load(sys.stdin); raise SystemExit(0 if not value.get("errCode") and (value.get("data") or {}).get("userID") else 1)'; then
+    | python3 -c 'import json,sys
+try:
+ value=json.load(sys.stdin); raise SystemExit(0 if not value.get("errCode") and (value.get("data") or {}).get("userID") else 1)
+except Exception:
+ raise SystemExit(1)'; then
     OPENIM_ADMIN_TOKEN=""
   else
     echo "  已复用现有 OpenIM 管理凭证"
@@ -101,7 +122,7 @@ for i in $(seq 1 30); do
       -H 'content-type: application/json' \
       -H "operationID: workteam-deploy-${i}" \
       -d "{\"userID\":\"imAdmin\",\"secret\":\"${OPENIM_SECRET}\"}" \
-      "http://127.0.0.1:${OPENIM_API_PORT}/auth/get_admin_token" || true
+      "http://127.0.0.1:${OPENIM_API_PORT}/auth/get_admin_token" 2>/dev/null || true
   } | python3 -c 'import json,sys
 try:
  value=json.load(sys.stdin); data=value.get("data") or {}; token=data.get("token", ""); print(token if token and not value.get("errCode") else "")
