@@ -17,6 +17,7 @@
     "backend:build": "npm run build --workspace @agent-team/chat-api",
     "backend:test": "npm run test --workspace @agent-team/chat-api",
     "backend:migrate": "npm run db:migrate --workspace @agent-team/chat-api",
+    "validate:bugs": "node scripts/validate-bug-governance.mjs",
     "test:agent-team": "esbuild tests/agent-team-direct.test.ts --bundle --platform=node --format=esm --outfile=/tmp/codex-desktop-agent-team-test.mjs && node --test /tmp/codex-desktop-agent-team-test.mjs",
     "test:desktop": "node --import tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.desktop.json",
