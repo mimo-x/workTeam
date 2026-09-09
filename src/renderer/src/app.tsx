@@ -2,8 +2,6 @@ import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import {
   BookUserIcon,
   BotIcon,
-  CheckCircle2Icon,
-  ChevronDownIcon,
   CircleAlertIcon,
   CloudIcon,
   EyeIcon,
@@ -29,28 +27,13 @@ import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -158,24 +141,24 @@ const AuthenticationScreen = ({
 
   return (
     <div className={`app-shell theme-${theme} relative flex h-dvh min-h-[560px] overflow-hidden`}>
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_15%,rgba(45,212,191,0.16),transparent_34%),radial-gradient(circle_at_85%_80%,rgba(6,182,212,0.1),transparent_30%)]" />
+      <div className="pointer-events-none absolute -top-48 -left-32 size-128 rounded-full bg-primary/10 blur-3xl" />
       <div className="electron-drag absolute inset-x-0 top-0 z-20 flex h-14 items-center justify-end px-5">
         <button
           type="button"
           aria-label={theme === "dark" ? "切换到白天模式" : "切换到黑夜模式"}
           onClick={() => onThemeChange(theme === "dark" ? "light" : "dark")}
-          className="electron-no-drag grid size-9 place-items-center rounded-xl border border-white/8 bg-white/4 text-zinc-500 transition hover:bg-white/8 hover:text-zinc-200"
+          className="electron-no-drag grid size-9 place-items-center rounded-lg border border-border bg-card text-muted-foreground transition hover:bg-accent hover:text-foreground"
         >
           {theme === "dark" ? <SunIcon className="size-4" /> : <MoonIcon className="size-4" />}
         </button>
       </div>
 
-      <Card className="relative z-10 m-auto grid w-[min(920px,calc(100vw-48px))] grid-cols-[1.05fr_0.95fr] overflow-hidden rounded-2xl border-border bg-card p-0 shadow-2xl max-[760px]:w-[min(460px,calc(100vw-32px))] max-[760px]:grid-cols-1">
-        <div className="relative flex min-h-[590px] flex-col justify-between overflow-hidden border-r border-border bg-muted/30 p-10 max-[760px]:hidden">
+      <Card className="relative z-10 m-auto grid w-[min(920px,calc(100vw-48px))] grid-cols-[1.05fr_0.95fr] overflow-hidden rounded-2xl border border-border bg-card p-0 shadow-[var(--shadow-down-3)] max-[760px]:w-[min(460px,calc(100vw-32px))] max-[760px]:grid-cols-1">
+        <div className="relative flex min-h-[590px] flex-col justify-between overflow-hidden border-r border-border bg-secondary/60 p-10 max-[760px]:hidden">
           <div className="pointer-events-none absolute -top-32 -left-24 size-80 rounded-full bg-primary/5 blur-3xl" />
           <div className="relative">
             <div className="flex items-center gap-3">
-              <div className="grid size-11 place-items-center rounded-2xl bg-gradient-to-br from-emerald-500 to-cyan-600 text-sm font-bold text-white shadow-md">
+              <div className="grid size-11 place-items-center rounded-xl bg-primary text-sm font-bold text-primary-foreground shadow-[var(--shadow-primary)]">
                 CX
               </div>
               <div>
@@ -195,14 +178,14 @@ const AuthenticationScreen = ({
             </p>
           </div>
           <div className="relative flex items-center gap-2 text-[11px] text-muted-foreground">
-            <KeyRoundIcon className="size-3.5 text-emerald-500" />
+            <KeyRoundIcon className="size-3.5 text-success" />
             账号认证已启用 · 登录状态安全保存在本机
           </div>
         </div>
 
         <div className="flex min-h-[590px] flex-col justify-center p-10 max-[520px]:p-6">
           <div className="mb-8 hidden items-center gap-3 max-[760px]:flex">
-            <div className="grid size-10 place-items-center rounded-2xl bg-gradient-to-br from-emerald-500 to-cyan-600 text-sm font-bold text-white">
+            <div className="grid size-10 place-items-center rounded-xl bg-primary text-sm font-bold text-primary-foreground">
               CX
             </div>
             <div className="text-sm font-semibold text-foreground">Codex Desktop</div>
@@ -300,18 +283,14 @@ const AuthenticationScreen = ({
               </div>
             </div>
 
-            <Button
-              type="submit"
-              disabled={!canSubmit || busy}
-              className="w-full font-medium"
-            >
+            <Button type="submit" disabled={!canSubmit || busy} className="w-full font-medium">
               {busy && <LoaderCircleIcon className="size-3.5 animate-spin mr-2" />}
               {busy ? "正在连接…" : mode === "login" ? "登录并进入" : "注册并进入"}
             </Button>
           </form>
 
           {mode === "register" && handle && !validHandle && (
-            <p className="mt-3 text-[11px] leading-5 text-amber-600 dark:text-amber-400">
+            <p className="mt-3 text-[11px] leading-5 text-warning ">
               用户名需为 3–32 位字母、数字、下划线或连字符。
             </p>
           )}
@@ -457,7 +436,7 @@ const SettingsCenter = ({
 
   return (
     <div
-      className="fixed inset-0 z-[100] grid place-items-center bg-black/50 p-6 backdrop-blur-sm"
+      className="fixed inset-0 z-50 grid place-items-center bg-foreground/20 p-6 backdrop-blur-sm"
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
@@ -467,7 +446,7 @@ const SettingsCenter = ({
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-title"
-        className="flex h-[min(620px,calc(100vh-48px))] w-[min(820px,calc(100vw-48px))] overflow-hidden rounded-2xl border border-border bg-card text-card-foreground shadow-2xl"
+        className="flex h-[min(620px,calc(100vh-48px))] w-[min(820px,calc(100vw-48px))] overflow-hidden rounded-2xl border border-border bg-card text-card-foreground shadow-[var(--shadow-down-3)]"
       >
         <aside className="w-48 shrink-0 border-r border-border bg-muted/40 p-4">
           <div className="px-2 pt-2 pb-5">
@@ -555,33 +534,27 @@ const SettingsCenter = ({
                       className={`overflow-hidden rounded-xl border p-3 text-left transition ${
                         selected
                           ? "border-primary bg-primary/5 ring-1 ring-primary"
-                          : "border-border bg-card hover:border-border/80 hover:bg-muted/30"
+                          : "border-border bg-card hover:border-input0 hover:bg-muted/30"
                       }`}
                     >
                       <div
                         className={`relative h-32 overflow-hidden rounded-lg border ${
-                          value === "light"
-                            ? "border-slate-200 bg-slate-100"
-                            : "border-zinc-800 bg-[#09090b]"
+                          value === "light" ? "border-border bg-muted" : "border-border bg-muted"
                         }`}
                       >
                         <div
                           className={`absolute inset-y-0 left-0 w-12 border-r ${
-                            value === "light"
-                              ? "border-slate-200 bg-white"
-                              : "border-zinc-800 bg-zinc-900"
+                            value === "light" ? "border-border bg-muted" : "border-border bg-muted"
                           }`}
                         />
                         <div
                           className={`absolute top-4 right-4 left-16 h-3 rounded-full ${
-                            value === "light" ? "bg-slate-200" : "bg-zinc-800"
+                            value === "light" ? "bg-muted" : "bg-muted"
                           }`}
                         />
                         <div
                           className={`absolute top-12 right-9 left-16 h-12 rounded-lg border ${
-                            value === "light"
-                              ? "border-slate-200 bg-white"
-                              : "border-zinc-800 bg-zinc-900"
+                            value === "light" ? "border-border bg-muted" : "border-border bg-muted"
                           }`}
                         />
                         <div className="absolute right-5 bottom-4 h-2 w-20 rounded-full bg-primary/60" />
@@ -598,13 +571,13 @@ const SettingsCenter = ({
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="text-xs font-medium text-foreground">{label}</div>
-                          <div className="mt-0.5 text-[10px] text-muted-foreground">{description}</div>
+                          <div className="mt-0.5 text-[10px] text-muted-foreground">
+                            {description}
+                          </div>
                         </div>
                         <span
                           className={`size-3 rounded-full border-2 ${
-                            selected
-                              ? "border-primary bg-primary"
-                              : "border-muted-foreground/30"
+                            selected ? "border-primary bg-primary" : "border-muted-foreground/30"
                           }`}
                         />
                       </div>
@@ -632,9 +605,9 @@ const SettingsCenter = ({
               </div>
 
               {backend?.authenticated && backend.user ? (
-                <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+                <div className="rounded-xl border border-success/20 bg-success/5 p-4">
                   <div className="flex items-center gap-3">
-                    <div className="grid size-10 place-items-center rounded-lg bg-emerald-500/10 text-sm font-medium text-emerald-600 dark:text-emerald-400">
+                    <div className="grid size-10 place-items-center rounded-lg bg-success/10 text-sm font-medium text-success ">
                       {backend.user.displayName.slice(0, 2)}
                     </div>
                     <div className="min-w-0 flex-1">
@@ -645,13 +618,16 @@ const SettingsCenter = ({
                         @{backend.user.handle} · {backend.user.email}
                       </div>
                     </div>
-                    <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                    <Badge
+                      variant="outline"
+                      className="border-success/30 bg-success/10 text-success "
+                    >
                       已连接
                     </Badge>
                   </div>
                   <div className="mt-3 flex items-center gap-2 text-[11px] text-muted-foreground">
                     <span
-                      className={`size-1.5 rounded-full ${hostState?.status === "connected" ? "bg-emerald-500" : hostState?.status === "connecting" ? "animate-pulse bg-amber-500" : "bg-muted-foreground"}`}
+                      className={`size-1.5 rounded-full ${hostState?.status === "connected" ? "bg-success" : hostState?.status === "connecting" ? "animate-pulse bg-warning" : "bg-muted-foreground"}`}
                     />
                     Agent Host：
                     {hostState?.status === "connected"
@@ -739,17 +715,17 @@ const SettingsCenter = ({
               )}
 
               {backendBusy && (
-                <div className="flex items-center gap-2 text-[10px] text-cyan-300">
+                <div className="flex items-center gap-2 text-[10px] text-info">
                   <LoaderCircleIcon className="size-3 animate-spin" /> 正在连接聊天后台…
                 </div>
               )}
               {(backendError || backend?.error) && (
-                <p className="rounded-xl border border-red-300/10 bg-red-300/5 p-3 text-[10px] leading-5 text-red-300/80">
+                <p className="rounded-xl border border-destructive/10 bg-destructive/5 p-3 text-[10px] leading-5 text-destructive/80">
                   {backendError || backend?.error}
                 </p>
               )}
               {importResult && (
-                <p className="rounded-xl border border-cyan-300/10 bg-cyan-300/5 p-3 text-[10px] leading-5 text-cyan-200/80">
+                <p className="rounded-xl border border-info/10 bg-info/5 p-3 text-[10px] leading-5 text-info/80">
                   {importResult}
                 </p>
               )}
@@ -779,9 +755,9 @@ const ApprovalCard = ({
   };
 
   return (
-    <Card className="pointer-events-auto w-[min(32rem,calc(100vw-2rem))] border-amber-500/30 bg-card p-4 shadow-2xl">
+    <Card className="pointer-events-auto w-[min(32rem,calc(100vw-2rem))] border border-warning/30 bg-card p-4 shadow-[var(--shadow-down-3)]">
       <div className="flex items-start gap-3">
-        <div className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400">
+        <div className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-warning/10 text-warning ">
           {approval.command ? (
             <TerminalSquareIcon className="size-4" />
           ) : (
@@ -799,7 +775,9 @@ const ApprovalCard = ({
             </pre>
           )}
           {approval.cwd && (
-            <div className="mt-2 truncate font-mono text-[10px] text-muted-foreground">{approval.cwd}</div>
+            <div className="mt-2 truncate font-mono text-[10px] text-muted-foreground">
+              {approval.cwd}
+            </div>
           )}
           <div className="mt-4 flex flex-wrap justify-end gap-2">
             <Button
@@ -827,7 +805,7 @@ const ApprovalCard = ({
               size="sm"
               disabled={busy}
               onClick={() => void resolve("acceptForSession")}
-              className="bg-amber-500 text-xs font-medium text-white hover:bg-amber-600 dark:bg-amber-600 dark:text-white dark:hover:bg-amber-500"
+              className="bg-warning text-xs font-medium text-warning-foreground hover:bg-warning/85"
             >
               本会话允许
             </Button>
@@ -977,8 +955,8 @@ const AuthenticatedApp = () => {
 
   return (
     <div className={`app-shell theme-${theme} flex h-dvh min-h-0 overflow-hidden`}>
-      <aside className="app-sidebar relative flex w-[240px] shrink-0 flex-col border-r border-border bg-muted/40 font-sans">
-        <div className="electron-drag flex h-12 shrink-0 items-center justify-between border-b border-border px-3 pl-[76px]">
+      <aside className="app-sidebar relative flex w-[240px] shrink-0 flex-col border-r border-border font-sans">
+        <div className="app-titlebar electron-drag flex h-12 shrink-0 items-center justify-between border-b border-border px-3 pl-[76px]">
           <div className="flex items-center gap-2">
             <span className="grid size-5 place-items-center rounded bg-foreground text-[10px] font-mono font-bold text-background">
               CX
@@ -1011,8 +989,8 @@ const AuthenticatedApp = () => {
                     onClick={() => changeMode(value)}
                     className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs font-medium transition ${
                       isActive
-                        ? "bg-background text-foreground shadow-xs ring-1 ring-border"
-                        : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                        ? "bg-card text-foreground shadow-[var(--shadow-down-1)]"
+                        : "text-muted-foreground hover:bg-accent hover:text-foreground"
                     }`}
                   >
                     <Icon className="size-3.5 shrink-0" />
@@ -1025,8 +1003,8 @@ const AuthenticatedApp = () => {
                 onClick={() => changeMode("solo")}
                 className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs font-medium transition ${
                   mode === "solo"
-                    ? "bg-background text-foreground shadow-xs ring-1 ring-border"
-                    : "text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                    ? "bg-card text-foreground shadow-[var(--shadow-down-1)]"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
                 }`}
               >
                 <MessageSquareIcon className="size-3.5 shrink-0" />
@@ -1042,7 +1020,7 @@ const AuthenticatedApp = () => {
             <button
               type="button"
               onClick={() => void chooseWorkspace()}
-              className="flex w-full items-center gap-2.5 rounded border border-border bg-background/80 p-2 text-left transition hover:bg-background hover:border-foreground/20"
+              className="flex w-full items-center gap-2.5 rounded-lg border border-border bg-card p-2 text-left transition hover:border-primary/40 hover:bg-accent"
             >
               <FolderIcon className="size-4 shrink-0 text-muted-foreground" />
               <div className="min-w-0 flex-1">
@@ -1066,11 +1044,13 @@ const AuthenticatedApp = () => {
                   <SelectValue placeholder="选择模型" />
                 </SelectTrigger>
                 <SelectContent>
-                  {status.models.map((model) => (
-                    <SelectItem key={model.id} value={model.model} className="text-xs font-mono">
-                      {model.displayName}
-                    </SelectItem>
-                  ))}
+                  <SelectGroup>
+                    {status.models.map((model) => (
+                      <SelectItem key={model.id} value={model.model} className="text-xs font-mono">
+                        {model.displayName}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
                 </SelectContent>
               </Select>
             ) : (
@@ -1080,14 +1060,14 @@ const AuthenticatedApp = () => {
             )}
           </section>
 
-          <section className="mt-auto rounded border border-border bg-background/80 p-2.5">
+          <section className="mt-auto rounded-lg border border-border bg-card p-2.5 shadow-[var(--shadow-down-1)]">
             <div className="flex items-center gap-2">
               <span
                 className={`size-2 rounded-full ${
                   status.connecting
-                    ? "animate-pulse bg-amber-500"
+                    ? "animate-pulse bg-warning"
                     : status.connected
-                      ? "bg-emerald-600 dark:bg-emerald-400"
+                      ? "bg-success "
                       : "bg-destructive"
                 }`}
               />
@@ -1141,22 +1121,22 @@ const AuthenticatedApp = () => {
               <Settings2Icon className="size-3.5" />
               设置中心
             </span>
-            <span className="font-mono text-[10px]">
-              {theme === "dark" ? "Dark" : "Light"}
-            </span>
+            <span className="font-mono text-[10px]">{theme === "dark" ? "Dark" : "Light"}</span>
           </Button>
         </div>
       </aside>
 
       <main className="relative min-w-0 flex-1 bg-background">
         {mode === "solo" && (
-          <header className="electron-drag relative z-10 flex h-12 items-center justify-between border-b border-border bg-background px-4">
+          <header className="app-titlebar electron-drag relative z-10 flex h-12 items-center justify-between border-b border-border px-4">
             <div className="flex items-center gap-2 font-mono text-xs text-foreground">
               <BotIcon className="size-3.5 text-muted-foreground" />
               <span className="font-semibold">codex</span>
               {workspace && <span className="text-muted-foreground/40">/</span>}
               {workspace && (
-                <span className="max-w-72 truncate text-muted-foreground">{shortPath(workspace)}</span>
+                <span className="max-w-72 truncate text-muted-foreground">
+                  {shortPath(workspace)}
+                </span>
               )}
             </div>
             <div className="flex items-center gap-2">
@@ -1275,11 +1255,11 @@ export const App = () => {
         className={`app-shell theme-${theme} electron-drag grid h-dvh place-items-center text-center`}
       >
         <div>
-          <div className="mx-auto grid size-12 place-items-center rounded-2xl bg-gradient-to-br from-emerald-400 to-cyan-500 text-sm font-bold text-slate-950 shadow-[0_12px_40px_rgba(45,212,191,0.22)]">
+          <div className="mx-auto grid size-12 place-items-center rounded-xl bg-primary text-sm font-bold text-primary-foreground shadow-[var(--shadow-primary)]">
             CX
           </div>
-          <LoaderCircleIcon className="mx-auto mt-5 size-4 animate-spin text-cyan-300" />
-          <p className="mt-3 text-xs text-zinc-600">正在验证登录状态…</p>
+          <LoaderCircleIcon className="mx-auto mt-5 size-4 animate-spin text-info" />
+          <p className="mt-3 text-xs text-foreground">正在验证登录状态…</p>
         </div>
       </div>
     );

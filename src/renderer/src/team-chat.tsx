@@ -39,16 +39,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
   Dialog,
-  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -57,6 +48,14 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 
 import type {
@@ -102,15 +101,15 @@ const taskLabels: Record<TaskStatus, string> = {
   cancelled: "已取消",
 };
 const taskTone: Record<TaskStatus, string> = {
-  pending_review: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
-  changes_requested: "border-amber-600/30 bg-amber-500/10 text-amber-800 dark:text-amber-200",
-  approved: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  pending_review: "border-warning/30 bg-warning/10 text-warning",
+  changes_requested: "border-warning/30 bg-warning/10 text-warning",
+  approved: "border-success/30 bg-success/10 text-success",
   queued: "border-border bg-muted text-muted-foreground",
   running: "border-primary/30 bg-primary/10 text-primary animate-pulse",
   waiting: "border-border bg-muted text-muted-foreground",
   review: "border-border bg-accent text-accent-foreground",
   blocked: "border-destructive/30 bg-destructive/10 text-destructive",
-  done: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  done: "border-success/30 bg-success/10 text-success",
   failed: "border-destructive/30 bg-destructive/10 text-destructive",
   cancelled: "border-border bg-muted text-muted-foreground",
 };
@@ -120,24 +119,24 @@ const themeClasses: Record<
   { avatar: string; chip: string; dot: string }
 > = {
   cyan: {
-    avatar: "border-border bg-muted/80 text-foreground font-mono",
-    chip: "border-border bg-muted/50 text-foreground font-mono",
-    dot: "bg-foreground",
+    avatar: "border-info/30 bg-info/10 text-info font-mono",
+    chip: "border-info/30 bg-info/10 text-info font-mono",
+    dot: "bg-info",
   },
   violet: {
-    avatar: "border-border bg-muted/80 text-foreground font-mono",
-    chip: "border-border bg-muted/50 text-foreground font-mono",
-    dot: "bg-foreground",
+    avatar: "border-primary/30 bg-primary/10 text-primary font-mono",
+    chip: "border-primary/30 bg-primary/10 text-primary font-mono",
+    dot: "bg-primary",
   },
   amber: {
-    avatar: "border-border bg-muted/80 text-foreground font-mono",
-    chip: "border-border bg-muted/50 text-foreground font-mono",
-    dot: "bg-foreground",
+    avatar: "border-warning/30 bg-warning/10 text-warning font-mono",
+    chip: "border-warning/30 bg-warning/10 text-warning font-mono",
+    dot: "bg-warning",
   },
   emerald: {
-    avatar: "border-border bg-muted/80 text-foreground font-mono",
-    chip: "border-border bg-muted/50 text-foreground font-mono",
-    dot: "bg-foreground",
+    avatar: "border-success/30 bg-success/10 text-success font-mono",
+    chip: "border-success/30 bg-success/10 text-success font-mono",
+    dot: "bg-success",
   },
 };
 
@@ -223,7 +222,7 @@ const applyEvent = (state: TeamWorkspaceSnapshot, event: TeamEvent) => {
 const ConnectionBadge = ({ status }: { status: OpenImConnectionState }) => {
   if (status.state === "connecting") {
     return (
-      <span className="flex items-center gap-1.5 text-[10px] text-amber-200/80">
+      <span className="flex items-center gap-1.5 text-[10px] text-warning/80">
         <LoaderCircleIcon className="size-3 animate-spin" />
         连接中
       </span>
@@ -231,23 +230,23 @@ const ConnectionBadge = ({ status }: { status: OpenImConnectionState }) => {
   }
   if (status.state === "connected") {
     return (
-      <span className="flex items-center gap-1.5 text-[10px] text-emerald-300/80">
-        <span className="size-1.5 rounded-full bg-emerald-300" />
+      <span className="flex items-center gap-1.5 text-[10px] text-success/80">
+        <span className="size-1.5 rounded-full bg-success" />
         OpenIM
       </span>
     );
   }
   if (status.state === "error") {
     return (
-      <span className="flex items-center gap-1.5 text-[10px] text-red-300/80">
+      <span className="flex items-center gap-1.5 text-[10px] text-destructive/80">
         <CircleAlertIcon className="size-3" />
         连接失败
       </span>
     );
   }
   return (
-    <span className="flex items-center gap-1.5 text-[10px] text-zinc-600">
-      <span className="size-1.5 rounded-full bg-zinc-600" />
+    <span className="flex items-center gap-1.5 text-[10px] text-foreground">
+      <span className="size-1.5 rounded-full bg-muted" />
       本地实时
     </span>
   );
@@ -259,7 +258,12 @@ const MessageBody = ({ content }: { content: string }) => (
       remarkPlugins={[remarkGfm]}
       components={{
         a: ({ children, ...props }) => (
-          <a {...props} target="_blank" rel="noreferrer" className="text-foreground underline underline-offset-4 hover:text-muted-foreground">
+          <a
+            {...props}
+            target="_blank"
+            rel="noreferrer"
+            className="text-foreground underline underline-offset-4 hover:text-muted-foreground"
+          >
             {children}
           </a>
         ),
@@ -289,7 +293,9 @@ const MessageBody = ({ content }: { content: string }) => (
 );
 
 const StatusPill = ({ status }: { status: TaskStatus }) => (
-  <span className={`inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-[10px] font-medium leading-none ${taskTone[status]}`}>
+  <span
+    className={`inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-[10px] font-medium leading-none ${taskTone[status]}`}
+  >
     {taskLabels[status]}
   </span>
 );
@@ -308,7 +314,13 @@ const MessageRow = ({
   onOpenTask: (task: AgentTask) => void;
 }) => {
   if (message.senderType === "system") {
-    return <div className="py-3 text-center text-[10px] text-zinc-600">{message.content}</div>;
+    return (
+      <div className="flex items-center gap-3 py-3 text-[10px] text-muted-foreground">
+        <span className="h-px flex-1 bg-border" />
+        <span>{message.content}</span>
+        <span className="h-px flex-1 bg-border" />
+      </div>
+    );
   }
   const isUser = message.senderType === "user";
   const running = message.status === "pending" || message.status === "streaming";
@@ -322,18 +334,20 @@ const MessageRow = ({
             <span>{timeLabel(message.createdAt)}</span>
             <span className="font-semibold text-foreground">{message.senderName}</span>
           </div>
-          <div className="rounded border border-border bg-muted/50 px-3.5 py-2.5 text-xs leading-relaxed whitespace-pre-wrap text-foreground">
+          <div className="rounded-xl rounded-tr-sm bg-primary px-3.5 py-2.5 text-xs leading-relaxed whitespace-pre-wrap text-primary-foreground shadow-[var(--shadow-down-1)]">
             {message.content}
           </div>
           {task && (
             <button
               type="button"
               onClick={() => onOpenTask(task)}
-              className="mt-1.5 flex w-full items-center gap-2.5 rounded border border-border bg-background p-2 text-left transition hover:border-foreground/20"
+              className="mt-1.5 flex w-full items-center gap-2.5 rounded-lg border border-border bg-card p-2 text-left transition hover:bg-accent"
             >
               <FolderKanbanIcon className="size-3.5 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-xs font-medium text-foreground">{task.title}</span>
+                <span className="block truncate text-xs font-medium text-foreground">
+                  {task.title}
+                </span>
                 <span className="mt-0.5 block font-mono text-[9px] text-muted-foreground">
                   Task #{task.id.slice(0, 8)} · {task.assigneeIds.length} Agents
                 </span>
@@ -342,7 +356,7 @@ const MessageRow = ({
             </button>
           )}
         </div>
-        <div className="mt-4 grid size-7 shrink-0 place-items-center rounded border border-border bg-muted font-mono text-[10px] font-semibold text-foreground">
+        <div className="mt-4 grid size-7 shrink-0 place-items-center rounded-lg border border-primary/20 bg-primary/10 font-mono text-[10px] font-semibold text-primary">
           U
         </div>
       </article>
@@ -352,7 +366,7 @@ const MessageRow = ({
   return (
     <article className="group flex gap-2.5 py-2">
       <div
-        className="mt-4 grid size-7 shrink-0 place-items-center rounded border border-border bg-muted font-mono text-[10px] font-semibold text-foreground"
+        className={`mt-4 grid size-7 shrink-0 place-items-center rounded-lg border font-mono text-[10px] font-semibold ${theme.avatar}`}
       >
         {agent?.initials ?? "AI"}
       </div>
@@ -366,7 +380,7 @@ const MessageRow = ({
           )}
           <span className="font-mono text-muted-foreground">{timeLabel(message.createdAt)}</span>
         </div>
-        <div className="rounded border border-border bg-card px-3.5 py-2.5 text-xs shadow-2xs">
+        <div className="rounded-xl rounded-tl-sm border border-border bg-card px-3.5 py-2.5 text-xs shadow-[var(--shadow-down-1)]">
           {message.content ? <MessageBody content={message.content} /> : null}
           {message.activity && (
             <div className="flex items-center gap-2 py-1 font-mono text-[11px] text-muted-foreground">
@@ -388,7 +402,7 @@ const MessageRow = ({
           <button
             type="button"
             onClick={() => onStop(message.runId!)}
-            className="mt-2 flex items-center gap-1.5 text-[10px] text-zinc-600 opacity-0 transition hover:text-zinc-300 group-hover:opacity-100"
+            className="mt-2 flex items-center gap-1.5 text-[10px] text-foreground opacity-0 transition hover:text-muted-foreground group-hover:opacity-100"
           >
             <SquareIcon className="size-2.5 fill-current" />
             停止
@@ -434,10 +448,10 @@ const ImSettings = ({
   };
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-xl border-white/10 bg-[#11151e] p-0 text-zinc-100 shadow-2xl">
-        <DialogHeader className="border-b border-white/7 px-5 py-4">
+      <DialogContent className="max-w-xl border-border bg-popover p-0 text-muted-foreground shadow-[var(--shadow-down-3)]">
+        <DialogHeader className="border-b border-border px-5 py-4">
           <DialogTitle className="text-sm font-semibold">连接 OpenIM</DialogTitle>
-          <DialogDescription className="text-xs text-zinc-400">
+          <DialogDescription className="text-xs text-muted-foreground">
             留空即可使用本地群与 Task 房间。
           </DialogDescription>
         </DialogHeader>
@@ -451,24 +465,23 @@ const ImSettings = ({
               ["gatewayUrl", "Agent Gateway", "http://127.0.0.1:8787"],
             ] as const
           ).map(([key, label, placeholder]) => (
-            <div key={key} className={key === "gatewayUrl" ? "sm:col-span-2 space-y-1.5" : "space-y-1.5"}>
-              <Label className="text-[11px] text-zinc-400">
-                {label}
-              </Label>
+            <div
+              key={key}
+              className={key === "gatewayUrl" ? "sm:col-span-2 space-y-1.5" : "space-y-1.5"}
+            >
+              <Label className="text-[11px] text-muted-foreground">{label}</Label>
               <Input
                 value={form[key]}
                 onChange={(event) =>
                   setForm((current) => ({ ...current, [key]: event.target.value }))
                 }
                 placeholder={placeholder}
-                className="border-white/8 bg-black/20 text-xs focus-visible:border-cyan-300/40"
+                className="border-input bg-background text-xs focus-visible:border-info/40"
               />
             </div>
           ))}
           <div className="space-y-1.5">
-            <Label className="text-[11px] text-zinc-400">
-              用户 Token
-            </Label>
+            <Label className="text-[11px] text-muted-foreground">用户 Token</Label>
             <Input
               type="password"
               value={form.userToken}
@@ -476,13 +489,11 @@ const ImSettings = ({
                 setForm((current) => ({ ...current, userToken: event.target.value }))
               }
               placeholder={config.hasUserToken ? "已保存，留空保持" : "OpenIM user token"}
-              className="border-white/8 bg-black/20 text-xs focus-visible:border-cyan-300/40"
+              className="border-input bg-background text-xs focus-visible:border-info/40"
             />
           </div>
           <div className="space-y-1.5">
-            <Label className="text-[11px] text-zinc-400">
-              Gateway 密钥
-            </Label>
+            <Label className="text-[11px] text-muted-foreground">Gateway 密钥</Label>
             <Input
               type="password"
               value={form.gatewaySecret}
@@ -490,29 +501,35 @@ const ImSettings = ({
                 setForm((current) => ({ ...current, gatewaySecret: event.target.value }))
               }
               placeholder={config.hasGatewaySecret ? "已保存，留空保持" : "桌面端发布凭据"}
-              className="border-white/8 bg-black/20 text-xs focus-visible:border-cyan-300/40"
+              className="border-input bg-background text-xs focus-visible:border-info/40"
             />
           </div>
-          <label className="sm:col-span-2 flex items-start gap-3 rounded-xl border border-white/7 bg-black/10 p-3 cursor-pointer">
+          <label className="sm:col-span-2 flex items-start gap-3 rounded-xl border border-border bg-secondary/60 p-3 cursor-pointer">
             <input
               type="checkbox"
               checked={form.hostRemoteMessages}
               onChange={(event) =>
                 setForm((current) => ({ ...current, hostRemoteMessages: event.target.checked }))
               }
-              className="mt-0.5 accent-cyan-300"
+              className="mt-0.5 accent-primary"
             />
             <span>
-              <span className="block text-xs text-zinc-300">作为这个群的 Agent Host</span>
-              <span className="mt-1 block text-[10px] leading-5 text-zinc-500">
+              <span className="block text-xs text-muted-foreground">作为这个群的 Agent Host</span>
+              <span className="mt-1 block text-[10px] leading-5 text-muted-foreground">
                 接收远端群消息并创建本机 Task。
               </span>
             </span>
           </label>
-          {error && <p className="sm:col-span-2 text-xs text-red-300">{error}</p>}
+          {error && <p className="sm:col-span-2 text-xs text-destructive">{error}</p>}
         </div>
-        <DialogFooter className="border-t border-white/7 px-5 py-4">
-          <Button variant="ghost" size="sm" type="button" onClick={onClose} className="text-xs text-zinc-400 hover:text-white">
+        <DialogFooter className="border-t border-border px-5 py-4">
+          <Button
+            variant="ghost"
+            size="sm"
+            type="button"
+            onClick={onClose}
+            className="text-xs text-muted-foreground hover:text-foreground"
+          >
             取消
           </Button>
           <Button
@@ -520,7 +537,7 @@ const ImSettings = ({
             size="sm"
             disabled={saving}
             onClick={() => void save()}
-            className="bg-cyan-400 text-xs font-semibold text-cyan-950 hover:bg-cyan-300 disabled:opacity-50"
+            className="text-xs font-semibold disabled:opacity-50"
           >
             {saving ? (
               <LoaderCircleIcon className="size-3.5 animate-spin" />
@@ -693,10 +710,10 @@ const AgentSettings = ({
   };
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-4xl border-white/10 bg-[#11151e] p-0 text-zinc-100 shadow-2xl sm:max-w-4xl">
+      <DialogContent className="max-w-4xl border-border bg-popover p-0 text-muted-foreground shadow-[var(--shadow-down-3)] sm:max-w-4xl">
         <div className="flex h-[min(700px,90vh)] w-full overflow-hidden">
-          <aside className="flex w-56 shrink-0 flex-col border-r border-white/7 bg-black/10 p-3">
-            <div className="px-2 py-2 text-[10px] tracking-wider text-zinc-500 uppercase">
+          <aside className="flex w-56 shrink-0 flex-col border-r border-border bg-secondary/60 p-3">
+            <div className="px-2 py-2 text-[10px] tracking-wider text-muted-foreground uppercase">
               我的 Agent
             </div>
             <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
@@ -705,7 +722,7 @@ const AgentSettings = ({
                   key={agent.id}
                   type="button"
                   onClick={() => setActiveId(agent.id)}
-                  className={`flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left ${active?.id === agent.id ? "bg-white/8 text-white" : "text-zinc-500 hover:bg-white/4"}`}
+                  className={`flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left ${active?.id === agent.id ? "bg-primary text-primary-foreground shadow-[var(--shadow-down-1)]" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}
                 >
                   <span
                     className={`grid size-7 place-items-center rounded-lg border text-[10px] ${themeClasses[agent.theme].avatar}`}
@@ -726,16 +743,16 @@ const AgentSettings = ({
               variant="outline"
               size="sm"
               onClick={addAgent}
-              className="mt-2 border-dashed border-white/10 bg-transparent text-xs text-zinc-400 hover:bg-white/5 hover:text-zinc-200"
+              className="mt-2 border-dashed border-border bg-transparent text-xs text-muted-foreground hover:bg-muted/5 hover:text-muted-foreground"
             >
               <PlusIcon className="size-3" />
               创建 Agent
             </Button>
           </aside>
           <section className="flex min-w-0 flex-1 flex-col">
-            <DialogHeader className="border-b border-white/7 px-5 py-4">
+            <DialogHeader className="border-b border-border px-5 py-4">
               <DialogTitle className="text-sm font-semibold">定义 Agent 工作者</DialogTitle>
-              <DialogDescription className="text-xs text-zinc-400">
+              <DialogDescription className="text-xs text-muted-foreground">
                 {canEditActive
                   ? "这是你的 Agent，可以编辑角色、权限和公开范围。"
                   : "这是其他用户的公开 Agent，只能查看和邀请。"}
@@ -748,9 +765,9 @@ const AgentSettings = ({
                   .map((invitation) => (
                     <div
                       key={invitation.id}
-                      className="flex items-center gap-3 rounded-xl border border-amber-300/10 bg-amber-300/5 p-3"
+                      className="flex items-center gap-3 rounded-xl border border-warning/10 bg-warning/5 p-3"
                     >
-                      <span className="min-w-0 flex-1 text-xs text-zinc-400">
+                      <span className="min-w-0 flex-1 text-xs text-muted-foreground">
                         「{invitation.roomName}」申请邀请 {invitation.agentName}
                       </span>
                       <Button
@@ -758,7 +775,7 @@ const AgentSettings = ({
                         variant="ghost"
                         size="xs"
                         onClick={() => void respondInvitation(invitation.id, "reject")}
-                        className="text-zinc-500"
+                        className="text-muted-foreground"
                       >
                         拒绝
                       </Button>
@@ -766,7 +783,7 @@ const AgentSettings = ({
                         type="button"
                         size="xs"
                         onClick={() => void respondInvitation(invitation.id, "accept")}
-                        className="bg-emerald-300/15 text-emerald-200 hover:bg-emerald-300/25"
+                        className="bg-success/15 text-success hover:bg-success/25"
                       >
                         同意加入
                       </Button>
@@ -782,112 +799,121 @@ const AgentSettings = ({
                     ] as const
                   ).map(([key, label]) => (
                     <div key={key} className="space-y-1.5">
-                      <Label className="text-[11px] text-zinc-400">
-                        {label}
-                      </Label>
+                      <Label className="text-[11px] text-muted-foreground">{label}</Label>
                       <Input
                         disabled={!canEditActive || key === "id"}
                         value={active[key]}
                         onChange={(event) => update(key, event.target.value)}
-                        className="border-white/8 bg-black/20 text-xs focus-visible:border-cyan-300/40 disabled:opacity-45"
+                        className="border-input bg-background text-xs focus-visible:border-info/40 disabled:opacity-45"
                       />
                     </div>
                   ))}
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-[11px] text-zinc-400">
-                    简介
-                  </Label>
+                  <Label className="text-[11px] text-muted-foreground">简介</Label>
                   <Input
                     disabled={!canEditActive}
                     value={active.description}
                     onChange={(event) => update("description", event.target.value)}
-                    className="border-white/8 bg-black/20 text-xs focus-visible:border-cyan-300/40"
+                    className="border-input bg-background text-xs focus-visible:border-info/40"
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-[11px] text-zinc-400">
-                    角色指令
-                  </Label>
+                  <Label className="text-[11px] text-muted-foreground">角色指令</Label>
                   <Textarea
                     disabled={!canEditActive}
                     value={active.instructions}
                     onChange={(event) => update("instructions", event.target.value)}
                     rows={6}
-                    className="min-h-24 resize-none border-white/8 bg-black/20 text-xs leading-5 focus-visible:border-cyan-300/40"
+                    className="min-h-24 resize-none border-input bg-background text-xs leading-5 focus-visible:border-info/40"
                   />
                 </div>
                 <div className="grid gap-4 sm:grid-cols-3">
                   <div className="space-y-1.5">
-                    <Label className="text-[11px] text-zinc-400">可见性</Label>
-                    <select
+                    <Label className="text-[11px] text-muted-foreground">可见性</Label>
+                    <Select
                       disabled={!canEditActive}
                       value={active.visibility}
-                      onChange={(event) =>
-                        update("visibility", event.target.value as AgentDefinition["visibility"])
+                      onValueChange={(value) =>
+                        update("visibility", value as AgentDefinition["visibility"])
                       }
-                      className="w-full rounded-lg border border-white/8 bg-[#11151e] px-3 py-2 text-xs text-zinc-200 outline-none"
                     >
-                      <option value="private">私有</option>
-                      <option value="public">公开</option>
-                    </select>
+                      <SelectTrigger className="w-full text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="private">私有</SelectItem>
+                          <SelectItem value="public">公开</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-[11px] text-zinc-400">工作区权限</Label>
-                    <select
+                    <Label className="text-[11px] text-muted-foreground">工作区权限</Label>
+                    <Select
                       disabled={!canEditActive}
                       value={active.workspaceAccess}
-                      onChange={(event) =>
-                        update(
-                          "workspaceAccess",
-                          event.target.value as AgentDefinition["workspaceAccess"],
-                        )
+                      onValueChange={(value) =>
+                        update("workspaceAccess", value as AgentDefinition["workspaceAccess"])
                       }
-                      className="w-full rounded-lg border border-white/8 bg-[#11151e] px-3 py-2 text-xs text-zinc-200 outline-none"
                     >
-                      <option value="read">只读</option>
-                      <option value="write">允许写入</option>
-                    </select>
+                      <SelectTrigger className="w-full text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="read">只读</SelectItem>
+                          <SelectItem value="write">允许写入</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-[11px] text-zinc-400">运行位置</Label>
-                    <select
+                    <Label className="text-[11px] text-muted-foreground">运行位置</Label>
+                    <Select
                       disabled={!canEditActive}
                       value={active.executionLocation}
-                      onChange={(event) =>
-                        update(
-                          "executionLocation",
-                          event.target.value as AgentDefinition["executionLocation"],
-                        )
+                      onValueChange={(value) =>
+                        update("executionLocation", value as AgentDefinition["executionLocation"])
                       }
-                      className="w-full rounded-lg border border-white/8 bg-[#11151e] px-3 py-2 text-xs text-zinc-200 outline-none"
                     >
-                      <option value="local">本机</option>
-                      <option value="hosted">托管</option>
-                    </select>
+                      <SelectTrigger className="w-full text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="local">本机</SelectItem>
+                          <SelectItem value="hosted">托管</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
                 <div className="grid gap-4 sm:grid-cols-[12rem_1fr]">
                   <div className="space-y-1.5">
-                    <Label className="text-[11px] text-zinc-400">Skills 权限</Label>
-                    <select
+                    <Label className="text-[11px] text-muted-foreground">Skills 权限</Label>
+                    <Select
                       disabled={!canEditActive}
                       value={active.skillPolicy ?? "none"}
-                      onChange={(event) =>
-                        update(
-                          "skillPolicy",
-                          event.target.value as NonNullable<AgentDefinition["skillPolicy"]>,
-                        )
+                      onValueChange={(value) =>
+                        update("skillPolicy", value as NonNullable<AgentDefinition["skillPolicy"]>)
                       }
-                      className="w-full rounded-lg border border-white/8 bg-[#11151e] px-3 py-2 text-xs text-zinc-200 outline-none"
                     >
-                      <option value="none">不允许 Skill</option>
-                      <option value="allowlist">仅允许列表</option>
-                      <option value="all">允许全部</option>
-                    </select>
+                      <SelectTrigger className="w-full text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="none">不允许 Skill</SelectItem>
+                          <SelectItem value="allowlist">仅允许列表</SelectItem>
+                          <SelectItem value="all">允许全部</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-[11px] text-zinc-400">Skill 名称白名单</Label>
+                    <Label className="text-[11px] text-muted-foreground">Skill 名称白名单</Label>
                     <Input
                       disabled={!canEditActive || active.skillPolicy !== "allowlist"}
                       value={(active.skillRefs ?? []).map((skill) => skill.name).join(", ")}
@@ -902,35 +928,39 @@ const AgentSettings = ({
                         )
                       }
                       placeholder="例如：openai-docs, pdf"
-                      className="border-white/8 bg-black/20 text-xs focus-visible:border-cyan-300/40 disabled:opacity-45"
+                      className="border-input bg-background text-xs focus-visible:border-info/40 disabled:opacity-45"
                     />
                   </div>
                 </div>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-1.5">
-                    <Label className="text-[11px] text-zinc-400">头像文字</Label>
+                    <Label className="text-[11px] text-muted-foreground">头像文字</Label>
                     <Input
                       disabled={!canEditActive}
                       value={active.initials}
                       onChange={(event) => update("initials", event.target.value)}
-                      className="border-white/8 bg-black/20 text-xs focus-visible:border-cyan-300/40"
+                      className="border-input bg-background text-xs focus-visible:border-info/40"
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-[11px] text-zinc-400">颜色</Label>
-                    <select
+                    <Label className="text-[11px] text-muted-foreground">颜色</Label>
+                    <Select
                       disabled={!canEditActive}
                       value={active.theme}
-                      onChange={(event) =>
-                        update("theme", event.target.value as AgentDefinition["theme"])
-                      }
-                      className="w-full rounded-lg border border-white/8 bg-[#11151e] px-3 py-2 text-xs text-zinc-200 outline-none"
+                      onValueChange={(value) => update("theme", value as AgentDefinition["theme"])}
                     >
-                      <option value="cyan">青色</option>
-                      <option value="violet">紫色</option>
-                      <option value="emerald">绿色</option>
-                      <option value="amber">琥珀色</option>
-                    </select>
+                      <SelectTrigger className="w-full text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="cyan">青色</SelectItem>
+                          <SelectItem value="violet">紫色</SelectItem>
+                          <SelectItem value="emerald">绿色</SelectItem>
+                          <SelectItem value="amber">琥珀色</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
                 <Button
@@ -939,16 +969,22 @@ const AgentSettings = ({
                   size="sm"
                   disabled={drafts.length <= 1 || !canEditActive}
                   onClick={removeAgent}
-                  className="text-xs text-red-400 hover:bg-red-400/10 hover:text-red-300 disabled:opacity-30"
+                  className="text-xs text-destructive hover:bg-destructive/10 hover:text-destructive disabled:opacity-30"
                 >
                   <Trash2Icon className="size-3.5 mr-1" />
                   删除这个 Agent
                 </Button>
-                {error && <p className="text-xs text-red-300">{error}</p>}
+                {error && <p className="text-xs text-destructive">{error}</p>}
               </div>
             )}
-            <DialogFooter className="border-t border-white/7 px-5 py-4">
-              <Button variant="ghost" size="sm" type="button" onClick={onClose} className="text-xs text-zinc-400 hover:text-white">
+            <DialogFooter className="border-t border-border px-5 py-4">
+              <Button
+                variant="ghost"
+                size="sm"
+                type="button"
+                onClick={onClose}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
                 取消
               </Button>
               <Button
@@ -956,7 +992,7 @@ const AgentSettings = ({
                 size="sm"
                 disabled={saving}
                 onClick={() => void save()}
-                className="bg-cyan-400 text-xs font-semibold text-cyan-950 hover:bg-cyan-300 disabled:opacity-50"
+                className="text-xs font-semibold disabled:opacity-50"
               >
                 {saving ? (
                   <LoaderCircleIcon className="size-3.5 animate-spin" />
@@ -1115,11 +1151,11 @@ const ContactSettings = ({
   };
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-2xl border-white/10 bg-[#11151e] p-0 text-zinc-100 shadow-2xl sm:max-w-2xl">
+      <DialogContent className="max-w-2xl border-border bg-popover p-0 text-muted-foreground shadow-[var(--shadow-down-3)] sm:max-w-2xl">
         <div className="flex max-h-[80vh] w-full flex-col overflow-hidden">
-          <DialogHeader className="border-b border-white/7 px-5 py-4">
+          <DialogHeader className="border-b border-border px-5 py-4">
             <DialogTitle className="text-sm font-semibold">管理好友</DialogTitle>
-            <DialogDescription className="text-xs text-zinc-400">
+            <DialogDescription className="text-xs text-muted-foreground">
               {cloudMode
                 ? "搜索远程用户、处理好友申请，也可保留本地联系人。"
                 : "本地好友可被邀请进普通群或 Task 小群。"}
@@ -1127,21 +1163,21 @@ const ContactSettings = ({
           </DialogHeader>
           <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-5">
             {cloudMode && (
-              <div className="mb-4 space-y-3 rounded-xl border border-cyan-300/10 bg-cyan-300/[0.025] p-3">
+              <div className="mb-4 space-y-3 rounded-xl border border-info/10 bg-primary/5 p-3">
                 <div className="flex gap-2">
                   <Input
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
                     onKeyDown={(event) => event.key === "Enter" && void search()}
                     placeholder="搜索邮箱、用户名或昵称"
-                    className="border-white/8 bg-black/20 text-xs focus-visible:border-cyan-300/40"
+                    className="border-input bg-background text-xs focus-visible:border-info/40"
                   />
                   <Button
                     type="button"
                     size="icon-sm"
                     disabled={searching || query.trim().length < 2}
                     onClick={() => void search()}
-                    className="bg-cyan-300/10 text-cyan-200 hover:bg-cyan-300/20 disabled:opacity-40"
+                    className="bg-info/10 text-info hover:bg-info/20 disabled:opacity-40"
                   >
                     {searching ? (
                       <LoaderCircleIcon className="size-3.5 animate-spin" />
@@ -1153,22 +1189,24 @@ const ContactSettings = ({
                 {results.map((result) => (
                   <div
                     key={result.id}
-                    className="flex items-center gap-3 rounded-lg bg-black/15 px-3 py-2"
+                    className="flex items-center gap-3 rounded-lg bg-secondary/80 px-3 py-2"
                   >
-                    <span className="grid size-7 place-items-center rounded-lg bg-white/7 text-[10px]">
+                    <span className="grid size-7 place-items-center rounded-lg bg-muted/7 text-[10px]">
                       {result.displayName.slice(0, 2)}
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-xs text-zinc-300">
+                      <span className="block truncate text-xs text-muted-foreground">
                         {result.displayName}
                       </span>
-                      <span className="block text-[9px] text-zinc-500">@{result.handle}</span>
+                      <span className="block text-[9px] text-muted-foreground">
+                        @{result.handle}
+                      </span>
                     </span>
                     <Button
                       type="button"
                       size="xs"
                       onClick={() => void requestFriend(result.id)}
-                      className="bg-cyan-300/10 text-cyan-200 hover:bg-cyan-300/20"
+                      className="bg-info/10 text-info hover:bg-info/20"
                     >
                       添加
                     </Button>
@@ -1181,17 +1219,17 @@ const ContactSettings = ({
                   .map((request) => (
                     <div
                       key={request.id}
-                      className="flex items-center gap-3 rounded-lg border border-amber-300/10 bg-amber-300/5 px-3 py-2"
+                      className="flex items-center gap-3 rounded-lg border border-warning/10 bg-warning/5 px-3 py-2"
                     >
-                      <span className="min-w-0 flex-1 text-xs text-zinc-300">
+                      <span className="min-w-0 flex-1 text-xs text-muted-foreground">
                         {request.senderName}{" "}
-                        <span className="text-zinc-500">@{request.senderHandle}</span>
+                        <span className="text-muted-foreground">@{request.senderHandle}</span>
                       </span>
                       <Button
                         type="button"
                         size="xs"
                         onClick={() => void acceptRequest(request.id)}
-                        className="bg-emerald-300/15 text-emerald-200 hover:bg-emerald-300/25"
+                        className="bg-success/15 text-success hover:bg-success/25"
                       >
                         接受申请
                       </Button>
@@ -1205,22 +1243,22 @@ const ContactSettings = ({
               return (
                 <div
                   key={human.id}
-                  className="grid grid-cols-[2rem_1fr_1fr_auto] items-center gap-3 rounded-xl border border-white/7 bg-black/10 p-3"
+                  className="grid grid-cols-[2rem_1fr_1fr_auto] items-center gap-3 rounded-xl border border-border bg-secondary/60 p-3"
                 >
-                  <span className="grid size-8 place-items-center rounded-lg bg-white/7 text-xs">
+                  <span className="grid size-8 place-items-center rounded-lg bg-muted/7 text-xs">
                     {human.initials}
                   </span>
                   <Input
                     disabled={owner || remote}
                     value={human.name}
                     onChange={(event) => update(human.id, { name: event.target.value })}
-                    className="border-white/7 bg-black/20 text-xs focus-visible:border-cyan-300/40 disabled:opacity-60"
+                    className="border-border bg-background text-xs focus-visible:border-info/40 disabled:opacity-60"
                   />
                   <Input
                     disabled={owner || remote}
                     value={human.title}
                     onChange={(event) => update(human.id, { title: event.target.value })}
-                    className="border-white/7 bg-black/20 text-xs focus-visible:border-cyan-300/40 disabled:opacity-60"
+                    className="border-border bg-background text-xs focus-visible:border-info/40 disabled:opacity-60"
                   />
                   <Button
                     type="button"
@@ -1228,7 +1266,7 @@ const ContactSettings = ({
                     size="icon-xs"
                     disabled={owner}
                     onClick={() => void remove(human)}
-                    className="text-red-400 hover:bg-red-400/10 hover:text-red-300 disabled:opacity-20"
+                    className="text-destructive hover:bg-destructive/10 hover:text-destructive disabled:opacity-20"
                     title={owner ? "不能删除本机用户" : "删除好友"}
                   >
                     <Trash2Icon className="size-3.5" />
@@ -1241,15 +1279,21 @@ const ContactSettings = ({
               variant="outline"
               size="sm"
               onClick={add}
-              className="w-full border-dashed border-white/10 bg-transparent text-xs text-zinc-400 hover:bg-white/5 hover:text-zinc-200"
+              className="w-full border-dashed border-border bg-transparent text-xs text-muted-foreground hover:bg-muted/5 hover:text-muted-foreground"
             >
               <PlusIcon className="size-3 mr-1" />
               添加好友
             </Button>
-            {error && <p className="text-xs text-red-300">{error}</p>}
+            {error && <p className="text-xs text-destructive">{error}</p>}
           </div>
-          <DialogFooter className="border-t border-white/7 px-5 py-4">
-            <Button variant="ghost" size="sm" type="button" onClick={onClose} className="text-xs text-zinc-400 hover:text-white">
+          <DialogFooter className="border-t border-border px-5 py-4">
+            <Button
+              variant="ghost"
+              size="sm"
+              type="button"
+              onClick={onClose}
+              className="text-xs text-muted-foreground hover:text-foreground"
+            >
               取消
             </Button>
             <Button
@@ -1257,7 +1301,7 @@ const ContactSettings = ({
               size="sm"
               disabled={saving}
               onClick={() => void save()}
-              className="bg-cyan-400 text-xs font-semibold text-cyan-950 hover:bg-cyan-300 disabled:opacity-50"
+              className="text-xs font-semibold disabled:opacity-50"
             >
               保存好友
             </Button>
@@ -1409,25 +1453,27 @@ const RoomDialog = ({
   };
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-lg border-white/10 bg-[#11151e] p-0 text-zinc-100 shadow-2xl sm:max-w-lg">
-        <DialogHeader className="border-b border-white/7 px-5 py-4">
-          <DialogTitle className="text-sm font-semibold">{room ? "管理群组" : "新建群组"}</DialogTitle>
-          <DialogDescription className="text-xs text-zinc-400">
+      <DialogContent className="max-w-lg border-border bg-popover p-0 text-muted-foreground shadow-[var(--shadow-down-3)] sm:max-w-lg">
+        <DialogHeader className="border-b border-border px-5 py-4">
+          <DialogTitle className="text-sm font-semibold">
+            {room ? "管理群组" : "新建群组"}
+          </DialogTitle>
+          <DialogDescription className="text-xs text-muted-foreground">
             从通讯录邀请好友和 Agent。
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 p-5">
           <div className="space-y-1.5">
-            <Label className="text-[11px] text-zinc-400">群名称</Label>
+            <Label className="text-[11px] text-muted-foreground">群名称</Label>
             <Input
               autoFocus
               value={name}
               onChange={(event) => setName(event.target.value)}
-              className="border-white/8 bg-black/20 text-sm focus-visible:border-cyan-300/40"
+              className="border-input bg-background text-sm focus-visible:border-info/40"
             />
           </div>
           <div>
-            <div className="mb-2 text-[11px] text-zinc-400">Agent 成员</div>
+            <div className="mb-2 text-[11px] text-muted-foreground">Agent 成员</div>
             <div className="grid gap-2 sm:grid-cols-2">
               {agents.map((agent) => {
                 const checked = selectedAgents.includes(agent.id);
@@ -1440,7 +1486,7 @@ const RoomDialog = ({
                         checked ? current.filter((id) => id !== agent.id) : [...current, agent.id],
                       )
                     }
-                    className={`flex items-center gap-3 rounded-xl border p-3 text-left transition ${checked ? "border-cyan-300/20 bg-cyan-300/7" : "border-white/7 bg-black/10 hover:border-white/15"}`}
+                    className={`flex items-center gap-3 rounded-xl border p-3 text-left transition ${checked ? "border-primary/30 bg-primary/10" : "border-border bg-secondary/60 hover:border-primary/30"}`}
                   >
                     <span
                       className={`grid size-8 place-items-center rounded-lg border text-xs ${themeClasses[agent.theme].avatar}`}
@@ -1448,20 +1494,22 @@ const RoomDialog = ({
                       {agent.initials}
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-xs text-zinc-200">{agent.name}</span>
-                      <span className="mt-0.5 block text-[9px] text-zinc-500">
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {agent.name}
+                      </span>
+                      <span className="mt-0.5 block text-[9px] text-muted-foreground">
                         {agent.visibility === "public" ? "公开" : "私有"} ·{" "}
                         {agent.workspaceAccess === "write" ? "可写" : "只读"}
                       </span>
                     </span>
-                    {checked && <CheckIcon className="size-3.5 text-cyan-300" />}
+                    {checked && <CheckIcon className="size-3.5 text-info" />}
                   </button>
                 );
               })}
             </div>
           </div>
           <div>
-            <div className="mb-2 text-[11px] text-zinc-400">好友成员</div>
+            <div className="mb-2 text-[11px] text-muted-foreground">好友成员</div>
             <div className="flex flex-wrap gap-2">
               {humans.map((human) => {
                 const checked = selectedHumans.includes(human.id);
@@ -1476,7 +1524,7 @@ const RoomDialog = ({
                         checked ? current.filter((id) => id !== human.id) : [...current, human.id],
                       )
                     }
-                    className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition ${checked ? "border-emerald-300/20 bg-emerald-300/10 text-emerald-200" : "border-white/7 text-zinc-400 hover:border-white/15"}`}
+                    className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition ${checked ? "border-success/20 bg-success/10 text-success" : "border-border text-muted-foreground hover:border-primary/30"}`}
                   >
                     <span>{human.initials}</span>
                     {human.name}
@@ -1486,10 +1534,16 @@ const RoomDialog = ({
               })}
             </div>
           </div>
-          {error && <p className="text-xs text-red-300">{error}</p>}
+          {error && <p className="text-xs text-destructive">{error}</p>}
         </div>
-        <DialogFooter className="border-t border-white/7 px-5 py-4">
-          <Button variant="ghost" size="sm" type="button" onClick={onClose} className="text-xs text-zinc-400 hover:text-white">
+        <DialogFooter className="border-t border-border px-5 py-4">
+          <Button
+            variant="ghost"
+            size="sm"
+            type="button"
+            onClick={onClose}
+            className="text-xs text-muted-foreground hover:text-foreground"
+          >
             取消
           </Button>
           <Button
@@ -1497,7 +1551,7 @@ const RoomDialog = ({
             size="sm"
             disabled={saving || !name.trim()}
             onClick={() => void save()}
-            className="bg-cyan-400 text-xs font-semibold text-cyan-950 hover:bg-cyan-300 disabled:opacity-50"
+            className="text-xs font-semibold disabled:opacity-50"
           >
             {room ? "保存群组" : "创建群组"}
           </Button>
@@ -1523,32 +1577,32 @@ const ContactsView = ({
   const AgentRow = ({ agent }: { agent: AgentDefinition }) => {
     const owned = agent.ownerId === "local_user";
     return (
-      <div className="group flex items-center justify-between gap-4 border-b border-[#E9EAEC] px-5 py-4 transition-colors hover:bg-[#F7F8F9] last:border-b-0">
+      <div className="group flex items-center justify-between gap-4 border-b border-border px-5 py-4 transition-colors hover:bg-muted last:border-b-0">
         <div className="flex min-w-0 flex-1 items-start gap-4">
-          <div className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-[6px] border border-[#E9EAEC] bg-white font-mono text-[13px] font-medium text-zinc-600 shadow-sm">
+          <div className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-[6px] border border-border bg-muted font-mono text-[13px] font-medium text-foreground shadow-sm">
             {agent.initials}
           </div>
 
           <div className="min-w-0 flex-1 space-y-1">
             <div className="flex items-baseline gap-2.5">
-              <span className="truncate text-[14px] font-medium text-zinc-900">
-                {agent.name}
-              </span>
-              <span className="font-mono text-[12px] text-zinc-500">
-                {agent.mention}
-              </span>
+              <span className="truncate text-[14px] font-medium text-foreground">{agent.name}</span>
+              <span className="font-mono text-[12px] text-muted-foreground">{agent.mention}</span>
             </div>
 
-            <p className="line-clamp-1 text-[13px] text-zinc-600">
+            <p className="line-clamp-1 text-[13px] text-foreground">
               {agent.description || "暂无描述"}
             </p>
 
-            <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-zinc-500">
-              <span className="px-1.5 py-0.5 rounded-[4px] bg-zinc-100 text-zinc-600 font-medium">{agent.title}</span>
+            <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-muted-foreground">
+              <span className="px-1.5 py-0.5 rounded-[4px] bg-muted text-foreground font-medium">
+                {agent.title}
+              </span>
               <span>·</span>
               <span>{agent.executionLocation === "local" ? "local" : "cloud"}</span>
               <span>·</span>
-              <span className={agent.workspaceAccess === "write" ? "text-amber-600/80" : ""}>{agent.workspaceAccess === "write" ? "workspace:rw" : "workspace:ro"}</span>
+              <span className={agent.workspaceAccess === "write" ? "text-warning/80" : ""}>
+                {agent.workspaceAccess === "write" ? "workspace:rw" : "workspace:ro"}
+              </span>
               {!owned && (
                 <>
                   <span>·</span>
@@ -1565,7 +1619,7 @@ const ContactsView = ({
             variant="outline"
             size="xs"
             onClick={() => onOpenDirect(agent.id)}
-            className="h-8 gap-1.5 rounded-[6px] border-[#E9EAEC] bg-white px-3 text-[12px] text-zinc-700 shadow-sm hover:bg-zinc-50 hover:text-zinc-900"
+            className="h-8 gap-1.5 rounded-[6px] border-border bg-muted px-3 text-[12px] text-foreground shadow-sm hover:bg-muted hover:text-foreground"
           >
             <MessageSquareMoreIcon className="size-3.5" />
             私聊
@@ -1579,7 +1633,7 @@ const ContactsView = ({
                     type="button"
                     variant="ghost"
                     size="icon-xs"
-                    className="size-8 rounded-[6px] text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
+                    className="size-8 rounded-[6px] text-muted-foreground hover:bg-muted hover:text-foreground"
                   >
                     <MoreHorizontalIcon className="size-4" />
                   </Button>
@@ -1603,23 +1657,19 @@ const ContactsView = ({
 
   const HumanRow = ({ human }: { human: HumanContact }) => {
     return (
-      <div className="group flex items-center justify-between gap-4 border-b border-[#E9EAEC] px-5 py-4 transition-colors hover:bg-[#F7F8F9] last:border-b-0">
+      <div className="group flex items-center justify-between gap-4 border-b border-border px-5 py-4 transition-colors hover:bg-muted last:border-b-0">
         <div className="flex min-w-0 flex-1 items-center gap-4">
-          <div className="grid size-9 shrink-0 place-items-center rounded-[6px] border border-[#E9EAEC] bg-white font-mono text-[13px] font-medium text-zinc-600 shadow-sm">
+          <div className="grid size-9 shrink-0 place-items-center rounded-[6px] border border-border bg-muted font-mono text-[13px] font-medium text-foreground shadow-sm">
             {human.initials}
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2.5">
-              <span className="truncate text-[14px] font-medium text-zinc-900">
-                {human.name}
-              </span>
+              <span className="truncate text-[14px] font-medium text-foreground">{human.name}</span>
               <span
-                className={`size-2 rounded-full shadow-sm ${human.status === "online" ? "bg-emerald-500" : "bg-zinc-300"}`}
+                className={`size-2 rounded-full shadow-sm ${human.status === "online" ? "bg-success" : "bg-muted"}`}
               />
             </div>
-            <div className="mt-1 font-mono text-[11px] text-zinc-500">
-              {human.title}
-            </div>
+            <div className="mt-1 font-mono text-[11px] text-muted-foreground">{human.title}</div>
           </div>
         </div>
         {human.id !== "local_user" && (
@@ -1628,7 +1678,7 @@ const ContactsView = ({
             variant="outline"
             size="xs"
             onClick={() => onOpenDirect(human.id)}
-            className="h-8 gap-1.5 rounded-[6px] border-[#E9EAEC] bg-white px-3 text-[12px] text-zinc-700 shadow-sm hover:bg-zinc-50 hover:text-zinc-900"
+            className="h-8 gap-1.5 rounded-[6px] border-border bg-muted px-3 text-[12px] text-foreground shadow-sm hover:bg-muted hover:text-foreground"
           >
             <MessageSquareMoreIcon className="size-3.5" />
             私聊
@@ -1639,10 +1689,12 @@ const ContactsView = ({
   };
 
   return (
-    <div className="h-full overflow-y-auto bg-[#FAFAFA]">
-      <header className="electron-drag sticky top-0 z-10 flex h-12 items-center justify-between border-b border-border bg-card px-5">
+    <div className="h-full overflow-y-auto bg-secondary/60">
+      <header className="app-titlebar electron-drag sticky top-0 z-10 flex h-12 items-center justify-between border-b border-border px-5">
         <div className="flex items-center gap-3">
-          <h1 className="text-xs font-semibold uppercase tracking-wider text-foreground">Directory</h1>
+          <h1 className="text-xs font-semibold uppercase tracking-wider text-foreground">
+            Directory
+          </h1>
           <span className="rounded-[6px] border border-border bg-muted/60 px-1.5 py-0.2 font-mono text-[10px] text-muted-foreground">
             {state.humans.length + state.agents.length} principals
           </span>
@@ -1674,11 +1726,15 @@ const ContactsView = ({
         {/* Humans Section */}
         <section>
           <div className="mb-3 flex items-center gap-2 px-1">
-            <UsersIcon className="size-3.5 text-zinc-400" />
-            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Humans</h2>
-            <span className="font-mono text-[10px] text-zinc-400">({state.humans.length})</span>
+            <UsersIcon className="size-3.5 text-muted-foreground" />
+            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Humans
+            </h2>
+            <span className="font-mono text-[10px] text-muted-foreground">
+              ({state.humans.length})
+            </span>
           </div>
-          <div className="overflow-hidden rounded-[8px] border border-[#E9EAEC] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
+          <div className="overflow-hidden rounded-xl border border-border bg-card shadow-[var(--shadow-down-1)]">
             {state.humans.map((human) => (
               <HumanRow key={human.id} human={human} />
             ))}
@@ -1688,11 +1744,15 @@ const ContactsView = ({
         {/* Private Agents Section */}
         <section>
           <div className="mb-3 flex items-center gap-2 px-1">
-            <LockIcon className="size-3.5 text-zinc-400" />
-            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Private Agents</h2>
-            <span className="font-mono text-[10px] text-zinc-400">({privateAgents.length})</span>
+            <LockIcon className="size-3.5 text-muted-foreground" />
+            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Private Agents
+            </h2>
+            <span className="font-mono text-[10px] text-muted-foreground">
+              ({privateAgents.length})
+            </span>
           </div>
-          <div className="overflow-hidden rounded-[8px] border border-[#E9EAEC] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
+          <div className="overflow-hidden rounded-xl border border-border bg-card shadow-[var(--shadow-down-1)]">
             {privateAgents.length > 0 ? (
               privateAgents.map((agent) => <AgentRow key={agent.id} agent={agent} />)
             ) : (
@@ -1705,10 +1765,14 @@ const ContactsView = ({
         <section>
           <div className="mb-3 flex items-center gap-2 px-1">
             <Globe2Icon className="size-3.5 text-muted-foreground" />
-            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Public Agents</h2>
-            <span className="font-mono text-[10px] text-zinc-400">({publicAgents.length})</span>
+            <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Public Agents
+            </h2>
+            <span className="font-mono text-[10px] text-muted-foreground">
+              ({publicAgents.length})
+            </span>
           </div>
-          <div className="overflow-hidden rounded-[8px] border border-[#E9EAEC] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
+          <div className="overflow-hidden rounded-xl border border-border bg-card shadow-[var(--shadow-down-1)]">
             {publicAgents.length > 0 ? (
               publicAgents.map((agent) => <AgentRow key={agent.id} agent={agent} />)
             ) : (
@@ -1743,29 +1807,31 @@ const TaskBoard = ({
   const sorted = [...state.tasks].sort((a, b) => b.updatedAt - a.updatedAt);
   return (
     <div className="flex h-full min-h-0 flex-col font-sans">
-      <header className="electron-drag flex h-12 shrink-0 items-center justify-between border-b border-border bg-background px-4">
+      <header className="app-titlebar electron-drag flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
         <div className="flex items-center gap-3">
           <h1 className="text-xs font-semibold tracking-tight text-foreground">Task 看板</h1>
-          <span className="font-mono text-[10px] text-zinc-400">
+          <span className="font-mono text-[10px] text-muted-foreground">
             {state.tasks.length} tasks · active sync
           </span>
         </div>
-        <div className="electron-no-drag flex items-center gap-2 rounded border border-border bg-muted/40 px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
-          <span className="size-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400" />
+        <div className="electron-no-drag flex items-center gap-2 rounded-md border border-border bg-card px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
+          <span className="size-1.5 rounded-full bg-success " />
           live context subscribed
         </div>
       </header>
-      <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden p-3">
+      <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden bg-secondary/60 p-4">
         <div className="grid h-full min-w-[900px] grid-cols-4 gap-3">
           {columns.map((column) => {
             const tasks = sorted.filter((task) => column.statuses.includes(task.status));
             return (
               <section
                 key={column.title}
-                className="flex min-h-0 flex-col rounded border border-border bg-muted/20"
+                className="flex min-h-0 flex-col rounded-xl border border-border bg-card shadow-[var(--shadow-down-1)]"
               >
-                <header className="flex items-center justify-between border-b border-border bg-muted/40 px-3 py-2">
-                  <h2 className="font-mono text-[11px] font-semibold text-foreground">{column.title}</h2>
+                <header className="flex items-center justify-between border-b border-border bg-secondary/70 px-3 py-2">
+                  <h2 className="font-mono text-[11px] font-semibold text-foreground">
+                    {column.title}
+                  </h2>
                   <span className="rounded border border-border bg-background px-1.5 py-0.2 font-mono text-[10px] text-muted-foreground">
                     {tasks.length}
                   </span>
@@ -1787,7 +1853,7 @@ const TaskBoard = ({
                     return (
                       <div
                         key={task.id}
-                        className="rounded border border-border bg-card p-2.5 shadow-2xs transition hover:border-foreground/20"
+                        className="rounded-lg border border-border bg-card p-2.5 shadow-[var(--shadow-down-1)] transition hover:border-primary/40 hover:bg-accent/40"
                       >
                         <button
                           type="button"
@@ -1802,7 +1868,9 @@ const TaskBoard = ({
                               </span>
                             )}
                           </div>
-                          <h3 className="mt-2 text-xs font-medium leading-snug text-foreground">{task.title}</h3>
+                          <h3 className="mt-2 text-xs font-medium leading-snug text-foreground">
+                            {task.title}
+                          </h3>
                           <div className="mt-1.5 flex items-center justify-between font-mono text-[10px] text-muted-foreground">
                             <span className="truncate">#{room?.name ?? "main"}</span>
                             <span>{dateLabel(task.updatedAt)}</span>
@@ -2429,7 +2497,7 @@ export const TeamChat = ({
   if (!state)
     return (
       <div className="grid h-full place-items-center">
-        <LoaderCircleIcon className="size-6 animate-spin text-cyan-300" />
+        <LoaderCircleIcon className="size-6 animate-spin text-info" />
       </div>
     );
   if (view === "contacts")
@@ -2485,10 +2553,12 @@ export const TeamChat = ({
   });
   return (
     <div className="relative flex h-full min-h-0">
-      <aside className="flex w-56 shrink-0 flex-col border-r border-border bg-card">
-        <header className="electron-drag flex h-12 items-center justify-between border-b border-border px-3">
+      <aside className="flex w-56 shrink-0 flex-col border-r border-border bg-secondary/60">
+        <header className="app-titlebar electron-drag flex h-12 items-center justify-between border-b border-border px-3">
           <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wider text-foreground">Threads</span>
+            <span className="text-xs font-semibold uppercase tracking-wider text-foreground">
+              Threads
+            </span>
             <span className="rounded border border-border bg-muted/60 px-1 py-0.2 text-[10px] font-mono text-muted-foreground">
               {conversations.length}
             </span>
@@ -2522,15 +2592,15 @@ export const TeamChat = ({
                   onClick={() => setSelectedRoomId(item.roomId)}
                   className={`flex w-full items-center gap-2.5 rounded px-2 py-2 text-left transition ${
                     isSelected
-                      ? "bg-accent text-accent-foreground ring-1 ring-border font-medium"
-                      : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                      ? "bg-primary text-primary-foreground shadow-[var(--shadow-down-1)] font-medium"
+                      : "text-muted-foreground hover:bg-accent hover:text-foreground"
                   }`}
                 >
                   <span
                     className={`grid size-6 shrink-0 place-items-center rounded border text-xs ${
                       isSelected
-                        ? "border-border bg-background text-foreground"
-                        : "border-border/60 bg-muted/40 text-muted-foreground"
+                        ? "border-primary-foreground/30 bg-primary-foreground/10 text-primary-foreground"
+                        : "border-border bg-card text-muted-foreground"
                     }`}
                   >
                     {item.type === "task" ? (
@@ -2546,8 +2616,14 @@ export const TeamChat = ({
                     )}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs text-foreground">{item.name}</span>
-                    <span className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">
+                    <span
+                      className={`block truncate text-xs ${isSelected ? "text-primary-foreground" : "text-foreground"}`}
+                    >
+                      {item.name}
+                    </span>
+                    <span
+                      className={`mt-0.5 block truncate font-mono text-[10px] ${isSelected ? "text-primary-foreground/70" : "text-muted-foreground"}`}
+                    >
                       {item.type === "task" && itemTask ? (
                         <StatusPill status={itemTask.status} />
                       ) : item.type === "direct" ? (
@@ -2562,7 +2638,9 @@ export const TeamChat = ({
                     </span>
                   </span>
                   {item.messages.length > 0 && (
-                    <span className="shrink-0 font-mono text-[9px] text-muted-foreground/70">
+                    <span
+                      className={`shrink-0 font-mono text-[9px] ${isSelected ? "text-primary-foreground/70" : "text-muted-foreground/70"}`}
+                    >
                       {timeLabel(item.messages.at(-1)?.updatedAt ?? item.createdAt)}
                     </span>
                   )}
@@ -2574,7 +2652,7 @@ export const TeamChat = ({
       </aside>
 
       <section className="flex min-w-0 flex-1 flex-col">
-        <header className="electron-drag flex h-12 shrink-0 items-center justify-between border-b border-border bg-card px-4">
+        <header className="app-titlebar electron-drag flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
           <div className="flex min-w-0 items-center gap-2.5">
             {room?.type === "task" && (
               <Button
@@ -2609,7 +2687,9 @@ export const TeamChat = ({
                 </span>
               )}
               {room?.type === "task" && sourceRoom && (
-                <span className="font-mono text-[10px] text-zinc-400">#{sourceRoom.name}</span>
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  #{sourceRoom.name}
+                </span>
               )}
             </div>
           </div>
@@ -2657,9 +2737,7 @@ export const TeamChat = ({
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="truncate font-medium text-foreground">{visibleLoop.title}</span>
-                <span
-                  className="rounded border border-border bg-card px-1.5 py-0.2 font-mono text-[10px] text-foreground"
-                >
+                <span className="rounded border border-border bg-card px-1.5 py-0.2 font-mono text-[10px] text-foreground">
                   {visibleLoop.status === "running"
                     ? "RUNNING"
                     : visibleLoop.status === "paused"
@@ -2670,7 +2748,7 @@ export const TeamChat = ({
                           ? "CANCELLED"
                           : "FAILED"}
                 </span>
-                <span className="font-mono text-[10px] text-zinc-400">
+                <span className="font-mono text-[10px] text-muted-foreground">
                   turns: {visibleLoop.completedTurns}
                   {visibleLoop.targetTurns ? `/${visibleLoop.targetTurns}` : ""}
                 </span>
@@ -2729,7 +2807,9 @@ export const TeamChat = ({
                 <div className="flex flex-wrap items-center gap-2">
                   <StatusPill status={task.status} />
                   <span className="truncate text-xs font-medium text-foreground">{task.title}</span>
-                  <span className="font-mono text-[10px] text-zinc-400">v{task.revision}</span>
+                  <span className="font-mono text-[10px] text-muted-foreground">
+                    v{task.revision}
+                  </span>
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">{task.objective}</p>
                 {!!task.plan.length && (
@@ -2817,7 +2897,7 @@ export const TeamChat = ({
                         ? `开始和 ${room.name} 私聊`
                         : "从一条群消息开始"}
                   </h2>
-                  <p className="mt-2 text-sm leading-6 text-zinc-600">
+                  <p className="mt-2 text-sm leading-6 text-foreground">
                     {room?.type === "task"
                       ? "在这里继续讨论细节；Agent 会持续看到来源群的新消息，审核通过前不会执行。"
                       : room?.type === "direct"
@@ -2846,7 +2926,7 @@ export const TeamChat = ({
             <div ref={endRef} />
           </div>
         </div>
-        <footer className="shrink-0 border-t border-border bg-background/85 px-6 py-4 backdrop-blur-xl">
+        <footer className="app-titlebar shrink-0 border-t border-border px-6 py-4">
           <div className="mx-auto max-w-4xl">
             {room?.type === "direct" ? (
               <div className="mb-2 text-[10px] text-muted-foreground">
@@ -2871,7 +2951,7 @@ export const TeamChat = ({
                     onClick={() => setAgentAction("chat")}
                     className={`rounded-md px-2.5 py-1 text-[10px] transition ${
                       agentAction === "chat"
-                        ? "bg-background text-foreground shadow-xs"
+                        ? "bg-card text-foreground shadow-[var(--shadow-down-1)]"
                         : "text-muted-foreground hover:text-foreground"
                     }`}
                   >
@@ -2882,7 +2962,7 @@ export const TeamChat = ({
                     onClick={() => setAgentAction("propose-task")}
                     className={`rounded-md px-2.5 py-1 text-[10px] transition ${
                       agentAction === "propose-task"
-                        ? "bg-violet-500/15 text-violet-600 dark:text-violet-300 shadow-xs"
+                        ? "bg-primary text-primary-foreground shadow-[var(--shadow-down-1)]"
                         : "text-muted-foreground hover:text-foreground"
                     }`}
                   >
@@ -2891,9 +2971,9 @@ export const TeamChat = ({
                 </div>
               </div>
             )}
-            <div className="relative rounded-2xl border border-border bg-card p-2 shadow-lg shadow-black/5 focus-within:border-primary/50">
+            <div className="relative rounded-xl border border-input bg-card p-2 shadow-[var(--shadow-down-1)] transition-colors focus-within:border-primary focus-within:ring-3 focus-within:ring-primary/15">
               {mention && (
-                <div className="absolute bottom-full left-0 z-30 mb-2 w-72 overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-2xl">
+                <div className="absolute bottom-full left-0 z-30 mb-2 w-72 overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-[var(--shadow-down-3)]">
                   <div className="px-2 py-1.5 text-[10px] font-medium tracking-[0.12em] text-muted-foreground uppercase">
                     {mention.query ? `搜索 “${mention.query}”` : "选择要提及的 Agent"}
                   </div>
@@ -2917,7 +2997,9 @@ export const TeamChat = ({
                         <span className="min-w-0 flex-1">
                           <span className="flex items-center gap-2 text-xs font-medium text-foreground">
                             {agent.name}
-                            <span className="text-[10px] text-muted-foreground">{agent.mention}</span>
+                            <span className="text-[10px] text-muted-foreground">
+                              {agent.mention}
+                            </span>
                           </span>
                           <span className="block truncate text-[10px] text-muted-foreground">
                             {agent.title} · {agent.description}
@@ -3037,11 +3119,17 @@ export const TeamChat = ({
 
       <aside className="hidden w-64 shrink-0 border-l border-border bg-card xl:flex xl:flex-col">
         <div className="flex h-12 items-center border-b border-border px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          {room?.type === "task" ? "Context Feed" : room?.type === "direct" ? "Contact Info" : "Room Inspector"}
+          {room?.type === "task"
+            ? "Context Feed"
+            : room?.type === "direct"
+              ? "Contact Info"
+              : "Room Inspector"}
         </div>
         {room?.type === "group" ? (
           <div className="min-h-0 flex-1 overflow-y-auto p-2">
-            <div className="mb-1.5 px-2 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Agents</div>
+            <div className="mb-1.5 px-2 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+              Agents
+            </div>
             <div className="space-y-0.5">
               {roomAgents.map((agent) => {
                 const active = state.tasks.some(
@@ -3049,20 +3137,19 @@ export const TeamChat = ({
                     candidate.assigneeIds.includes(agent.id) && candidate.status === "running",
                 );
                 return (
-                  <div key={agent.id} className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-muted/40">
-                    <div
-                      className="grid size-6 place-items-center rounded border border-border bg-muted/50 font-mono text-[10px] font-medium text-foreground"
-                    >
+                  <div
+                    key={agent.id}
+                    className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-muted/40"
+                  >
+                    <div className="grid size-6 place-items-center rounded border border-border bg-muted/50 font-mono text-[10px] font-medium text-foreground">
                       {agent.initials}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-xs font-medium text-foreground">{agent.name}</div>
+                      <div className="truncate text-xs font-medium text-foreground">
+                        {agent.name}
+                      </div>
                       <div className="font-mono text-[10px] text-muted-foreground">
-                        {active
-                          ? "ACTIVE"
-                          : agent.visibility === "public"
-                            ? "PUB"
-                            : "PRIV"}
+                        {active ? "ACTIVE" : agent.visibility === "public" ? "PUB" : "PRIV"}
                       </div>
                     </div>
                     <span
@@ -3072,25 +3159,34 @@ export const TeamChat = ({
                 );
               })}
             </div>
-            <div className="mt-3 mb-1.5 px-2 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Members</div>
+            <div className="mt-3 mb-1.5 px-2 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+              Members
+            </div>
             <div className="space-y-0.5">
               {roomHumans.map((human) => (
-                <div key={human.id} className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-muted/40">
+                <div
+                  key={human.id}
+                  className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-muted/40"
+                >
                   <div className="grid size-6 place-items-center rounded border border-border bg-muted/50 font-mono text-[10px] text-foreground">
                     {human.initials}
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-xs font-medium text-foreground">{human.name}</div>
-                    <div className="truncate font-mono text-[10px] text-muted-foreground">{human.title}</div>
+                    <div className="truncate font-mono text-[10px] text-muted-foreground">
+                      {human.title}
+                    </div>
                   </div>
                   <span
-                    className={`size-1.5 rounded-full ${human.status === "online" ? "bg-emerald-600 dark:bg-emerald-400" : "bg-muted-foreground/40"}`}
+                    className={`size-1.5 rounded-full ${human.status === "online" ? "bg-success " : "bg-muted-foreground/40"}`}
                   />
                 </div>
               ))}
             </div>
             <div className="mt-4 mb-1.5 flex items-center justify-between px-2">
-              <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">Tasks</span>
+              <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+                Tasks
+              </span>
               <button
                 type="button"
                 onClick={() => onViewChange("tasks")}
@@ -3109,11 +3205,11 @@ export const TeamChat = ({
                 >
                   <div className="flex items-center justify-between gap-1">
                     <StatusPill status={item.status} />
-                    <span className="font-mono text-[9px] text-muted-foreground">{timeLabel(item.updatedAt)}</span>
+                    <span className="font-mono text-[9px] text-muted-foreground">
+                      {timeLabel(item.updatedAt)}
+                    </span>
                   </div>
-                  <div className="mt-1 line-clamp-2 text-xs text-foreground">
-                    {item.title}
-                  </div>
+                  <div className="mt-1 line-clamp-2 text-xs text-foreground">{item.title}</div>
                 </button>
               ))}
             </div>
@@ -3182,9 +3278,7 @@ export const TeamChat = ({
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto p-3">
             <div className="rounded border border-border bg-card p-3 text-center">
-              <div
-                className="mx-auto grid size-12 place-items-center rounded border border-border bg-muted/40 font-mono text-sm font-semibold text-foreground"
-              >
+              <div className="mx-auto grid size-12 place-items-center rounded border border-border bg-muted/40 font-mono text-sm font-semibold text-foreground">
                 {directAgent?.initials ?? directHuman?.initials ?? "?"}
               </div>
               <div className="mt-2.5 text-xs font-semibold text-foreground">
