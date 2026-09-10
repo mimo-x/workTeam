@@ -11,6 +11,7 @@ import type {
   BackendUser,
 } from "../shared/backend";
 import type {
+  AgentCapability,
   AgentDefinition,
   AgentTask,
   HumanContact,
@@ -20,6 +21,7 @@ import type {
   TeamRoomSnapshot,
   TeamWorkspaceSnapshot,
 } from "../shared/agent-team";
+import { formatErrorMessage } from "../shared/error";
 
 type StoredBackendConfig = {
   apiUrl: string;
@@ -53,6 +55,17 @@ type CloudAgent = {
   visibility: "private" | "public";
   workspaceAccess?: "read" | "write";
   executionTarget: "local" | "hosted";
+  provider?: string;
+  protocol?: string;
+  runtimeModel?: string | null;
+  runtimeEndpoint?: string | null;
+  runtimeCommand?: string | null;
+  runtimeArgs?: string[];
+  runtimeAuth?: "bearer" | "none";
+  secrets?: Record<string, string>;
+  capabilities?: AgentCapability[];
+  runtimeStatus?: "online" | "offline" | "unknown";
+  runtimeLastSeenAt?: string | null;
   skillPolicy?: "none" | "allowlist" | "all";
   skillRefs?: Array<{ name: string; path?: string }>;
   version: number;
@@ -180,10 +193,12 @@ export class BackendClient {
   private volatileRefreshToken = "";
   private user: BackendUser | null = null;
   private error: string | null = null;
+  private refreshPromise: Promise<void> | null = null;
 
   constructor(
     private readonly filePath: string,
     private readonly imDataDir: string,
+    private readonly onAgentCredential?: (agentId: string, token: string) => void,
   ) {}
 
   async getState(): Promise<BackendState> {
@@ -280,6 +295,7 @@ export class BackendClient {
   }
 
   async getImRuntimeConfig(): Promise<ImRuntimeConfig> {
+    await mkdir(this.imDataDir, { recursive: true });
     const session = await this.request<{
       apiAddr: string;
       wsAddr: string;
@@ -377,12 +393,30 @@ export class BackendClient {
       visibility: agent.visibility,
       ownerId: agent.ownerId === me.user.id ? "local_user" : agent.ownerId,
       executionLocation: agent.executionTarget,
+      source: "registry",
+      runtime: {
+        provider: agent.provider ?? "codex",
+        protocol: agent.protocol ?? "app-server",
+        target: agent.executionTarget,
+        model: agent.runtimeModel ?? undefined,
+        endpoint: agent.runtimeEndpoint ?? undefined,
+        command: agent.runtimeCommand ?? undefined,
+        args: agent.runtimeArgs ?? undefined,
+        auth: agent.runtimeAuth ?? "none",
+      },
+      capabilities: agent.capabilities ?? ["chat", "stream_progress", "read_workspace"],
+      runtimeStatus: agent.runtimeStatus ?? "unknown",
+      runtimeLastSeenAt: agent.runtimeLastSeenAt ? timestamp(agent.runtimeLastSeenAt) : undefined,
       openimUserId: agent.openimUserId,
       skillPolicy: agent.skillPolicy ?? "none",
       skillRefs: agent.skillRefs ?? [],
       version: agent.version,
       syncSource: "backend",
     }));
+    for (const agent of agentsResponse.data) {
+      const token = agent.secrets?.bearerToken ?? agent.secrets?.token;
+      if (token && agent.ownerId === me.user.id) this.onAgentCredential?.(agent.id, token);
+    }
     const humanById = new Map(humans.map((human) => [human.id, human]));
     const humanByOpenim = new Map(
       humans.flatMap((human) => (human.openimUserId ? [[human.openimUserId, human] as const] : [])),
@@ -514,7 +548,7 @@ export class BackendClient {
         syncSource: "backend",
       };
     });
-    return { workspace, agents, humans, rooms, tasks, loops: [] };
+    return { workspace, agents, sessions: [], humans, rooms, tasks, loops: [] };
   }
 
   async createRealtimeConnectionInfo() {
@@ -533,7 +567,12 @@ export class BackendClient {
 
   private async ensureAccessToken() {
     if (this.accessToken) return;
-    await this.refresh();
+    if (!this.refreshPromise) {
+      this.refreshPromise = this.refresh().finally(() => {
+        this.refreshPromise = null;
+      });
+    }
+    await this.refreshPromise;
   }
 
   private async refresh() {
@@ -551,7 +590,15 @@ export class BackendClient {
       this.user = me.user;
       this.error = null;
     } catch (error) {
-      this.error = error instanceof Error ? error.message : String(error);
+      this.error = formatErrorMessage(error);
+      if (error instanceof BackendHttpError && error.code === "INVALID_REFRESH_TOKEN") {
+        const stored = await this.read();
+        delete stored.encryptedRefreshToken;
+        this.volatileRefreshToken = "";
+        this.accessToken = "";
+        this.user = null;
+        await this.persist();
+      }
       throw error;
     }
   }

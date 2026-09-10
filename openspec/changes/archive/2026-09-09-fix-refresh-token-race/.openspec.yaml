@@ -1,0 +1,3 @@
+schema: spec-driven
+created: 2026-09-09
+goal: 并发后台请求只执行一次刷新并正确清理失效令牌

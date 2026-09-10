@@ -14,6 +14,7 @@ import type {
   CodexStatus,
   RpcRequestId,
 } from "../shared/codex";
+import { formatErrorMessage } from "../shared/error";
 
 type JsonObject = Record<string, unknown>;
 
@@ -54,7 +55,7 @@ const findCodexExecutable = () => {
   );
 };
 
-const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
+const errorMessage = (error: unknown) => formatErrorMessage(error, "Codex 运行异常。");
 
 export class CodexAppServer {
   private process: ChildProcessWithoutNullStreams | null = null;
@@ -416,8 +417,7 @@ export class CodexAppServer {
       if (!pending) return;
       this.pending.delete(id);
       if (message.error) {
-        const rpcError = message.error as { message?: string; code?: number };
-        pending.reject(new Error(rpcError.message ?? `Codex RPC 错误 ${rpcError.code ?? ""}`));
+        pending.reject(new Error(formatErrorMessage(message.error, "Codex RPC 调用失败。")));
       } else {
         pending.resolve(message.result);
       }

@@ -19,6 +19,31 @@ const agentSchema = z
     workspaceAccess: z.enum(["read", "write"]).default("read"),
     visibility: z.enum(["private", "public"]).default("private"),
     executionLocation: z.enum(["local", "hosted"]).default("local"),
+    runtime: z
+      .object({
+        provider: z.string().trim().min(1).max(64).default("codex"),
+        protocol: z.string().trim().min(1).max(64).default("app-server"),
+        target: z.enum(["local", "hosted"]).default("local"),
+        model: z.string().trim().max(256).optional(),
+        endpoint: z
+          .string()
+          .trim()
+          .url()
+          .max(2_048)
+          .refine((value) => {
+            const url = new URL(value);
+            return (
+              url.protocol === "https:" ||
+              ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+            );
+          }, "远程 Runtime endpoint 必须使用 HTTPS。")
+          .optional(),
+        command: z.string().trim().max(1_024).optional(),
+        args: z.array(z.string().max(256)).max(32).default([]),
+        auth: z.enum(["bearer", "none"]).default("none"),
+      })
+      .optional(),
+    capabilities: z.array(z.string().trim().min(1).max(80)).max(64).default([]),
   })
   .passthrough();
 
@@ -155,11 +180,20 @@ export const registerImportRoutes = (
             instructions: agent.instructions,
             secrets: {},
           });
+          const runtime = agent.runtime ?? {
+            provider: "codex",
+            protocol: "app-server",
+            target: agent.executionLocation,
+            args: [],
+            auth: "none",
+          };
           await client.query(
             `INSERT INTO agents(
              id, owner_id, openim_user_id, name, title, mention, description, visibility,
-             workspace_access, execution_target, private_config
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)`,
+             workspace_access, execution_target, provider, protocol, runtime_model,
+             runtime_endpoint, runtime_command, runtime_args, runtime_auth, capabilities,
+             private_config
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17,$18::jsonb,$19::jsonb)`,
             [
               mapped.id,
               request.user.sub,
@@ -171,6 +205,14 @@ export const registerImportRoutes = (
               agent.visibility,
               agent.workspaceAccess,
               agent.executionLocation,
+              runtime.provider,
+              runtime.protocol,
+              runtime.model ?? null,
+              runtime.endpoint ?? null,
+              runtime.command ?? null,
+              JSON.stringify(runtime.args ?? []),
+              runtime.auth ?? "none",
+              JSON.stringify(agent.capabilities),
               JSON.stringify(privateConfig),
             ],
           );

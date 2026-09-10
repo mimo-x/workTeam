@@ -46,6 +46,10 @@ const agentTeam: AgentTeamApi = {
   promoteAgents: (options) => ipcRenderer.invoke("agent-team:promote-agents", options),
   controlLoop: (options) => ipcRenderer.invoke("agent-team:control-loop", options),
   saveAgents: (options) => ipcRenderer.invoke("agent-team:save-agents", options),
+  getRuntimeCredentialStatus: (options) =>
+    ipcRenderer.invoke("agent-team:get-runtime-credential-status", options),
+  saveRuntimeCredential: (options) =>
+    ipcRenderer.invoke("agent-team:save-runtime-credential", options),
   saveHumans: (options) => ipcRenderer.invoke("agent-team:save-humans", options),
   createRoom: (options) => ipcRenderer.invoke("agent-team:create-room", options),
   updateRoom: (options) => ipcRenderer.invoke("agent-team:update-room", options),

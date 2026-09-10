@@ -2,8 +2,10 @@ import { hostname } from "node:os";
 import { isAbsolute } from "node:path";
 
 import type { BackendClient } from "./backend-client";
-import type { CodexAppServer } from "./codex-app-server";
-import type { CodexEvent } from "../shared/codex";
+import type { AgentRuntime, AgentRuntimeEvent, RuntimeSession } from "./agent-runtime";
+import type { AgentCapability } from "../shared/agent-team";
+import type { AgentRuntimeRegistry } from "./runtime-registry";
+import { formatErrorMessage } from "../shared/error";
 import type { RemoteAgentHostState } from "../shared/backend";
 
 type RemoteAgent = {
@@ -27,6 +29,14 @@ type AssignedRun = {
     workspaceAccess: "read" | "write";
     skillPolicy: "none" | "allowlist" | "all";
     skillRefs?: Array<{ name: string; path?: string }>;
+    provider?: string;
+    model?: string | null;
+    capabilities?: AgentCapability[];
+    protocol?: string;
+    runtimeEndpoint?: string;
+    runtimeCommand?: string;
+    runtimeArgs?: string[];
+    runtimeAuth?: "bearer" | "none";
     private?: { instructions?: string; secrets?: Record<string, string> };
   };
   context: Array<{
@@ -39,19 +49,11 @@ type AssignedRun = {
 
 type ActiveRun = {
   assignment: AssignedRun;
+  runtime: AgentRuntime;
   threadId: string;
   turnId: string;
   content: string;
   lastProgressAt: number;
-};
-
-const completedAgentText = (event: CodexEvent) => {
-  if (event.method !== "item/completed") return null;
-  const item = (event.params.item ?? {}) as Record<string, unknown>;
-  if (item.type !== "agentMessage") return null;
-  if (typeof item.text === "string") return item.text;
-  if (typeof item.content === "string") return item.content;
-  return null;
 };
 
 export class RemoteAgentHost {
@@ -62,8 +64,10 @@ export class RemoteAgentHost {
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private reconnectAttempt = 0;
   private deviceId: string | undefined;
-  private readonly threads = new Map<string, string>();
+  private readonly sessions = new Map<string, RuntimeSession>();
+  private readonly sessionProviders = new Map<string, string>();
   private readonly runs = new Map<string, ActiveRun>();
+  private readonly startingRuns = new Set<string>();
   private readonly turnToRun = new Map<string, string>();
   private readonly listeners = new Set<(state: RemoteAgentHostState) => void>();
   private readonly eventListeners = new Set<(event: Record<string, unknown>) => void>();
@@ -78,9 +82,9 @@ export class RemoteAgentHost {
 
   constructor(
     private readonly backend: BackendClient,
-    private readonly codex: CodexAppServer,
+    private readonly runtimeSource: AgentRuntime | AgentRuntimeRegistry,
   ) {
-    this.codex.onEvent((event) => void this.onCodexEvent(event));
+    this.runtimeSource.onEvent((event) => void this.onRuntimeEvent(event));
   }
 
   getState() {
@@ -114,8 +118,17 @@ export class RemoteAgentHost {
     this.clearReconnect();
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = null;
+    for (const run of this.runs.values()) {
+      if (run.threadId && run.turnId)
+        void run.runtime.interruptTurn(run.threadId, run.turnId).catch(() => undefined);
+    }
+    this.runs.clear();
+    this.turnToRun.clear();
     this.socket?.close(1000, "Host stopped");
     this.socket = null;
+    this.sessions.clear();
+    this.sessionProviders.clear();
+    this.startingRuns.clear();
     this.update({ status: "stopped", activeRunCount: this.runs.size, error: null });
     return this.getState();
   }
@@ -159,7 +172,7 @@ export class RemoteAgentHost {
     } catch (error) {
       this.update({
         status: "error",
-        error: error instanceof Error ? error.message : String(error),
+        error: formatErrorMessage(error),
       });
       this.scheduleReconnect();
       throw error;
@@ -188,29 +201,41 @@ export class RemoteAgentHost {
       const update = `群聊产生了新的实时上下文：\n${String(event.senderId ?? "成员")}: ${String(event.content ?? "")}`;
       for (const run of this.runs.values()) {
         if (run.assignment.taskId === taskId && run.turnId) {
-          await this.codex.steerTurn(run.threadId, run.turnId, update).catch(() => undefined);
+          await run.runtime.steerTurn(run.threadId, run.turnId, update).catch(() => undefined);
         }
       }
     }
   }
 
   private async execute(assignment: AssignedRun) {
-    if (this.runs.has(assignment.id)) return;
+    if (this.runs.has(assignment.id) || this.startingRuns.has(assignment.id)) return;
+    this.startingRuns.add(assignment.id);
     try {
+      const runtime = this.runtimeFor(assignment);
+      if ("assertCapabilities" in this.runtimeSource) {
+        this.runtimeSource.assertCapabilities(runtime, [
+          "chat",
+          ...(assignment.agent.workspaceAccess === "write" ? ["write_workspace"] : []),
+        ]);
+      }
       this.send({ type: "run.accept", runId: assignment.id, leaseToken: assignment.leaseToken });
       const threadKey = `${assignment.taskId}\u0000${assignment.agentId}`;
-      let threadId = this.threads.get(threadKey);
-      if (!threadId) {
-        const thread = await this.codex.startThread(
-          this.workspace,
-          undefined,
-          assignment.agent.workspaceAccess === "write" ? "workspace-write" : "read-only",
-          "agent-team",
-        );
-        threadId = thread.threadId;
-        this.threads.set(threadKey, threadId);
+      let session = this.sessions.get(threadKey);
+      const providerSessionId = session?.providerSessionId;
+      if (
+        !session ||
+        this.sessionProviders.get(threadKey) !== runtime.provider ||
+        (providerSessionId !== undefined && runtime.hasSession?.(providerSessionId) === false)
+      ) {
+        session = await runtime.startSession({
+          workspace: this.workspace,
+          access: assignment.agent.workspaceAccess === "write" ? "workspace-write" : "read-only",
+          providerSessionId,
+        });
+        this.sessions.set(threadKey, session);
+        this.sessionProviders.set(threadKey, runtime.provider);
       }
-      const availableSkills = await this.codex.listSkills(this.workspace).catch(() => []);
+      const availableSkills = await runtime.listSkills(this.workspace).catch(() => []);
       const requested =
         assignment.agent.skillPolicy === "all"
           ? availableSkills
@@ -231,10 +256,17 @@ export class RemoteAgentHost {
         )
         .map(({ name, path }) => ({ name, path }));
       const prompt = this.buildPrompt(assignment);
-      const turn = await this.codex.startTurn(threadId, this.workspace, prompt, undefined, skills);
+      const turn = await runtime.startTurn(
+        session.sessionId,
+        this.workspace,
+        prompt,
+        assignment.agent.model ?? undefined,
+        skills,
+      );
       this.runs.set(assignment.id, {
         assignment,
-        threadId,
+        runtime,
+        threadId: session.sessionId,
         turnId: turn.turnId,
         content: "",
         lastProgressAt: 0,
@@ -246,8 +278,10 @@ export class RemoteAgentHost {
         type: "run.fail",
         runId: assignment.id,
         leaseToken: assignment.leaseToken,
-        error: error instanceof Error ? error.message : String(error),
+        error: formatErrorMessage(error),
       });
+    } finally {
+      this.startingRuns.delete(assignment.id);
     }
   }
 
@@ -267,7 +301,7 @@ export class RemoteAgentHost {
     ].join("\n\n");
   }
 
-  private async onCodexEvent(event: CodexEvent) {
+  private async onRuntimeEvent(event: AgentRuntimeEvent) {
     const turnId = String(
       event.params.turnId ?? (event.params.turn as { id?: unknown } | undefined)?.id ?? "",
     );
@@ -275,7 +309,7 @@ export class RemoteAgentHost {
     if (!runId) return;
     const run = this.runs.get(runId);
     if (!run) return;
-    if (event.method === "item/agentMessage/delta") {
+    if (event.method === "message/delta") {
       run.content += String(event.params.delta ?? "");
       if (Date.now() - run.lastProgressAt > 500) {
         run.lastProgressAt = Date.now();
@@ -288,17 +322,22 @@ export class RemoteAgentHost {
         });
       }
     }
-    const completed = completedAgentText(event);
+    const completed =
+      event.method === "message/completed" && typeof event.params.text === "string"
+        ? event.params.text
+        : null;
     if (completed !== null) run.content = completed;
     if (event.method === "turn/completed") {
       const turn = (event.params.turn ?? {}) as Record<string, unknown>;
-      if (String(turn.status ?? "completed") === "failed") {
+      const status = String(turn.status ?? "completed");
+      if (status === "failed" || status === "interrupted") {
         this.send({
           type: "run.fail",
           runId,
           leaseToken: run.assignment.leaseToken,
-          error: String(
-            (turn.error as { message?: unknown } | undefined)?.message ?? "Codex 执行失败。",
+          error: formatErrorMessage(
+            turn.error,
+            status === "interrupted" ? "Agent Runtime 已取消。" : "Agent Runtime 执行失败。",
           ),
         });
       } else {
@@ -313,6 +352,28 @@ export class RemoteAgentHost {
       this.turnToRun.delete(turnId);
       this.update({ activeRunCount: this.runs.size });
     }
+  }
+
+  private runtimeFor(assignment: AssignedRun) {
+    return "resolveBinding" in this.runtimeSource
+      ? this.runtimeSource.resolveBinding(
+          assignment.agentId,
+          assignment.agent.provider,
+          {
+            provider: assignment.agent.provider ?? "codex",
+            protocol: assignment.agent.protocol ?? "app-server",
+            target: "local",
+            model: assignment.agent.model ?? undefined,
+            endpoint: assignment.agent.runtimeEndpoint,
+            command: assignment.agent.runtimeCommand,
+            args: assignment.agent.runtimeArgs,
+            auth: assignment.agent.runtimeAuth,
+          },
+          assignment.agent.capabilities,
+          assignment.agent.private?.secrets?.bearerToken ??
+            assignment.agent.private?.secrets?.token,
+        )
+      : this.runtimeSource;
   }
 
   private send(event: Record<string, unknown>) {

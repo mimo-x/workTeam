@@ -9,6 +9,14 @@ search/requests, human and Agent direct rooms, group membership replacement, pub
 approval, structured Agent mentions, Task creation, and realtime refresh through the Agent Host
 WebSocket.
 
+## Agent Registry
+
+`/v1/agents` is the authenticated Agent Registry. It supports owned, public, and available scopes;
+public responses include only discoverable metadata, Runtime provider/protocol, declared capabilities,
+version, and online status. Private instructions and secrets are returned only to the owner. Runtime
+status is reported separately from visibility: an offline Agent remains discoverable but must not be
+started until its local Host or remote Runtime is online.
+
 ## Local development
 
 ```bash
