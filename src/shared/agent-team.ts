@@ -368,6 +368,12 @@ export type AgentTeamApi = {
     taskRoomId?: string;
   }>;
   stopRun: (options: { runId: string }) => Promise<void>;
+  retryMessage: (options: {
+    workspace: string;
+    roomId: string;
+    messageId: string;
+    model?: string;
+  }) => Promise<{ messageId: string; runId: string }>;
   promoteAgents: (options: {
     workspace: string;
     mappings: Array<{

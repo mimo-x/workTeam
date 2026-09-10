@@ -19,6 +19,7 @@ import {
   PlayIcon,
   PlusIcon,
   Repeat2Icon,
+  RotateCcwIcon,
   SearchIcon,
   SendIcon,
   Settings2Icon,
@@ -79,6 +80,7 @@ import type {
   TeamWorkspaceSnapshot,
 } from "../../shared/agent-team";
 import { formatErrorMessage } from "../../shared/error";
+import { canRetryAgentReply } from "./agent-message-actions";
 import {
   conversationListStorageKey,
   hideConversation,
@@ -96,6 +98,7 @@ import {
   mentionedCandidates,
   type MentionCandidate,
 } from "./openim-mentions";
+import { resolveRoomSaveTarget } from "./room-save-target";
 
 export type TeamView = "messages" | "contacts" | "tasks";
 
@@ -370,6 +373,7 @@ const MessageRow = ({
   human,
   task,
   onStop,
+  onRetry,
   onOpenTask,
 }: {
   message: TeamMessage;
@@ -377,6 +381,7 @@ const MessageRow = ({
   human?: HumanContact;
   task?: AgentTask;
   onStop: (runId: string) => void;
+  onRetry?: (messageId: string) => void;
   onOpenTask: (task: AgentTask) => void;
 }) => {
   if (message.senderType === "system") {
@@ -486,15 +491,25 @@ const MessageRow = ({
             </div>
           )}
         </div>
-        {running && message.runId && (
-          <button
-            type="button"
-            onClick={() => onStop(message.runId!)}
-            className="mt-2 flex items-center gap-1.5 text-[10px] text-muted-foreground opacity-0 transition hover:text-foreground group-hover:opacity-100"
-          >
-            <SquareIcon className="size-2.5 fill-current" />
-            停止
-          </button>
+        {(running ? Boolean(message.runId) : Boolean(onRetry)) && (
+          <div className="mt-1 flex gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
+            {running && message.runId ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                onClick={() => onStop(message.runId!)}
+              >
+                <SquareIcon data-icon="inline-start" className="fill-current" />
+                停止
+              </Button>
+            ) : onRetry ? (
+              <Button type="button" variant="ghost" size="xs" onClick={() => onRetry(message.id)}>
+                <RotateCcwIcon data-icon="inline-start" />
+                重新回答
+              </Button>
+            ) : null}
+          </div>
         )}
       </div>
     </article>
@@ -1580,7 +1595,13 @@ const RoomDialog = ({
             id !== "local_user" &&
             humans.find((human) => human.id === id)?.syncSource === "backend",
         );
-      const useCloud = room?.syncSource === "backend" || (cloudMode && remoteSelection);
+      const useCloud =
+        resolveRoomSaveTarget({
+          hasExistingRoom: Boolean(room),
+          existingRoomSource: room?.syncSource,
+          cloudMode,
+          hasRemoteSelection: remoteSelection,
+        }) === "cloud";
       let next: TeamRoomSnapshot;
       if (useCloud) {
         const localOnlyHumans = selectedHumans.filter(
@@ -3258,21 +3279,50 @@ export const TeamChat = ({
                 </div>
               </div>
             )}
-            {room?.messages.map((message) => (
-              <MessageRow
-                key={message.id}
-                message={message}
-                agent={state.agents.find((agent) => agent.id === message.senderId)}
-                human={state.humans.find((human) => human.id === message.senderId)}
-                task={
-                  message.taskId
-                    ? state.tasks.find((candidate) => candidate.id === message.taskId)
-                    : undefined
-                }
-                onStop={(runId) => void window.agentTeam.stopRun({ runId }).catch(() => undefined)}
-                onOpenTask={openTask}
-              />
-            ))}
+            {room?.messages.map((message) => {
+              const messageAgent = state.agents.find((agent) => agent.id === message.senderId);
+              const replyTarget = message.replyTo
+                ? room.messages.find((candidate) => candidate.id === message.replyTo)
+                : undefined;
+              const retryable = canRetryAgentReply({
+                reply: message,
+                replyTarget,
+                executionLocation: messageAgent?.executionLocation,
+                belongsToLoop: state.loops.some((loop) => loop.rootMessageId === replyTarget?.id),
+              });
+              return (
+                <MessageRow
+                  key={message.id}
+                  message={message}
+                  agent={messageAgent}
+                  human={state.humans.find((human) => human.id === message.senderId)}
+                  task={
+                    message.taskId
+                      ? state.tasks.find((candidate) => candidate.id === message.taskId)
+                      : undefined
+                  }
+                  onStop={(runId) =>
+                    void window.agentTeam.stopRun({ runId }).catch(() => undefined)
+                  }
+                  onRetry={
+                    retryable
+                      ? (messageId) => {
+                          setError("");
+                          void window.agentTeam
+                            .retryMessage({
+                              workspace,
+                              roomId: room.roomId,
+                              messageId,
+                              model,
+                            })
+                            .catch((nextError) => setError(formatErrorMessage(nextError)));
+                        }
+                      : undefined
+                  }
+                  onOpenTask={openTask}
+                />
+              );
+            })}
             <div ref={endRef} />
           </div>
         </div>
