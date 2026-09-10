@@ -47,6 +47,11 @@ import type {
 } from "../../shared/agent-team";
 import { formatErrorMessage } from "../../shared/error";
 import { openImTransport, type OpenImConnectionState } from "./openim-transport";
+import {
+  buildMentionCandidates,
+  mentionedCandidates,
+  type MentionCandidate,
+} from "./openim-mentions";
 
 export type TeamView = "messages" | "contacts" | "tasks";
 
@@ -2299,21 +2304,30 @@ export const TeamChat = ({
     ? state?.rooms.find((candidate) => candidate.roomId === task.sourceRoomId)
     : undefined;
   const roomAgents = state?.agents.filter((agent) => room?.agentIds.includes(agent.id)) ?? [];
+  const roomHumans = state?.humans.filter((human) => room?.humanIds.includes(human.id)) ?? [];
+  const mentionCandidates = buildMentionCandidates(roomAgents, roomHumans);
+  const mentionedTargets = mentionedCandidates(mentionCandidates, draft);
   const mentionsAllAgents = /@(所有Agent|全部Agent|all-agents|all)(?=\s|$)/i.test(draft);
   const mentionedAgents = mentionsAllAgents
     ? roomAgents
-    : roomAgents.filter((agent) => draft.includes(agent.mention) || draft.includes(`@${agent.id}`));
-  const mentionCandidates = mention
-    ? roomAgents
-        .filter((agent) => {
+    : mentionedTargets
+        .filter((candidate) => candidate.kind === "agent")
+        .map((candidate) => roomAgents.find((agent) => agent.id === candidate.id))
+        .filter((agent): agent is AgentDefinition => Boolean(agent));
+  const mentionedHumans = mentionedTargets
+    .filter((candidate) => candidate.kind === "human")
+    .map((candidate) => roomHumans.find((human) => human.id === candidate.id))
+    .filter((human): human is HumanContact => Boolean(human));
+  const filteredMentionCandidates = mention
+    ? mentionCandidates
+        .filter((candidate) => {
           const query = mention.query.toLocaleLowerCase();
-          return [agent.name, agent.title, agent.mention.slice(1), agent.id].some((value) =>
-            value.toLocaleLowerCase().includes(query),
+          return [candidate.name, candidate.title, candidate.mention.slice(1), candidate.id].some(
+            (value) => value.toLocaleLowerCase().includes(query),
           );
         })
         .slice(0, 8)
     : [];
-  const roomHumans = state?.humans.filter((human) => room?.humanIds.includes(human.id)) ?? [];
   const directAgent = state?.agents.find((agent) => agent.id === room?.directPrincipalId);
   const directHuman = state?.humans.find((human) => human.id === room?.directPrincipalId);
   const roomTasks =
@@ -2375,7 +2389,7 @@ export const TeamChat = ({
     onViewChange("messages");
   };
   const updateMention = (value: string, caret: number) => {
-    if (room?.type === "direct" || !roomAgents.length) {
+    if (room?.type === "direct" || (!roomAgents.length && !roomHumans.length)) {
       setMention(null);
       return;
     }
@@ -2387,9 +2401,9 @@ export const TeamChat = ({
     setMention({ start: caret - match[0].length, end: caret, query: match[1] });
     setMentionIndex(0);
   };
-  const insertMention = (agent: AgentDefinition) => {
+  const insertMention = (candidate: MentionCandidate) => {
     if (!mention) return;
-    const insertion = `${agent.mention} `;
+    const insertion = `${candidate.mention} `;
     const value = `${draft.slice(0, mention.start)}${insertion}${draft.slice(mention.end)}`;
     const caret = mention.start + insertion.length;
     setDraft(value);
@@ -2461,6 +2475,16 @@ export const TeamChat = ({
           )
           .map((agent) => agent.openimUserId)
           .filter((id): id is string => Boolean(id));
+        targetOpenimIds.push(
+          ...roomHumans
+            .filter(
+              (human) =>
+                mentionedHumans.some((mentioned) => mentioned.id === human.id) ||
+                (room.type === "direct" && room.directPrincipalId === human.id),
+            )
+            .map((human) => human.openimUserId)
+            .filter((id): id is string => Boolean(id)),
+        );
         const message = await openImTransport.sendText(
           text,
           undefined,
@@ -2482,6 +2506,11 @@ export const TeamChat = ({
           .filter((agent) => mentionedAgents.some((mentioned) => mentioned.id === agent.id))
           .map((agent) => agent.openimUserId)
           .filter((id): id is string => Boolean(id));
+        targetOpenimIds.push(
+          ...mentionedHumans
+            .map((human) => human.openimUserId)
+            .filter((id): id is string => Boolean(id)),
+        );
         const message = await openImTransport.sendText(
           text,
           undefined,
@@ -3071,43 +3100,44 @@ export const TeamChat = ({
               {mention && (
                 <div className="absolute bottom-full left-0 z-30 mb-2 w-72 overflow-hidden rounded-xl border border-white/10 bg-[#111620] p-1.5 shadow-2xl shadow-black/50">
                   <div className="px-2 py-1.5 text-[9px] tracking-[0.12em] text-zinc-600 uppercase">
-                    {mention.query ? `搜索 “${mention.query}”` : "选择要提及的 Agent"}
+                    {mention.query ? `搜索 “${mention.query}”` : "选择要提及的成员"}
                   </div>
-                  {mentionCandidates.map((agent, index) => {
-                    const theme = themeClasses[agent.theme];
+                  {filteredMentionCandidates.map((candidate, index) => {
+                    const theme = candidate.theme ? themeClasses[candidate.theme] : undefined;
                     return (
                       <button
-                        key={agent.id}
+                        key={candidate.id}
                         type="button"
                         onMouseDown={(event) => event.preventDefault()}
-                        onClick={() => insertMention(agent)}
+                        onClick={() => insertMention(candidate)}
                         className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition ${
                           index === mentionIndex ? "bg-white/8" : "hover:bg-white/5"
                         }`}
                       >
                         <span
-                          className={`grid size-7 shrink-0 place-items-center rounded-lg border text-[9px] ${theme.avatar}`}
+                          className={`grid size-7 shrink-0 place-items-center rounded-lg border text-[9px] ${theme?.avatar ?? "border-white/9 bg-white/5 text-zinc-300"}`}
                         >
-                          {agent.initials}
+                          {candidate.initials}
                         </span>
                         <span className="min-w-0 flex-1">
                           <span className="flex items-center gap-2 text-xs text-zinc-300">
-                            {agent.name}
-                            <span className="text-[9px] text-zinc-600">{agent.mention}</span>
+                            {candidate.name}
+                            <span className="text-[9px] text-zinc-600">{candidate.mention}</span>
                           </span>
                           <span className="block truncate text-[9px] text-zinc-600">
-                            {agent.title} · {agent.description}
+                            {candidate.title}
+                            {candidate.description ? ` · ${candidate.description}` : " · 好友"}
                           </span>
                         </span>
                       </button>
                     );
                   })}
-                  {!mentionCandidates.length && (
+                  {!filteredMentionCandidates.length && (
                     <div className="px-2 py-3 text-[10px] text-zinc-600">
-                      当前群里没有匹配的 Agent
+                      当前群里没有匹配的成员
                     </div>
                   )}
-                  {!!mentionCandidates.length && (
+                  {!!filteredMentionCandidates.length && (
                     <div className="border-t border-white/6 px-2 pt-1.5 text-[8px] text-zinc-700">
                       ↑↓ 选择 · Enter 插入 · Esc 关闭
                     </div>
@@ -3128,23 +3158,26 @@ export const TeamChat = ({
                   updateMention(event.currentTarget.value, event.currentTarget.selectionStart)
                 }
                 onKeyDown={(event) => {
-                  if (mention && mentionCandidates.length) {
+                  if (mention && filteredMentionCandidates.length) {
                     if (event.key === "ArrowDown") {
                       event.preventDefault();
-                      setMentionIndex((index) => (index + 1) % mentionCandidates.length);
+                      setMentionIndex((index) => (index + 1) % filteredMentionCandidates.length);
                       return;
                     }
                     if (event.key === "ArrowUp") {
                       event.preventDefault();
                       setMentionIndex(
                         (index) =>
-                          (index - 1 + mentionCandidates.length) % mentionCandidates.length,
+                          (index - 1 + filteredMentionCandidates.length) %
+                          filteredMentionCandidates.length,
                       );
                       return;
                     }
                     if (event.key === "Enter" || event.key === "Tab") {
                       event.preventDefault();
-                      insertMention(mentionCandidates[mentionIndex] ?? mentionCandidates[0]);
+                      insertMention(
+                        filteredMentionCandidates[mentionIndex] ?? filteredMentionCandidates[0],
+                      );
                       return;
                     }
                   }

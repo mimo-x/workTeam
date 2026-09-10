@@ -13,6 +13,7 @@ import type {
   ExternalTeamMessage,
   ImRuntimeConfig,
 } from "../../shared/agent-team";
+import { normalizeMessage } from "./openim-message";
 
 export type OpenImConnectionState = {
   state: "local" | "connecting" | "connected" | "error";
@@ -222,11 +223,18 @@ class OpenImTransport {
     metadata: { agentAction?: AgentMessageAction } = {},
   ) {
     if (!this.config || this.status.state !== "connected") throw new Error("OpenIM 尚未连接。");
+    const sessionType = directPrincipalId ? SessionType.Single : SessionType.Group;
     const created = targetOpenimIds.length
       ? await sdk.createTextAtMessage({ text, atUserIDList: targetOpenimIds })
       : await sdk.createTextMessage(text);
-    created.data.ex = JSON.stringify({
-      ...parseMessageMetadata(created.data.ex),
+    const outgoing = normalizeMessage(created.data, {
+      text,
+      atUserIds: targetOpenimIds,
+      sessionType,
+      platformId: this.config.platformId,
+    });
+    outgoing.ex = JSON.stringify({
+      ...parseMessageMetadata(outgoing.ex),
       agentAction: metadata.agentAction ?? "chat",
       targetAgentIds: targetOpenimIds,
     });
@@ -235,7 +243,7 @@ class OpenImTransport {
     const sent = await sdk.sendMessage({
       recvID: directPrincipalId ?? "",
       groupID: targetGroupId,
-      message: created.data,
+      message: outgoing,
     });
     const message = toExternalMessage(sent.data, {
       groupId: targetGroupId,
