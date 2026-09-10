@@ -6,5 +6,5 @@
 
 ## 2. Verification
 
-- [ ] Run bug governance, backend tests/build, desktop tests, lint, typecheck, build, and strict OpenSpec validation.
+- [x] Run bug governance, backend tests/build, desktop tests, lint, typecheck, build, and strict OpenSpec validation.
 - [ ] Ask the user to rerun `bash deploy.sh` and then repeat the real group chat UI workflow.

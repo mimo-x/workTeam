@@ -10,5 +10,5 @@
 
 ## 3. Verification
 
-- [ ] Run bug governance, targeted tests, lint, typecheck, build, and strict OpenSpec validation.
+- [x] Run bug governance, targeted tests, lint, typecheck, build, and strict OpenSpec validation.
 - [ ] Re-run both workflows in the Electron desktop UI and record results in the Bug record.
