@@ -1248,6 +1248,266 @@ test("two users can become friends, create an Agent room, and sync settings", as
       "failed",
     );
 
+    await pool.query(
+      "UPDATE agents SET runtime_status = 'online', runtime_last_seen_at = now() WHERE id = $1",
+      [agent.id],
+    );
+    const readAssignmentEvent = sentToBoundDevice
+      .map(
+        (value) =>
+          JSON.parse(value) as { type?: string; run?: { id?: string; leaseToken?: string } },
+      )
+      .reverse()
+      .find(
+        (event) =>
+          event.type === "agent.run.assigned" && event.run?.id === started.json().runIds[0],
+      );
+    assert.ok(readAssignmentEvent?.run?.leaseToken);
+    const delegatedActionId = `action-${randomUUID()}`;
+    await (
+      realtimeHub as unknown as {
+        completeRun(
+          connection: typeof boundConnection,
+          runId: string,
+          leaseToken: string,
+          content: string,
+          actions: unknown[],
+          invalidCount: number,
+        ): Promise<void>;
+      }
+    ).completeRun(
+      boundConnection,
+      started.json().runIds[0],
+      readAssignmentEvent.run.leaseToken,
+      "已将安全复核委派给群内 Agent。",
+      [
+        {
+          protocolVersion: 1,
+          actionId: delegatedActionId,
+          taskId,
+          taskRevision: 3,
+          action: "create_subtask",
+          title: "复核登录实现",
+          objective: "只读复核登录实现",
+          expectedResult: "复核报告",
+          assigneeIds: [agent.id],
+          requestedScopes: ["workspace.read"],
+          acceptanceCriteria: ["报告可复核"],
+        },
+      ],
+      0,
+    );
+    const delegatedChildren = await pool.query(
+      `SELECT id, root_task_id, parent_task_id, delegated_by_agent_id, depth,
+              workspace_binding_id, binding_revision, status
+       FROM tasks WHERE anchor_message_id = $1`,
+      [`agent-action:${delegatedActionId}`],
+    );
+    const delegatedActionState = await pool.query(
+      "SELECT status, error FROM task_agent_actions WHERE action_id = $1",
+      [delegatedActionId],
+    );
+    assert.equal(
+      delegatedActionState.rows[0]?.status,
+      "applied",
+      JSON.stringify(delegatedActionState.rows[0]),
+    );
+    assert.equal(delegatedChildren.rows.length, 1);
+    assert.equal(delegatedChildren.rows[0].root_task_id, taskId);
+    assert.equal(delegatedChildren.rows[0].parent_task_id, taskId);
+    assert.equal(delegatedChildren.rows[0].delegated_by_agent_id, agent.id);
+    assert.equal(delegatedChildren.rows[0].depth, 1);
+    assert.equal(delegatedChildren.rows[0].workspace_binding_id, secondBindingId);
+    assert.equal(delegatedChildren.rows[0].status, "queued");
+    const delegatedRun = await pool.query(
+      `SELECT target_device_id, parent_run_id, status, requested_scopes
+       FROM task_runs WHERE task_id = $1`,
+      [delegatedChildren.rows[0].id],
+    );
+    assert.equal(delegatedRun.rows[0].target_device_id, bobDeviceId);
+    assert.equal(delegatedRun.rows[0].parent_run_id, started.json().runIds[0]);
+    assert.equal(delegatedRun.rows[0].status, "queued");
+    assert.deepEqual(delegatedRun.rows[0].requested_scopes, ["workspace.read"]);
+    const rootBudgetUsage = await pool.query("SELECT budget_usage FROM tasks WHERE id = $1", [
+      taskId,
+    ]);
+    assert.equal(rootBudgetUsage.rows[0].budget_usage.descendants, 2);
+    assert.equal(rootBudgetUsage.rows[0].budget_usage.runs, 3);
+    assert.deepEqual(
+      (await pool.query("SELECT budget FROM tasks WHERE id = $1", [taskId])).rows[0].budget,
+      { maxDepth: 3, maxDescendants: 12, maxRuns: 24, maxWallTimeMs: 30 * 60 * 1_000 },
+    );
+
+    const invalidActionRunId = randomUUID();
+    await pool.query(
+      `INSERT INTO task_runs(
+         id, task_id, agent_id, status, execution_target, context_version, agent_snapshot,
+         approval_id, started_by_user_id, target_device_id, permission_grant_id,
+         idempotency_key, requested_scopes, write_intent
+       ) SELECT $1, task_id, agent_id, 'queued', execution_target, context_version,
+                agent_snapshot, approval_id, started_by_user_id, target_device_id,
+                permission_grant_id, $2, requested_scopes, false
+         FROM task_runs WHERE id = $3`,
+      [invalidActionRunId, `test:invalid-agent-action:${invalidActionRunId}`, secondReadRunId],
+    );
+    const invalidActionLease = await leaseQueuedWriteRun(invalidActionRunId);
+    const taskCountBeforeInvalid = Number(
+      (await pool.query("SELECT count(*) FROM tasks")).rows[0].count,
+    );
+    await (
+      realtimeHub as unknown as {
+        completeRun(
+          connection: typeof boundConnection,
+          runId: string,
+          leaseToken: string,
+          content: string,
+          actions: unknown[],
+          invalidCount: number,
+        ): Promise<void>;
+      }
+    ).completeRun(
+      boundConnection,
+      invalidActionRunId,
+      invalidActionLease,
+      "普通可见结论",
+      [
+        {
+          protocolVersion: 1,
+          actionId: `unknown-agent-${randomUUID()}`,
+          taskId,
+          taskRevision: 3,
+          action: "create_subtask",
+          title: "不应创建",
+          objective: "未知 Agent 不得创建工作",
+          expectedResult: "无",
+          assigneeIds: [randomUUID()],
+          requestedScopes: ["workspace.read"],
+          acceptanceCriteria: [],
+        },
+      ],
+      0,
+    );
+    assert.equal(
+      Number((await pool.query("SELECT count(*) FROM tasks")).rows[0].count),
+      taskCountBeforeInvalid,
+    );
+    assert.equal(
+      (await pool.query("SELECT status FROM task_runs WHERE id = $1", [invalidActionRunId])).rows[0]
+        .status,
+      "waiting",
+    );
+    assert.equal(
+      (await pool.query("SELECT status FROM tasks WHERE id = $1", [taskId])).rows[0].status,
+      "waiting_for_assignee",
+    );
+
+    const completeSyntheticRun = async (actions: unknown[]) => {
+      const runId = randomUUID();
+      await pool.query(
+        `INSERT INTO task_runs(
+           id, task_id, agent_id, status, execution_target, context_version, agent_snapshot,
+           approval_id, started_by_user_id, target_device_id, permission_grant_id,
+           idempotency_key, requested_scopes, write_intent
+         ) SELECT $1, task_id, agent_id, 'queued', execution_target, context_version,
+                  agent_snapshot, approval_id, started_by_user_id, target_device_id,
+                  permission_grant_id, $2, requested_scopes, false
+           FROM task_runs WHERE id = $3`,
+        [runId, `test:agent-action:${runId}`, secondReadRunId],
+      );
+      const leaseToken = await leaseQueuedWriteRun(runId);
+      await (
+        realtimeHub as unknown as {
+          completeRun(
+            connection: typeof boundConnection,
+            runId: string,
+            leaseToken: string,
+            content: string,
+            actions: unknown[],
+            invalidCount: number,
+          ): Promise<void>;
+        }
+      ).completeRun(boundConnection, runId, leaseToken, "结构化动作已处理。", actions, 0);
+      return runId;
+    };
+
+    await pool.query("UPDATE agents SET capabilities = '[]'::jsonb WHERE id = $1", [agent.id]);
+    const capabilityActionId = `capability-${randomUUID()}`;
+    await completeSyntheticRun([
+      {
+        protocolVersion: 1,
+        actionId: capabilityActionId,
+        taskId,
+        taskRevision: 3,
+        action: "create_subtask",
+        title: "能力不匹配的子任务",
+        objective: "验证能力门禁",
+        expectedResult: "等待重新分派",
+        assigneeIds: [agent.id],
+        requestedScopes: ["workspace.read"],
+        acceptanceCriteria: [],
+      },
+    ]);
+    const capabilityChild = await pool.query(
+      "SELECT status, wait_reason FROM tasks WHERE anchor_message_id = $1",
+      [`agent-action:${capabilityActionId}`],
+    );
+    assert.equal(capabilityChild.rows[0].status, "waiting_for_assignee");
+    assert.match(capabilityChild.rows[0].wait_reason, /能力/);
+    await pool.query(
+      `UPDATE agents SET capabilities =
+        '["chat","stream_progress","read_workspace","write_workspace","run_command"]'::jsonb
+       WHERE id = $1`,
+      [agent.id],
+    );
+
+    const descendantCountBeforeBudgetRace = Number(
+      (
+        await pool.query("SELECT count(*) FROM tasks WHERE root_task_id = $1 AND id <> $1", [
+          taskId,
+        ])
+      ).rows[0].count,
+    );
+    await pool.query("UPDATE tasks SET budget = $1::jsonb WHERE id = $2", [
+      JSON.stringify({
+        maxDepth: 3,
+        maxDescendants: descendantCountBeforeBudgetRace + 1,
+        maxRuns: 24,
+        maxWallTimeMs: 30 * 60 * 1_000,
+      }),
+      taskId,
+    ]);
+    const budgetActions = ["first", "second"].map((suffix) => ({
+      protocolVersion: 1,
+      actionId: `budget-${suffix}-${randomUUID()}`,
+      taskId,
+      taskRevision: 3,
+      action: "create_subtask",
+      title: `预算竞争 ${suffix}`,
+      objective: "验证事务内预算消费",
+      expectedResult: "仅创建一个子 Task",
+      assigneeIds: [agent.id],
+      requestedScopes: ["workspace.read"],
+      acceptanceCriteria: [],
+    }));
+    await completeSyntheticRun(budgetActions);
+    const budgetChildren = await pool.query(
+      "SELECT id FROM tasks WHERE anchor_message_id = $1 OR anchor_message_id = $2",
+      [`agent-action:${budgetActions[0].actionId}`, `agent-action:${budgetActions[1].actionId}`],
+    );
+    assert.equal(budgetChildren.rows.length, 1);
+    const budgetActionStates = await pool.query(
+      "SELECT status FROM task_agent_actions WHERE action_id = $1 OR action_id = $2 ORDER BY action_id",
+      [budgetActions[0].actionId, budgetActions[1].actionId],
+    );
+    assert.deepEqual(budgetActionStates.rows.map((row) => row.status).sort(), [
+      "applied",
+      "rejected",
+    ]);
+    assert.equal(
+      (await pool.query("SELECT status FROM tasks WHERE id = $1", [taskId])).rows[0].status,
+      "waiting_for_budget",
+    );
+
     const memberAnchor = await app.inject({
       method: "POST",
       url: "/internal/openim/callbacks/message/after?token=test-callback-token-long-enough",

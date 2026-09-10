@@ -49,13 +49,14 @@ test("fresh databases apply every governed collaboration migration", async () =>
        WHERE table_schema = 'public' AND table_name IN (
          'room_workspace_bindings', 'task_permission_grants',
          'execution_approval_requests', 'workspace_write_leases',
-         'collaboration_audit_events'
+         'collaboration_audit_events', 'task_agent_actions'
        )`,
     );
     assert.deepEqual(tables.rows.map((row) => row.table_name).sort(), [
       "collaboration_audit_events",
       "execution_approval_requests",
       "room_workspace_bindings",
+      "task_agent_actions",
       "task_permission_grants",
       "workspace_write_leases",
     ]);

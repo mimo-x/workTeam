@@ -610,6 +610,31 @@ export const workspaceWriteLeases = pgTable("workspace_write_leases", {
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 });
 
+export const taskAgentActions = pgTable(
+  "task_agent_actions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    taskRevision: integer("task_revision").notNull(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => taskRuns.id, { onDelete: "cascade" }),
+    actionId: text("action_id").notNull(),
+    actionType: text("action_type").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    status: text("status").notNull().default("accepted"),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    appliedAt: timestamp("applied_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("task_agent_actions_task_action_uq").on(table.taskId, table.actionId),
+    index("task_agent_actions_run_idx").on(table.runId, table.createdAt),
+  ],
+);
+
 export const collaborationAuditEvents = pgTable(
   "collaboration_audit_events",
   {

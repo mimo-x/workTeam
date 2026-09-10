@@ -4,6 +4,7 @@ import type pg from "pg";
 import { z } from "zod";
 
 import { appendCollaborationAudit, redactAuditText } from "./collaboration-audit.js";
+import { applyAgentActions } from "./agent-actions.js";
 import type { AppConfig } from "./config.js";
 import type { EventPublisher } from "./events.js";
 import { ApiError, parseBody } from "./http.js";
@@ -69,6 +70,8 @@ const incomingSchema = z.discriminatedUnion("type", [
     runId: z.string().uuid(),
     leaseToken: z.string().min(16),
     content: z.string().trim().min(1).max(100_000),
+    agentActions: z.array(z.unknown()).max(32).default([]),
+    invalidActionCount: z.number().int().min(0).max(100).default(0),
   }),
   z.object({
     type: z.literal("run.fail"),
@@ -352,6 +355,8 @@ export class RealtimeHub implements EventPublisher {
           message.runId,
           message.leaseToken,
           message.content,
+          message.agentActions,
+          message.invalidActionCount,
         );
       if (message.type === "run.fail")
         return await this.failRun(connection, message.runId, message.leaseToken, message.error);
@@ -808,6 +813,8 @@ export class RealtimeHub implements EventPublisher {
     runId: string,
     leaseToken: string,
     content: string,
+    agentActions: unknown[],
+    invalidActionCount: number,
   ) {
     const run = await this.verifyLease(connection, runId, leaseToken, ["running", "leased"]);
     const client = await this.pool.connect();
@@ -815,26 +822,61 @@ export class RealtimeHub implements EventPublisher {
       await client.query("BEGIN");
       const detail = await client.query<{
         task_id: string;
+        task_revision: number;
+        agent_id: string;
         agent_openim_id: string;
         agent_name: string;
         group_id: string;
+        source_room_id: string;
       }>(
-        `SELECT tr.task_id, a.openim_user_id AS agent_openim_id, a.name AS agent_name,
-                r.openim_group_id AS group_id
+        `SELECT tr.task_id, t.revision AS task_revision, tr.agent_id,
+                a.openim_user_id AS agent_openim_id, a.name AS agent_name,
+                r.openim_group_id AS group_id, t.source_room_id
          FROM task_runs tr JOIN agents a ON a.id = tr.agent_id JOIN tasks t ON t.id = tr.task_id
          JOIN rooms r ON r.id = t.task_room_id WHERE tr.id = $1 FOR UPDATE`,
         [runId],
       );
       if (!detail.rows[0]) throw new ApiError(404, "RUN_NOT_FOUND", "运行不存在。");
+      const actionResult = await applyAgentActions(client, {
+        runId,
+        taskId: detail.rows[0].task_id,
+        taskRevision: detail.rows[0].task_revision,
+        agentId: detail.rows[0].agent_id,
+        actions: agentActions,
+      });
+      const actionErrors = [
+        ...(invalidActionCount ? [`包含 ${invalidActionCount} 个无效 Agent 动作。`] : []),
+        ...actionResult.errors,
+      ];
       await client.query(
-        `UPDATE task_runs SET status = 'complete', completed_at = now(), lease_token_hash = NULL,
-                lease_expires_at = NULL, updated_at = now() WHERE id = $1`,
-        [runId],
+        `UPDATE task_runs SET status = $1, completed_at = CASE WHEN $1 = 'complete' THEN now() ELSE NULL END,
+                error = $2, lease_token_hash = NULL, lease_expires_at = NULL, updated_at = now()
+         WHERE id = $3`,
+        [actionErrors.length ? "waiting" : "complete", actionErrors.join(" ") || null, runId],
       );
       await client.query("DELETE FROM workspace_write_leases WHERE run_id = $1", [runId]);
-      await client.query("UPDATE tasks SET status = 'review', updated_at = now() WHERE id = $1", [
-        run.task_id,
-      ]);
+      if (actionErrors.length) {
+        await client.query(
+          `UPDATE tasks SET status = CASE
+                    WHEN status IN ('waiting_for_budget', 'waiting_for_permission', 'waiting_for_assignee')
+                      THEN status ELSE 'blocked' END,
+                  wait_reason = COALESCE(wait_reason, $1), updated_at = now()
+           WHERE id = $2`,
+          [actionErrors.join(" "), run.task_id],
+        );
+      } else if (actionResult.createdTasks.length) {
+        await client.query(
+          `UPDATE tasks SET status = 'waiting', wait_reason = '等待委派的子 Task 完成。', updated_at = now()
+           WHERE id = $1 AND status IN ('running', 'waiting')`,
+          [run.task_id],
+        );
+      } else {
+        await client.query(
+          `UPDATE tasks SET status = 'review', wait_reason = NULL, updated_at = now()
+           WHERE id = $1 AND status IN ('running', 'waiting')`,
+          [run.task_id],
+        );
+      }
       await enqueueOutbox(client, "openim.message.send", "task_run", runId, {
         sendID: detail.rows[0].agent_openim_id,
         senderNickname: detail.rows[0].agent_name,
@@ -843,11 +885,22 @@ export class RealtimeHub implements EventPublisher {
         ex: { kind: "agent-message", runId, taskId: run.task_id, final: true },
       });
       await client.query("COMMIT");
+      for (const userId of actionResult.dispatchUserIds) await this.dispatchQueued(userId);
+      for (const child of actionResult.createdTasks) {
+        await this.publishToRoom(detail.rows[0].source_room_id, {
+          type: "task.delegated",
+          parentTaskId: run.task_id,
+          taskId: child.taskId,
+          taskRoomId: child.taskRoomId,
+          status: child.status,
+        });
+      }
       await this.publishTask(run.task_id, {
         type: "task.run.updated",
         runId,
-        status: "complete",
+        status: actionErrors.length ? "waiting" : "complete",
         content,
+        actionErrors,
       });
     } catch (error) {
       await client.query("ROLLBACK");

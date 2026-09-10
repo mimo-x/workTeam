@@ -4,9 +4,10 @@ import { basename, isAbsolute, relative } from "node:path";
 
 import type { BackendClient } from "./backend-client";
 import type { AgentRuntime, AgentRuntimeEvent, RuntimeSession } from "./agent-runtime";
-import type { AgentCapability } from "../shared/agent-team";
+import type { AgentActionV1, AgentCapability } from "../shared/agent-team";
 import type { AgentRuntimeRegistry } from "./runtime-registry";
 import { formatErrorMessage } from "../shared/error";
+import { extractAgentActionsV1, parseAgentActionV1 } from "../shared/collaboration-governance";
 import type { RemoteAgentHostState } from "../shared/backend";
 import type { ApprovalDecision, RpcRequestId } from "../shared/codex";
 
@@ -70,6 +71,8 @@ type ActiveRun = {
   content: string;
   lastProgressAt: number;
   workspace: string;
+  agentActions: AgentActionV1[];
+  invalidActionCount: number;
 };
 
 type PendingRemoteApproval = {
@@ -323,6 +326,8 @@ export class RemoteAgentHost {
         content: "",
         lastProgressAt: 0,
         workspace,
+        agentActions: [],
+        invalidActionCount: 0,
       });
       this.turnToRun.set(turn.turnId, assignment.id);
       this.update({ activeRunCount: this.runs.size });
@@ -350,6 +355,7 @@ export class RemoteAgentHost {
       `你的身份是 ${run.agent.name}（${run.agent.title}），提及名称是 ${run.agent.mention}。`,
       `你正在处理 Task「${run.title}」，上下文版本 ${run.contextVersion}。`,
       "任务执行期间，新的来源群消息会通过实时上下文继续送达。只以当前 Agent 身份回复。",
+      "如需委派或改变 Task 状态，请输出 <!-- agent-action-v1 {JSON} --> 结构化动作；普通 @Agent 只用于讨论，不会创建工作。",
       context ? `当前聊天上下文：\n${context}` : "当前没有额外聊天上下文。",
     ].join("\n\n");
   }
@@ -392,6 +398,12 @@ export class RemoteAgentHost {
         });
       }
     }
+    if (event.method === "provider/event" && event.params.agentAction !== undefined) {
+      const action = parseAgentActionV1(event.params.agentAction);
+      if (action) run.agentActions.push(action);
+      else run.invalidActionCount += 1;
+      return;
+    }
     const completed =
       event.method === "message/completed" && typeof event.params.text === "string"
         ? event.params.text
@@ -411,11 +423,14 @@ export class RemoteAgentHost {
           ),
         });
       } else {
+        const extracted = extractAgentActionsV1(run.content || "任务已完成。");
         this.send({
           type: "run.complete",
           runId,
           leaseToken: run.assignment.leaseToken,
-          content: run.content || "任务已完成。",
+          content: extracted.content || "任务已完成。",
+          agentActions: [...run.agentActions, ...extracted.actions],
+          invalidActionCount: run.invalidActionCount + extracted.invalidCount,
         });
       }
       this.runs.delete(runId);

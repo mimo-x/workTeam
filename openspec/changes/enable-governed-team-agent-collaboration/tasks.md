@@ -34,11 +34,11 @@
 
 ## 6. Structured Agent delegation
 
-- [ ] 6.1 Parse native or hidden-marker `AgentActionV1` envelopes through one validator and remove transport markers from published chat; verify malformed, unknown-version, and unknown-Agent actions create no work.
-- [ ] 6.2 Implement transactional child-Task creation with inherited binding/grant intersection and root budget accounting; verify depth 3, 12 descendants, 24 Runs, 30-minute defaults, and concurrent budget consumption.
-- [ ] 6.3 Validate room membership, Agent availability, required capabilities, effective scopes, and assignee freshness before scheduling delegated Runs; verify each mismatch enters the specified actionable waiting state.
-- [ ] 6.4 Aggregate child completion, blocking, artifacts, and read-only review into the parent Task while keeping discussion Loops non-authoritative; verify a Loop cannot trigger machine work and a parent cannot complete with a required blocked child.
-- [ ] 6.5 Apply equivalent governed delegation and authorization state machines in local-only mode; verify the local user fulfills both admin and host-owner gates without receiving a global auto-approval capability.
+- [x] 6.1 Parse native or hidden-marker `AgentActionV1` envelopes through one validator and remove transport markers from published chat; verify malformed, unknown-version, and unknown-Agent actions create no work.
+- [x] 6.2 Implement transactional child-Task creation with inherited binding/grant intersection and root budget accounting; verify depth 3, 12 descendants, 24 Runs, 30-minute defaults, and concurrent budget consumption.
+- [x] 6.3 Validate room membership, Agent availability, required capabilities, effective scopes, and assignee freshness before scheduling delegated Runs; verify each mismatch enters the specified actionable waiting state.
+- [x] 6.4 Aggregate child completion, blocking, artifacts, and read-only review into the parent Task while keeping discussion Loops non-authoritative; verify a Loop cannot trigger machine work and a parent cannot complete with a required blocked child.
+- [x] 6.5 Apply equivalent governed delegation and authorization state machines in local-only mode; verify the local user fulfills both admin and host-owner gates without receiving a global auto-approval capability.
 
 ## 7. Desktop collaboration experience
 

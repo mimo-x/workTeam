@@ -293,6 +293,54 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
       const rootTaskId = input.parentTaskId
         ? (inherited?.root_task_id ?? input.parentTaskId)
         : null;
+      let rootBudgetUsage: { descendants: number; runs: number; startedAt: number } | undefined;
+      if (rootTaskId) {
+        const root = await client.query<{
+          budget: {
+            maxDepth: number;
+            maxDescendants: number;
+            maxRuns: number;
+            maxWallTimeMs: number;
+          };
+          budget_usage: { startedAt?: number };
+          started_at: Date | null;
+        }>("SELECT budget, budget_usage, started_at FROM tasks WHERE id = $1 FOR UPDATE", [
+          rootTaskId,
+        ]);
+        const nextDepth = (inherited?.depth ?? -1) + 1;
+        if (nextDepth > root.rows[0].budget.maxDepth) {
+          throw new ApiError(409, "TASK_DEPTH_BUDGET_EXHAUSTED", "子 Task 已达到委派深度上限。");
+        }
+        const [descendants, runs] = await Promise.all([
+          client.query<{ count: string }>(
+            "SELECT count(*) AS count FROM tasks WHERE root_task_id = $1 AND id <> $1",
+            [rootTaskId],
+          ),
+          client.query<{ count: string }>(
+            `SELECT count(*) AS count FROM task_runs tr
+             JOIN tasks t ON t.id = tr.task_id WHERE t.root_task_id = $1`,
+            [rootTaskId],
+          ),
+        ]);
+        const descendantCount = Number(descendants.rows[0]?.count ?? 0);
+        if (descendantCount + 1 > root.rows[0].budget.maxDescendants) {
+          throw new ApiError(
+            409,
+            "TASK_DESCENDANT_BUDGET_EXHAUSTED",
+            "根 Task 的子 Task 数量预算已耗尽。",
+          );
+        }
+        const startedAt =
+          root.rows[0].budget_usage?.startedAt ?? root.rows[0].started_at?.getTime() ?? Date.now();
+        if (root.rows[0].started_at && Date.now() - startedAt > root.rows[0].budget.maxWallTimeMs) {
+          throw new ApiError(409, "TASK_TIME_BUDGET_EXHAUSTED", "根 Task 的运行时长预算已耗尽。");
+        }
+        rootBudgetUsage = {
+          descendants: descendantCount + 1,
+          runs: Number(runs.rows[0]?.count ?? 0),
+          startedAt,
+        };
+      }
       await client.query(
         `INSERT INTO rooms(id, owner_id, openim_group_id, type, name, source_room_id)
          VALUES ($1, $2, $3, 'task', $4, $5)`,
@@ -343,6 +391,11 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
       );
       if (!rootTaskId) {
         await client.query("UPDATE tasks SET root_task_id = id WHERE id = $1", [taskId]);
+      } else if (rootBudgetUsage) {
+        await client.query("UPDATE tasks SET budget_usage = $1::jsonb WHERE id = $2", [
+          JSON.stringify(rootBudgetUsage),
+          rootTaskId,
+        ]);
       }
       await client.query(
         `INSERT INTO task_context_events(task_id, message_id, context_version, source_seq)
@@ -678,6 +731,7 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
         current_binding_revision: number | null;
         baseline_scopes: string[] | null;
         member_role: string;
+        root_task_id: string;
       }>(
         `SELECT t.task_room_id, t.source_room_id, t.revision, t.status,
                 t.approved_review_id, t.context_version,
@@ -686,7 +740,7 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
                 wb.user_id AS host_user_id,
                 wb.status AS binding_status, wb.revoked_at AS binding_revoked_at,
                 wb.revision AS current_binding_revision, wb.baseline_scopes,
-                rm.role AS member_role
+                rm.role AS member_role, t.root_task_id
          FROM tasks t JOIN room_members rm ON rm.room_id = t.source_room_id
          LEFT JOIN workspace_bindings wb ON wb.id = t.workspace_binding_id
          WHERE t.id = $1 AND rm.user_id = $2 FOR UPDATE`,
@@ -731,7 +785,11 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
         throw new ApiError(409, "REVIEW_STALE", "审核记录与当前 Task 版本不一致。");
       }
       const waitForGate = async (
-        status: "waiting_for_host" | "waiting_for_permission",
+        status:
+          | "waiting_for_host"
+          | "waiting_for_permission"
+          | "waiting_for_assignee"
+          | "waiting_for_budget",
         code: string,
         message: string,
       ) => {
@@ -808,15 +866,61 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
       }
       const agents = await client.query<AgentForRun>(
         `SELECT a.* FROM task_assignees ta JOIN agents a ON a.id = ta.agent_id
+         JOIN room_agents ra ON ra.agent_id = a.id AND ra.room_id = $2
          WHERE ta.task_id = $1 AND a.archived_at IS NULL`,
+        [id, task.rows[0].source_room_id],
+      );
+      const assigneeCount = await client.query<{ count: string }>(
+        "SELECT count(*) AS count FROM task_assignees WHERE task_id = $1",
         [id],
       );
-      if (!agents.rows.length) throw new ApiError(409, "NO_ASSIGNEES", "Task 没有执行 Agent。");
+      if (!agents.rows.length || agents.rows.length !== Number(assigneeCount.rows[0].count)) {
+        return await waitForGate(
+          "waiting_for_assignee",
+          "ASSIGNEE_UNAVAILABLE",
+          "执行 Agent 已离开群聊、停用或不存在，请重新分派。",
+        );
+      }
       if (agents.rows.some((agent) => agent.execution_target !== "local")) {
         throw new ApiError(
           409,
           "UNSUPPORTED_EXECUTION_TARGET",
           "Task 包含托管 Agent，但云端 Worker 尚未接入。",
+        );
+      }
+      const root = await client.query<{
+        budget: {
+          maxDepth: number;
+          maxDescendants: number;
+          maxRuns: number;
+          maxWallTimeMs: number;
+        };
+        budget_usage: { descendants?: number; runs?: number; startedAt?: number };
+        started_at: Date | null;
+      }>("SELECT budget, budget_usage, started_at FROM tasks WHERE id = $1 FOR UPDATE", [
+        task.rows[0].root_task_id,
+      ]);
+      const budget = root.rows[0].budget;
+      const usage = root.rows[0].budget_usage ?? {};
+      const runCount = await client.query<{ count: string }>(
+        `SELECT count(*) AS count FROM task_runs tr
+         JOIN tasks t ON t.id = tr.task_id WHERE t.root_task_id = $1`,
+        [task.rows[0].root_task_id],
+      );
+      const currentRuns = Number(runCount.rows[0]?.count ?? 0);
+      const startedAt = usage.startedAt ?? root.rows[0].started_at?.getTime() ?? Date.now();
+      if (Date.now() - startedAt > budget.maxWallTimeMs) {
+        return await waitForGate(
+          "waiting_for_budget",
+          "TASK_TIME_BUDGET_EXHAUSTED",
+          "根 Task 的运行时长预算已耗尽。",
+        );
+      }
+      if (currentRuns + agents.rows.length > budget.maxRuns) {
+        return await waitForGate(
+          "waiting_for_budget",
+          "TASK_RUN_BUDGET_EXHAUSTED",
+          `根 Task 的 Agent Run 上限为 ${budget.maxRuns}。`,
         );
       }
       for (const agent of agents.rows) {
@@ -854,6 +958,15 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
         );
       }
       owners.add(task.rows[0].host_user_id!);
+      await client.query("UPDATE tasks SET budget_usage = $1::jsonb WHERE id = $2", [
+        JSON.stringify({
+          ...usage,
+          runs: currentRuns + agents.rows.length,
+          descendants: usage.descendants ?? 0,
+          startedAt,
+        }),
+        task.rows[0].root_task_id,
+      ]);
       await client.query(
         `UPDATE tasks SET status = 'queued', started_by_user_id = $1,
                 started_at = now(), wait_reason = NULL, updated_at = now() WHERE id = $2`,
@@ -890,35 +1003,113 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
   app.patch("/v1/tasks/:id/status", { preHandler: [app.authenticate] }, async (request) => {
     const { id } = parseParams(idParams, request);
     const { status } = parseBody(statusBody, request);
-    const task = await pool.query<{
+    const client = await pool.connect();
+    let task: {
       task_room_id: string;
       source_room_id: string;
+      parent_task_id: string | null;
       member_role: string;
-    }>(
-      `SELECT t.task_room_id, t.source_room_id, rm.role AS member_role FROM tasks t
-       JOIN room_members rm ON rm.room_id = t.source_room_id
-       WHERE t.id = $1 AND rm.user_id = $2`,
-      [id, request.user.sub],
-    );
-    if (!task.rows[0]) throw new ApiError(404, "TASK_NOT_FOUND", "Task 不存在。");
-    requireAdminRole(task.rows[0].member_role);
-    await pool.query("UPDATE tasks SET status = $1, updated_at = now() WHERE id = $2", [
-      status,
-      id,
-    ]);
-    await appendCollaborationAudit(pool, {
-      actorUserId: request.user.sub,
-      roomId: task.rows[0].source_room_id,
-      taskId: id,
-      eventType: status === "failed" ? "task.execution_failed" : "task.status_changed",
-      summary: `Task 状态已更新为 ${status}。`,
-      outcome: status,
-    });
-    await events.publishToRoom(task.rows[0].task_room_id, {
+    };
+    let parentUpdate: { id: string; taskRoomId: string; status: string } | null = null;
+    try {
+      await client.query("BEGIN");
+      const found = await client.query<typeof task>(
+        `SELECT t.task_room_id, t.source_room_id, t.parent_task_id,
+                rm.role AS member_role FROM tasks t
+         JOIN room_members rm ON rm.room_id = t.source_room_id
+         WHERE t.id = $1 AND rm.user_id = $2 FOR UPDATE`,
+        [id, request.user.sub],
+      );
+      if (!found.rows[0]) throw new ApiError(404, "TASK_NOT_FOUND", "Task 不存在。");
+      task = found.rows[0];
+      requireAdminRole(task.member_role);
+      if (status === "done") {
+        const unfinished = await client.query(
+          `SELECT 1 FROM tasks WHERE parent_task_id = $1 AND status <> 'done' LIMIT 1`,
+          [id],
+        );
+        if (unfinished.rowCount) {
+          throw new ApiError(
+            409,
+            "CHILD_TASKS_INCOMPLETE",
+            "仍有必需子 Task 未完成，父 Task 不能标记为完成。",
+          );
+        }
+      }
+      await client.query(
+        "UPDATE tasks SET status = $1, wait_reason = NULL, updated_at = now() WHERE id = $2",
+        [status, id],
+      );
+      await appendCollaborationAudit(client, {
+        actorUserId: request.user.sub,
+        roomId: task.source_room_id,
+        taskId: id,
+        eventType: status === "failed" ? "task.execution_failed" : "task.status_changed",
+        summary: `Task 状态已更新为 ${status}。`,
+        outcome: status,
+      });
+      if (task.parent_task_id) {
+        const siblings = await client.query<{ status: string; artifact_refs: string[] }>(
+          "SELECT status, artifact_refs FROM tasks WHERE parent_task_id = $1",
+          [task.parent_task_id],
+        );
+        const parent = await client.query<{ task_room_id: string }>(
+          "SELECT task_room_id FROM tasks WHERE id = $1 FOR UPDATE",
+          [task.parent_task_id],
+        );
+        const blockedChild = siblings.rows.some((child) =>
+          ["blocked", "failed", "cancelled"].includes(child.status),
+        );
+        const allDone =
+          siblings.rows.length > 0 && siblings.rows.every((child) => child.status === "done");
+        if (blockedChild) {
+          await client.query(
+            `UPDATE tasks SET status = 'blocked',
+                    wait_reason = '至少一个必需子 Task 已阻塞，请先处理。', updated_at = now()
+             WHERE id = $1 AND status NOT IN ('done', 'failed', 'cancelled')`,
+            [task.parent_task_id],
+          );
+          parentUpdate = {
+            id: task.parent_task_id,
+            taskRoomId: parent.rows[0].task_room_id,
+            status: "blocked",
+          };
+        } else if (allDone) {
+          const artifactRefs = [
+            ...new Set(siblings.rows.flatMap((child) => child.artifact_refs ?? [])),
+          ];
+          await client.query(
+            `UPDATE tasks SET status = 'review', wait_reason = NULL,
+                    artifact_refs = $1::jsonb, updated_at = now()
+             WHERE id = $2 AND status NOT IN ('done', 'failed', 'cancelled')`,
+            [JSON.stringify(artifactRefs), task.parent_task_id],
+          );
+          parentUpdate = {
+            id: task.parent_task_id,
+            taskRoomId: parent.rows[0].task_room_id,
+            status: "review",
+          };
+        }
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+    await events.publishToRoom(task!.task_room_id, {
       type: "task.updated",
       taskId: id,
       status,
     });
+    if (parentUpdate) {
+      await events.publishToRoom(parentUpdate.taskRoomId, {
+        type: "task.children-aggregated",
+        taskId: parentUpdate.id,
+        status: parentUpdate.status,
+      });
+    }
     return { id, status };
   });
 };

@@ -6,6 +6,7 @@ import {
   authorizeTaskLifecycleTransition,
   DEFAULT_TASK_BUDGET,
   evaluatePermissionEnvelope,
+  extractAgentActionsV1,
   normalizeExecutionApprovalRequest,
   normalizeTaskGovernance,
   normalizeTaskPermissionGrant,
@@ -230,4 +231,23 @@ test("AgentActionV1 parser accepts valid structured actions and rejects malforme
   assert.equal(parseAgentActionV1({ ...action, protocolVersion: 2 }), undefined);
   assert.equal(parseAgentActionV1({ ...action, assigneeIds: [] }), undefined);
   assert.equal(parseAgentActionV1({ protocolVersion: 1, action: "unknown" }), undefined);
+});
+
+test("native and hidden Agent actions share one validator and transport markers are stripped", () => {
+  const payload = {
+    protocolVersion: 1,
+    actionId: "action-hidden-1",
+    taskId: "task-1",
+    taskRevision: 2,
+    action: "complete",
+    summary: "Review complete",
+    artifactRefs: ["report.md"],
+  };
+  const extracted = extractAgentActionsV1(
+    `可见结果\n<!-- agent-action-v1\n${JSON.stringify(payload)}\n-->\n\`\`\`agent-action-v1\n{"protocolVersion":2}\n\`\`\``,
+  );
+  assert.equal(extracted.content, "可见结果");
+  assert.deepEqual(extracted.actions, [parseAgentActionV1(payload)]);
+  assert.equal(extracted.invalidCount, 1);
+  assert.equal(extracted.content.includes("agent-action-v1"), false);
 });

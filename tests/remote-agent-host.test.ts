@@ -61,6 +61,18 @@ class FakeRuntime implements AgentRuntime {
     });
   }
 
+  finishWithText(text: string, turnId = "turn_1") {
+    this.listener?.({ method: "message/completed", params: { turnId, text } });
+    this.complete(turnId);
+  }
+
+  agentAction(value: unknown, turnId = "turn_1") {
+    this.listener?.({
+      method: "provider/event",
+      params: { turnId, agentAction: value },
+    });
+  }
+
   complete(turnId: string) {
     this.listener?.({
       method: "turn/completed",
@@ -133,6 +145,57 @@ test("RemoteAgentHost resolves the governed binding before launching a Runtime",
 
   assert.equal(runtime.sessionStarts, 0);
   assert.equal(runtime.turnStarts, 0);
+  host.stop();
+});
+
+test("RemoteAgentHost validates native and hidden Agent actions without publishing markers", async () => {
+  const runtime = new FakeRuntime();
+  const sent: Array<Record<string, unknown>> = [];
+  const host = new RemoteAgentHost(undefined as never, runtime, {
+    async resolve() {
+      return "/tmp/project";
+    },
+  });
+  (host as unknown as { deviceId: string }).deviceId = "device_1";
+  (
+    host as unknown as {
+      socket: { readyState: number; send(value: string): void; close(): void };
+    }
+  ).socket = {
+    readyState: WebSocket.OPEN,
+    send(value) {
+      sent.push(JSON.parse(value) as Record<string, unknown>);
+    },
+    close() {},
+  };
+  await (
+    host as unknown as { execute(value: ReturnType<typeof assignment>): Promise<void> }
+  ).execute(assignment("run_actions"));
+  const nativeAction = {
+    protocolVersion: 1,
+    actionId: "native-complete",
+    taskId: "task_1",
+    taskRevision: 3,
+    action: "request_review",
+  };
+  const hiddenAction = {
+    protocolVersion: 1,
+    actionId: "hidden-block",
+    taskId: "task_1",
+    taskRevision: 3,
+    action: "block",
+    reason: "等待输入",
+  };
+  runtime.agentAction(nativeAction);
+  runtime.agentAction({ protocolVersion: 99, action: "complete" });
+  runtime.finishWithText(`可见结论\n<!-- agent-action-v1 ${JSON.stringify(hiddenAction)} -->`);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const completed = sent.find((event) => event.type === "run.complete");
+  assert.equal(completed?.content, "可见结论");
+  assert.deepEqual(completed?.agentActions, [nativeAction, hiddenAction]);
+  assert.equal(completed?.invalidActionCount, 1);
+  assert.equal(JSON.stringify(completed).includes("agent-action-v1"), false);
   host.stop();
 });
 

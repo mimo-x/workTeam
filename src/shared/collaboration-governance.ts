@@ -565,3 +565,31 @@ export const parseAgentActionV1 = (value: unknown): AgentActionV1 | undefined =>
   }
   return undefined;
 };
+
+const ACTION_MARKERS = [
+  /<!--\s*agent-action-v1\s*([\s\S]*?)-->/gi,
+  /```agent-action-v1\s*([\s\S]*?)```/gi,
+];
+
+export const extractAgentActionsV1 = (content: string) => {
+  const actions: AgentActionV1[] = [];
+  let invalidCount = 0;
+  let cleanContent = content;
+  for (const marker of ACTION_MARKERS) {
+    cleanContent = cleanContent.replace(marker, (_match, payload: string) => {
+      try {
+        const action = parseAgentActionV1(JSON.parse(payload.trim()));
+        if (action) actions.push(action);
+        else invalidCount += 1;
+      } catch {
+        invalidCount += 1;
+      }
+      return "";
+    });
+  }
+  return {
+    content: cleanContent.replace(/\n{3,}/g, "\n\n").trim(),
+    actions,
+    invalidCount,
+  };
+};

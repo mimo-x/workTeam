@@ -154,6 +154,23 @@ CREATE TABLE IF NOT EXISTS execution_approval_requests (
 CREATE INDEX IF NOT EXISTS execution_approval_requests_host_status_idx
   ON execution_approval_requests(host_device_id, status, expires_at);
 
+CREATE TABLE IF NOT EXISTS task_agent_actions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  task_id uuid NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  task_revision integer NOT NULL,
+  run_id uuid NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
+  action_id text NOT NULL,
+  action_type text NOT NULL,
+  payload jsonb NOT NULL,
+  status text NOT NULL DEFAULT 'accepted'
+    CHECK (status IN ('accepted', 'rejected', 'applied')),
+  error text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  applied_at timestamptz,
+  UNIQUE(task_id, action_id)
+);
+CREATE INDEX IF NOT EXISTS task_agent_actions_run_idx ON task_agent_actions(run_id, created_at);
+
 CREATE TABLE IF NOT EXISTS workspace_write_leases (
   workspace_binding_id uuid PRIMARY KEY REFERENCES workspace_bindings(id) ON DELETE CASCADE,
   run_id uuid NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
