@@ -39,6 +39,14 @@
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-placeholder: var(--text-placeholder);
+  --color-disabled: var(--text-disabled);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -51,6 +59,9 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-surface-subtle: var(--surface-subtle);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -70,58 +81,104 @@
 
 :root {
   --font-inter:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-ibm-plex-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.141 0.005 285.823);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.141 0.005 285.823);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.141 0.005 285.823);
-  --primary: oklch(0.21 0.006 285.885);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.967 0.001 286.375);
-  --secondary-foreground: oklch(0.21 0.006 285.885);
-  --muted: oklch(0.967 0.001 286.375);
-  --muted-foreground: oklch(0.552 0.016 285.938);
-  --accent: oklch(0.967 0.001 286.375);
-  --accent-foreground: oklch(0.21 0.006 285.885);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.92 0.004 286.32);
-  --input: oklch(0.92 0.004 286.32);
-  --ring: oklch(0.705 0.015 286.067);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "SF Pro Text", Helvetica, Arial,
+    sans-serif;
+  --font-ibm-plex-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --radius: 0.375rem;
+  /* Feishu-aligned semantic palette */
+  --background: #ffffff;
+  --foreground: #1f2329;
+  --card: #ffffff;
+  --card-foreground: #1f2329;
+  --popover: #ffffff;
+  --popover-foreground: #1f2329;
+  --primary: #1456f0;
+  --primary-foreground: #ffffff;
+  --secondary: #f2f3f5;
+  --secondary-foreground: #1f2329;
+  --muted: #f5f6f7;
+  --muted-foreground: #646a73;
+  --accent: #eff0f1;
+  --accent-foreground: #1f2329;
+  --destructive: #f54a45;
+  --success: #32a645;
+  --success-foreground: #ffffff;
+  --warning: #ed6d0c;
+  --warning-foreground: #ffffff;
+  --info: #1456f0;
+  --info-foreground: #ffffff;
+  --border: #dee0e3;
+  --input: #d0d3d6;
+  --ring: #1456f0;
+  --chart-1: #1456f0;
+  --chart-2: #32a645;
+  --chart-3: #ed6d0c;
+  --chart-4: #f54a45;
+  --chart-5: #8f959e;
+
+  /* Feishu style mapping used by WorkTeam surfaces and motion. */
+  --surface-raised: #ffffff;
+  --surface-sunken: #f2f3f5;
+  --surface-subtle: #f5f6f7;
+  --text-secondary: #646a73;
+  --text-placeholder: #8f959e;
+  --text-disabled: #bbbfc4;
+  --icon-primary: #2b2f36;
+  --shadow-color: 31 35 39;
+  --shadow-down-1:
+    0 1px 2px -2px rgb(var(--shadow-color) / 2%), 0 2px 4px rgb(var(--shadow-color) / 2%),
+    0 2px 8px 2px rgb(var(--shadow-color) / 2%);
+  --shadow-down-3:
+    0 3px 6px -6px rgb(var(--shadow-color) / 5%), 0 4px 8px rgb(var(--shadow-color) / 3%),
+    0 6px 18px 6px rgb(var(--shadow-color) / 3%);
+  --shadow-primary:
+    0 3px 6px -6px rgb(36 91 219 / 14%), 0 4px 8px rgb(36 91 219 / 6%),
+    0 6px 18px 6px rgb(36 91 219 / 4%);
+  --motion-duration-fast: 100ms;
+  --motion-duration-base: 200ms;
+  --motion-duration-slow: 300ms;
+  --motion-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --motion-ease-enter: cubic-bezier(0, 0, 0.2, 1);
+  --motion-ease-exit: cubic-bezier(0.4, 0, 1, 1);
 }
 
 .dark {
-  --background: oklch(0.141 0.005 285.823);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.21 0.006 285.885);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.21 0.006 285.885);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.92 0.004 286.32);
-  --primary-foreground: oklch(0.21 0.006 285.885);
-  --secondary: oklch(0.274 0.006 286.033);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.274 0.006 286.033);
-  --muted-foreground: oklch(0.705 0.015 286.067);
-  --accent: oklch(0.274 0.006 286.033);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.552 0.016 285.938);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
+  /* Dark mode is WorkTeam's semantic extension; Feishu's published page defines light values. */
+  --background: #121417;
+  --foreground: #f2f3f5;
+  --card: #1a1d21;
+  --card-foreground: #f2f3f5;
+  --popover: #1a1d21;
+  --popover-foreground: #f2f3f5;
+  --primary: #4e83fd;
+  --primary-foreground: #ffffff;
+  --secondary: #24272c;
+  --secondary-foreground: #f2f3f5;
+  --muted: #202327;
+  --muted-foreground: #a6aab0;
+  --accent: #2b2f36;
+  --accent-foreground: #f2f3f5;
+  --destructive: #ff6b66;
+  --success: #4fb764;
+  --warning: #f28b2d;
+  --info: #4e83fd;
+  --border: #34383f;
+  --input: #4a4f57;
+  --ring: #4e83fd;
+  --chart-1: #4e83fd;
+  --chart-2: #4fb764;
+  --chart-3: #f28b2d;
+  --chart-4: #ff6b66;
+  --chart-5: #a6aab0;
+  --surface-raised: #1a1d21;
+  --surface-sunken: #181a1e;
+  --surface-subtle: #202327;
+  --text-secondary: #a6aab0;
+  --text-placeholder: #7d828a;
+  --text-disabled: #62666d;
+  --icon-primary: #e5e6e8;
+  --shadow-color: 0 0 0;
 }
 
 @layer base {
@@ -140,8 +197,15 @@
   body {
     @apply bg-background text-foreground;
     font-optical-sizing: auto;
+    font-size: 14px;
+    line-height: 22px;
     margin: 0;
     overflow: hidden;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--text-placeholder);
   }
 }
 
@@ -158,113 +222,86 @@ input {
 }
 
 .app-shell {
-  --theme-radio-inner: #080b12;
-  background: #080b12;
-  color: #f4f4f5;
+  --theme-radio-inner: var(--background);
+  background: var(--background);
+  color: var(--foreground);
 }
 
 .app-sidebar {
-  background: #0b0e15;
+  background: var(--surface-sunken);
+  border-color: var(--border);
 }
 
-.theme-light.app-shell {
-  --theme-radio-inner: #f8fafc;
-  background: #f4f7fb;
-  color: #0f172a;
+.app-titlebar {
+  background: color-mix(in srgb, var(--background) 88%, transparent);
+  backdrop-filter: blur(12px);
 }
 
-.theme-light .app-sidebar {
-  background: #eef2f7;
+.app-panel {
+  background: var(--surface-raised);
+  border-color: var(--border);
+  box-shadow: var(--shadow-down-1);
 }
 
-.theme-light [class*="bg-[#080b12]"] {
-  background-color: rgb(248 250 252 / 0.94) !important;
+.app-panel-subtle {
+  background: var(--surface-subtle);
+  border-color: var(--border);
 }
 
-.theme-light [class*="bg-[#0b0e15]"] {
-  background-color: rgb(241 245 249 / 0.96) !important;
+.team-markdown > :first-child {
+  margin-top: 0;
 }
 
-.theme-light [class*="bg-[#11151f]"] {
-  background-color: #fff !important;
+.team-markdown > :last-child {
+  margin-bottom: 0;
 }
 
-.theme-light [class*="bg-[#17130d]"] {
-  background-color: rgb(255 251 235 / 0.98) !important;
+.team-markdown p {
+  margin: 0.7rem 0;
 }
 
-.theme-light [class*="bg-white/"] {
-  background-color: rgb(15 23 42 / 0.045) !important;
+.team-markdown h1,
+.team-markdown h2,
+.team-markdown h3 {
+  margin: 1.25rem 0 0.55rem;
+  color: var(--foreground);
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
-.theme-light [class*="bg-black/"] {
-  background-color: rgb(15 23 42 / 0.06) !important;
+.team-markdown h1 {
+  font-size: 1.125rem;
 }
 
-.theme-light [class*="border-white/"] {
-  border-color: rgb(15 23 42 / 0.12) !important;
+.team-markdown h2 {
+  font-size: 1rem;
 }
 
-.theme-light [class*="border-zinc-300/"] {
-  border-color: rgb(15 23 42 / 0.12) !important;
+.team-markdown h3 {
+  font-size: 0.875rem;
 }
 
-.theme-light [class*="text-zinc-100"],
-.theme-light [class*="text-zinc-200"],
-.theme-light [class*="text-zinc-300"] {
-  color: #1e293b !important;
+.team-markdown ul,
+.team-markdown ol {
+  margin: 0.7rem 0;
+  padding-left: 1.25rem;
 }
 
-.theme-light [class*="text-zinc-400"] {
-  color: #475569 !important;
+.team-markdown ul {
+  list-style: disc;
 }
 
-.theme-light [class*="text-zinc-500"] {
-  color: #64748b !important;
+.team-markdown ol {
+  list-style: decimal;
 }
 
-.theme-light [class*="text-zinc-600"] {
-  color: #718096 !important;
+.team-markdown li + li {
+  margin-top: 0.28rem;
 }
 
-.theme-light [class*="text-zinc-700"] {
-  color: #94a3b8 !important;
-}
-
-.theme-light [class*="hover:bg-white/"]:hover {
-  background-color: rgb(15 23 42 / 0.075) !important;
-}
-
-.theme-light [class*="hover:text-white"]:hover,
-.theme-light [class*="hover:text-zinc-200"]:hover,
-.theme-light [class*="hover:text-zinc-300"]:hover {
-  color: #0f172a !important;
-}
-
-.theme-light [class*="placeholder:text-zinc-"]::placeholder {
-  color: #94a3b8 !important;
-}
-
-.theme-light .theme-preview-dark {
-  background-color: #080b12 !important;
-}
-
-.theme-light .theme-preview-dark [class*="bg-[#0b0e15]"] {
-  background-color: #0b0e15 !important;
-}
-
-.theme-light .theme-preview-dark [class*="bg-white/"] {
-  background-color: rgb(255 255 255 / 0.08) !important;
-}
-
-.theme-light .theme-preview-dark [class*="border-white/"] {
-  border-color: rgb(255 255 255 / 0.08) !important;
-}
-
-.theme-light .settings-dialog {
-  box-shadow: 0 28px 80px rgb(15 23 42 / 0.18);
-}
-
-.theme-light .settings-backdrop {
-  background-color: rgb(15 23 42 / 0.28) !important;
+.team-markdown blockquote {
+  margin: 0.9rem 0;
+  border-left: 3px solid var(--primary);
+  padding-left: 0.8rem;
+  color: var(--muted-foreground);
 }

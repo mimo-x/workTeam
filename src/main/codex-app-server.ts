@@ -7,6 +7,9 @@ import type {
   ApprovalRequest,
   CodexAccount,
   CodexEvent,
+  CodexAttachment,
+  CodexThreadDetail,
+  CodexThreadSummary,
   CodexModel,
   CodexStatus,
   RpcRequestId,
@@ -192,6 +195,7 @@ export class CodexAppServer {
     cwd: string,
     model?: string,
     sandbox: "read-only" | "workspace-write" = "workspace-write",
+    threadSource = "codex-desktop-chat",
   ) {
     await this.connect();
     const result = await this.request<{ thread: { id: string } }>("thread/start", {
@@ -200,7 +204,7 @@ export class CodexAppServer {
       sandbox,
       approvalPolicy: "on-request",
       ephemeral: false,
-      threadSource: "codex-desktop-chat",
+      threadSource,
     });
     return { threadId: result.thread.id };
   }
@@ -211,18 +215,123 @@ export class CodexAppServer {
     text: string,
     model?: string,
     skills: Array<{ name: string; path: string }> = [],
+    attachments: CodexAttachment[] = [],
   ) {
     await this.connect();
+    const referencedFiles = attachments.filter((attachment) => attachment.relativePath);
+    const prompt = referencedFiles.length
+      ? `${text}\n\n用户随消息发送了以下本地附件。它们位于当前工作目录中，可按需直接读取：\n${referencedFiles
+          .map((attachment) => `- ${attachment.relativePath}（${attachment.name}）`)
+          .join("\n")}`
+      : text;
     const result = await this.request<{ turn: { id: string } }>("turn/start", {
       threadId,
       cwd,
       model: model || null,
       input: [
-        { type: "text", text, text_elements: [] },
+        { type: "text", text: prompt, text_elements: [] },
+        ...attachments
+          .filter((attachment) => attachment.kind === "image" && attachment.dataUrl)
+          .map((attachment) => ({
+            type: "image",
+            url: attachment.dataUrl!,
+            detail: "auto",
+          })),
         ...skills.map((skill) => ({ type: "skill", name: skill.name, path: skill.path })),
       ],
     });
     return { turnId: result.turn.id };
+  }
+
+  private normalizeThread(value: Record<string, unknown>): CodexThreadSummary {
+    const asTime = (input: unknown) => {
+      if (typeof input === "number") return input > 1e12 ? input : input * 1000;
+      const parsed = typeof input === "string" ? Date.parse(input) : NaN;
+      return Number.isFinite(parsed) ? parsed : Date.now();
+    };
+    return {
+      id: String(value.id ?? ""),
+      name: String(value.name ?? value.title ?? value.preview ?? "未命名会话"),
+      preview: typeof value.preview === "string" ? value.preview : undefined,
+      cwd: String(value.cwd ?? ""),
+      createdAt: asTime(value.createdAt ?? value.created_at),
+      updatedAt: asTime(value.updatedAt ?? value.updated_at ?? value.recencyAt),
+      archived: Boolean(value.archived),
+      model: typeof value.model === "string" ? value.model : undefined,
+      source: typeof value.source === "string" ? value.source : undefined,
+      threadSource: typeof value.threadSource === "string" ? value.threadSource : undefined,
+    };
+  }
+
+  async listThreads(cwd: string | string[], search?: string, archived = false) {
+    await this.connect();
+    const result = await this.request<{
+      data?: Array<Record<string, unknown>>;
+      threads?: Array<Record<string, unknown>>;
+    }>("thread/list", {
+      cwd,
+      archived,
+      searchTerm: search || null,
+      limit: 100,
+      sortKey: "recency_at",
+      sortDirection: "desc",
+    });
+    return (result.data ?? result.threads ?? []).map((thread) => this.normalizeThread(thread));
+  }
+
+  private async threadDetail(
+    method: "thread/read" | "thread/resume",
+    threadId: string,
+  ): Promise<CodexThreadDetail> {
+    await this.connect();
+    const result = await this.request<{ thread: Record<string, unknown> }>(method, {
+      threadId,
+      ...(method === "thread/read" ? { includeTurns: true } : {}),
+    });
+    const thread = result.thread ?? (result as unknown as Record<string, unknown>);
+    return {
+      ...this.normalizeThread(thread),
+      turns: Array.isArray(thread.turns) ? thread.turns : [],
+    };
+  }
+
+  readThread(threadId: string) {
+    return this.threadDetail("thread/read", threadId);
+  }
+
+  resumeThread(threadId: string) {
+    return this.threadDetail("thread/resume", threadId);
+  }
+
+  async renameThread(threadId: string, name: string) {
+    await this.request("thread/name/set", { threadId, name });
+  }
+
+  async archiveThread(threadId: string) {
+    await this.request("thread/archive", { threadId });
+  }
+
+  async deleteThread(threadId: string) {
+    await this.request("thread/delete", { threadId });
+  }
+
+  async forkThread(threadId: string) {
+    const result = await this.request<{ thread: { id: string } }>("thread/fork", { threadId });
+    return { threadId: result.thread.id };
+  }
+
+  async compactThread(threadId: string) {
+    await this.connect();
+    await this.request("thread/compact/start", { threadId });
+  }
+
+  async listMcpServers(threadId?: string) {
+    await this.connect();
+    const result = await this.request<{ data: Array<Record<string, unknown>> }>(
+      "mcpServerStatus/list",
+      { threadId: threadId || null, detail: "toolsAndAuthOnly", limit: 100 },
+    );
+    return result.data ?? [];
   }
 
   async steerTurn(threadId: string, turnId: string, text: string) {
