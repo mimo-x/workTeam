@@ -295,6 +295,7 @@ export class BackendClient {
   }
 
   async getImRuntimeConfig(): Promise<ImRuntimeConfig> {
+    await mkdir(this.imDataDir, { recursive: true });
     const session = await this.request<{
       apiAddr: string;
       wsAddr: string;

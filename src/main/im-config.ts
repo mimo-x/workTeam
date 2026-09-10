@@ -56,6 +56,7 @@ export class ImConfigStore {
   }
 
   async getRuntimeConfig(dataDir: string): Promise<ImRuntimeConfig> {
+    await mkdir(dataDir, { recursive: true });
     const config = await this.read();
     const publicConfig = await this.getPublicConfig();
     return {
