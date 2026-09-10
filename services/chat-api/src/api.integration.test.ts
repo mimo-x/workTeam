@@ -10,6 +10,7 @@ import type pg from "pg";
 
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
+import { RealtimeHub } from "./realtime.js";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "../migrations");
 
@@ -43,7 +44,7 @@ test("two users can become friends, create an Agent room, and sync settings", as
     OPENIM_ADMIN_TOKEN: "test-openim-admin-token",
     OPENIM_CALLBACK_TOKEN: "test-callback-token-long-enough",
   });
-  const { app } = await createApp(config, { pool, enableRealtime: false });
+  const { app, cipher } = await createApp(config, { pool, enableRealtime: false });
 
   const register = async (email: string, handle: string, displayName: string) => {
     const response = await app.inject({
@@ -722,6 +723,14 @@ test("two users can become friends, create an Agent room, and sync settings", as
       headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "1" },
     });
     assert.equal(grantedStart.statusCode, 200, grantedStart.body);
+    const repeatedStart = await app.inject({
+      method: "POST",
+      url: `/v1/tasks/${permissionTaskId}/start`,
+      headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "1" },
+    });
+    assert.equal(repeatedStart.statusCode, 200, repeatedStart.body);
+    assert.equal(repeatedStart.json().reused, true);
+    assert.deepEqual(repeatedStart.json().runIds, grantedStart.json().runIds);
     const governedRun = await pool.query(
       `SELECT target_device_id, permission_grant_id, requested_scopes, write_intent
        FROM task_runs WHERE id = $1`,
@@ -735,6 +744,225 @@ test("two users can become friends, create an Agent room, and sync settings", as
       "command.run",
     ]);
     assert.equal(governedRun.rows[0].write_intent, true);
+
+    const assignment = async (runId: string) =>
+      (
+        await pool.query(
+          `SELECT tr.id AS run_id, tr.task_id, tr.agent_id, tr.agent_snapshot,
+                  tr.context_version, t.title AS task_title, t.source_room_id,
+                  t.task_room_id, t.anchor_message_id, a.owner_id,
+                  tr.target_device_id, t.workspace_binding_id,
+                  tr.requested_scopes, tr.write_intent
+           FROM task_runs tr JOIN tasks t ON t.id = tr.task_id
+           JOIN agents a ON a.id = tr.agent_id WHERE tr.id = $1`,
+          [runId],
+        )
+      ).rows[0];
+    const realtimeHub = new RealtimeHub(pool, undefined as never, config, cipher);
+    const sentToWrongDevice: string[] = [];
+    const wrongConnection = {
+      socket: {
+        readyState: 1,
+        send: (value: string) => sentToWrongDevice.push(value),
+        close() {},
+      },
+      userId: alice.user.id,
+      deviceId: randomUUID(),
+      agentIds: new Set<string>(),
+    };
+    await (
+      realtimeHub as unknown as {
+        leaseAndSend(connection: typeof wrongConnection, candidate: unknown): Promise<void>;
+      }
+    ).leaseAndSend(wrongConnection, await assignment(grantedStart.json().runIds[0]));
+    assert.equal(sentToWrongDevice.length, 0);
+    assert.equal(
+      (
+        await pool.query("SELECT status FROM task_runs WHERE id = $1", [
+          grantedStart.json().runIds[0],
+        ])
+      ).rows[0].status,
+      "queued",
+    );
+
+    const sentToBoundDevice: string[] = [];
+    const boundConnection = {
+      socket: {
+        readyState: 1,
+        send: (value: string) => sentToBoundDevice.push(value),
+        close() {},
+      },
+      userId: bob.user.id,
+      deviceId: bobDeviceId,
+      agentIds: new Set<string>(),
+    };
+    await (
+      realtimeHub as unknown as {
+        leaseAndSend(connection: typeof boundConnection, candidate: unknown): Promise<void>;
+      }
+    ).leaseAndSend(boundConnection, await assignment(grantedStart.json().runIds[0]));
+    assert.equal(sentToBoundDevice.length, 1);
+    assert.equal(
+      (
+        await pool.query(
+          "SELECT run_id FROM workspace_write_leases WHERE workspace_binding_id = $1",
+          [secondBindingId],
+        )
+      ).rows[0]?.run_id,
+      grantedStart.json().runIds[0],
+    );
+
+    const secondWriteRunId = randomUUID();
+    await pool.query(
+      `INSERT INTO task_runs(
+         id, task_id, agent_id, status, execution_target, context_version, agent_snapshot,
+         approval_id, started_by_user_id, target_device_id, permission_grant_id,
+         idempotency_key, requested_scopes, write_intent
+       ) SELECT $1, task_id, agent_id, 'queued', execution_target, context_version,
+                agent_snapshot, approval_id, started_by_user_id, target_device_id,
+                permission_grant_id, $2, requested_scopes, write_intent
+         FROM task_runs WHERE id = $3`,
+      [secondWriteRunId, `test:second-write:${secondWriteRunId}`, grantedStart.json().runIds[0]],
+    );
+    const secondWriteAssignment = await assignment(secondWriteRunId);
+    assert.equal(secondWriteAssignment.write_intent, true);
+    await (
+      realtimeHub as unknown as {
+        leaseAndSend(connection: typeof boundConnection, candidate: unknown): Promise<void>;
+      }
+    ).leaseAndSend(boundConnection, secondWriteAssignment);
+    assert.equal(
+      (
+        await pool.query(
+          "SELECT run_id FROM workspace_write_leases WHERE workspace_binding_id = $1",
+          [secondBindingId],
+        )
+      ).rows[0]?.run_id,
+      grantedStart.json().runIds[0],
+    );
+    assert.equal(
+      (await pool.query("SELECT status FROM task_runs WHERE id = $1", [secondWriteRunId])).rows[0]
+        .status,
+      "queued",
+    );
+
+    const secondReadRunId = randomUUID();
+    await pool.query(
+      `INSERT INTO task_runs(
+         id, task_id, agent_id, status, execution_target, context_version, agent_snapshot,
+         approval_id, started_by_user_id, target_device_id, permission_grant_id,
+         idempotency_key, requested_scopes, write_intent
+       ) SELECT $1, task_id, agent_id, 'queued', execution_target, context_version,
+                agent_snapshot, approval_id, started_by_user_id, target_device_id,
+                permission_grant_id, $2, requested_scopes, false
+         FROM task_runs WHERE id = $3`,
+      [secondReadRunId, `test:second-read:${secondReadRunId}`, started.json().runIds[0]],
+    );
+    await (
+      realtimeHub as unknown as {
+        leaseAndSend(connection: typeof boundConnection, candidate: unknown): Promise<void>;
+      }
+    ).leaseAndSend(boundConnection, await assignment(started.json().runIds[0]));
+    await (
+      realtimeHub as unknown as {
+        leaseAndSend(connection: typeof boundConnection, candidate: unknown): Promise<void>;
+      }
+    ).leaseAndSend(boundConnection, await assignment(secondReadRunId));
+    const readStatuses = await pool.query(
+      "SELECT status FROM task_runs WHERE id IN ($1, $2) ORDER BY id",
+      [started.json().runIds[0], secondReadRunId],
+    );
+    assert.deepEqual(
+      readStatuses.rows.map((row) => row.status),
+      ["leased", "leased"],
+    );
+
+    await (
+      realtimeHub as unknown as {
+        markAgentsOffline(connection: typeof boundConnection): Promise<void>;
+      }
+    ).markAgentsOffline(boundConnection);
+    assert.equal(
+      (await pool.query("SELECT status FROM workspace_bindings WHERE id = $1", [secondBindingId]))
+        .rows[0].status,
+      "offline",
+    );
+    assert.equal(
+      (await pool.query("SELECT status FROM tasks WHERE id = $1", [permissionTaskId])).rows[0]
+        .status,
+      "waiting_for_host",
+    );
+
+    await (
+      realtimeHub as unknown as {
+        registerHost(
+          connection: typeof boundConnection,
+          message: {
+            type: "host.register";
+            deviceId: string;
+            name: string;
+            platform: string;
+            agentIds: string[];
+          },
+        ): Promise<void>;
+      }
+    ).registerHost(boundConnection, {
+      type: "host.register",
+      deviceId: bobDeviceId,
+      name: "Bob's Mac",
+      platform: "darwin",
+      agentIds: [],
+    });
+    assert.equal(
+      (await pool.query("SELECT status FROM workspace_bindings WHERE id = $1", [secondBindingId]))
+        .rows[0].status,
+      "online",
+    );
+    assert.equal(
+      (await pool.query("SELECT status FROM tasks WHERE id = $1", [permissionTaskId])).rows[0]
+        .status,
+      "approved",
+    );
+
+    await pool.query(
+      `UPDATE task_runs SET lease_expires_at = now() - interval '1 second'
+       WHERE id = $1`,
+      [grantedStart.json().runIds[0]],
+    );
+    await pool.query(
+      `UPDATE workspace_write_leases
+       SET acquired_at = now() - interval '2 seconds',
+           expires_at = now() - interval '1 second'
+       WHERE run_id = $1`,
+      [grantedStart.json().runIds[0]],
+    );
+    await (realtimeHub as unknown as { sweepExpiredLeases(): Promise<void> }).sweepExpiredLeases();
+    await (realtimeHub as unknown as { sweepExpiredLeases(): Promise<void> }).sweepExpiredLeases();
+    const expiredRun = await pool.query("SELECT status, attempts FROM task_runs WHERE id = $1", [
+      grantedStart.json().runIds[0],
+    ]);
+    assert.equal(expiredRun.rows[0].status, "queued");
+    assert.equal(expiredRun.rows[0].attempts, 1);
+    assert.equal(
+      (
+        await pool.query("SELECT count(*)::int AS count FROM task_runs WHERE id = $1", [
+          grantedStart.json().runIds[0],
+        ])
+      ).rows[0].count,
+      1,
+    );
+    await (
+      realtimeHub as unknown as {
+        leaseAndSend(connection: typeof boundConnection, candidate: unknown): Promise<void>;
+      }
+    ).leaseAndSend(boundConnection, await assignment(grantedStart.json().runIds[0]));
+    const redeliveredRun = await pool.query(
+      "SELECT status, attempts FROM task_runs WHERE id = $1",
+      [grantedStart.json().runIds[0]],
+    );
+    assert.equal(redeliveredRun.rows[0].status, "leased");
+    assert.equal(redeliveredRun.rows[0].attempts, 2);
+
     const revokedGrant = await app.inject({
       method: "DELETE",
       url: `/v1/tasks/${permissionTaskId}/permission-grants/${grantId}`,

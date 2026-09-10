@@ -672,6 +672,7 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
         workspace_binding_id: string | null;
         binding_revision: number | null;
         host_device_id: string | null;
+        host_user_id: string | null;
         binding_status: string | null;
         binding_revoked_at: Date | null;
         current_binding_revision: number | null;
@@ -682,6 +683,7 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
                 t.approved_review_id, t.context_version,
                 t.requested_access, t.requested_scopes, t.workspace_binding_id,
                 t.binding_revision, wb.device_id AS host_device_id,
+                wb.user_id AS host_user_id,
                 wb.status AS binding_status, wb.revoked_at AS binding_revoked_at,
                 wb.revision AS current_binding_revision, wb.baseline_scopes,
                 rm.role AS member_role
@@ -695,6 +697,23 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
       taskRoomId = task.rows[0].task_room_id;
       if (task.rows[0].revision !== revision) {
         throw new ApiError(409, "REVISION_CONFLICT", "Task 已被修改，请重新审核最新版本。");
+      }
+      if (task.rows[0].status === "queued" || task.rows[0].status === "running") {
+        const existingRuns = await client.query<{ id: string }>(
+          `SELECT id FROM task_runs
+           WHERE task_id = $1 AND idempotency_key LIKE $2
+           ORDER BY created_at`,
+          [id, `task:${id}:revision:${revision}:%`],
+        );
+        if (existingRuns.rows.length) {
+          await client.query("COMMIT");
+          return reply.send({
+            id,
+            status: task.rows[0].status,
+            runIds: existingRuns.rows.map((run) => run.id),
+            reused: true,
+          });
+        }
       }
       if (task.rows[0].status !== "approved" || !task.rows[0].approved_review_id) {
         throw new ApiError(409, "REVIEW_REQUIRED", "当前版本尚未通过人工审核。");
@@ -803,7 +822,6 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
       for (const agent of agents.rows) {
         const runId = randomUUID();
         runIds.push(runId);
-        owners.add(agent.owner_id);
         await client.query(
           `INSERT INTO task_runs(
              id, task_id, agent_id, status, execution_target, context_version,
@@ -835,6 +853,7 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
           ],
         );
       }
+      owners.add(task.rows[0].host_user_id!);
       await client.query(
         `UPDATE tasks SET status = 'queued', started_by_user_id = $1,
                 started_at = now(), wait_reason = NULL, updated_at = now() WHERE id = $2`,

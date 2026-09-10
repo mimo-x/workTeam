@@ -73,6 +73,10 @@ type AssignmentRow = {
   task_room_id: string;
   anchor_message_id: string;
   owner_id: string;
+  target_device_id: string;
+  workspace_binding_id: string;
+  requested_scopes: string[];
+  write_intent: boolean;
 };
 
 export class RealtimeHub implements EventPublisher {
@@ -160,18 +164,18 @@ export class RealtimeHub implements EventPublisher {
 
   async dispatchQueued(userId: string) {
     for (const connection of this.connections) {
-      if (connection.userId !== userId || !connection.deviceId || !connection.agentIds.size)
-        continue;
+      if (connection.userId !== userId || !connection.deviceId) continue;
       const candidates = await this.pool.query<AssignmentRow>(
         `SELECT tr.id AS run_id, tr.task_id, tr.agent_id, tr.agent_snapshot, tr.context_version,
                 t.title AS task_title, t.source_room_id, t.task_room_id, t.anchor_message_id,
-                a.owner_id
+                a.owner_id, tr.target_device_id, t.workspace_binding_id,
+                tr.requested_scopes, tr.write_intent
          FROM task_runs tr
          JOIN tasks t ON t.id = tr.task_id JOIN agents a ON a.id = tr.agent_id
          WHERE tr.status = 'queued' AND tr.execution_target = 'local'
-           AND a.owner_id = $1 AND tr.agent_id = ANY($2::uuid[])
+           AND tr.target_device_id = $1
          ORDER BY tr.created_at LIMIT 10`,
-        [userId, [...connection.agentIds]],
+        [connection.deviceId],
       );
       for (const candidate of candidates.rows) await this.leaseAndSend(connection, candidate);
     }
@@ -179,20 +183,67 @@ export class RealtimeHub implements EventPublisher {
 
   private async leaseAndSend(connection: Connection, candidate: AssignmentRow) {
     const leaseToken = randomToken();
-    const leased = await this.pool.query(
-      `UPDATE task_runs SET status = 'leased', device_id = $1, lease_token_hash = $2,
-              lease_expires_at = now() + ($3 * interval '1 second'), attempts = attempts + 1,
-              updated_at = now()
-       WHERE id = $4 AND status = 'queued' AND attempts < 3
-       RETURNING id`,
-      [
-        connection.deviceId,
-        tokenHash(leaseToken),
-        this.config.HOST_LEASE_SECONDS,
-        candidate.run_id,
-      ],
-    );
-    if (!leased.rowCount) return;
+    const leaseHash = tokenHash(leaseToken);
+    const leaseExpiresAt = new Date(Date.now() + this.config.HOST_LEASE_SECONDS * 1_000);
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      if (candidate.write_intent) {
+        const existingWriteLease = await client.query<{ run_id: string; expires_at: Date }>(
+          `SELECT run_id, expires_at FROM workspace_write_leases
+           WHERE workspace_binding_id = $1 FOR UPDATE`,
+          [candidate.workspace_binding_id],
+        );
+        const currentWriteLease = existingWriteLease.rows[0];
+        if (
+          currentWriteLease &&
+          currentWriteLease.run_id !== candidate.run_id &&
+          new Date(currentWriteLease.expires_at).getTime() > Date.now()
+        ) {
+          await client.query("ROLLBACK");
+          return;
+        }
+        if (currentWriteLease) {
+          await client.query(
+            `UPDATE workspace_write_leases
+             SET run_id = $2, lease_token_hash = $3, acquired_at = now(), expires_at = $4
+             WHERE workspace_binding_id = $1`,
+            [candidate.workspace_binding_id, candidate.run_id, leaseHash, leaseExpiresAt],
+          );
+        } else {
+          const insertedWriteLease = await client.query(
+            `INSERT INTO workspace_write_leases(
+               workspace_binding_id, run_id, lease_token_hash, expires_at
+             ) VALUES ($1, $2, $3, $4)
+             ON CONFLICT (workspace_binding_id) DO NOTHING
+             RETURNING run_id`,
+            [candidate.workspace_binding_id, candidate.run_id, leaseHash, leaseExpiresAt],
+          );
+          if (!insertedWriteLease.rowCount) {
+            await client.query("ROLLBACK");
+            return;
+          }
+        }
+      }
+      const leased = await client.query(
+        `UPDATE task_runs SET status = 'leased', device_id = $1, lease_token_hash = $2,
+                lease_expires_at = $3, attempts = attempts + 1,
+                updated_at = now()
+         WHERE id = $4 AND target_device_id = $1 AND status = 'queued' AND attempts < 3
+         RETURNING id`,
+        [connection.deviceId, leaseHash, leaseExpiresAt, candidate.run_id],
+      );
+      if (!leased.rowCount) {
+        await client.query("ROLLBACK");
+        return;
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
     const context = await this.loadContext(candidate.task_id);
     const snapshot = { ...candidate.agent_snapshot };
     const privateConfig = snapshot.privateConfig as EncryptedEnvelope | undefined;
@@ -211,6 +262,8 @@ export class RealtimeHub implements EventPublisher {
         taskRoomId: candidate.task_room_id,
         anchorMessageId: candidate.anchor_message_id,
         contextVersion: candidate.context_version,
+        workspaceBindingId: candidate.workspace_binding_id,
+        requestedScopes: candidate.requested_scopes,
         agent: snapshot,
         context,
         leaseToken,
@@ -306,6 +359,19 @@ export class RealtimeHub implements EventPublisher {
         status: "online",
       });
     }
+    await this.pool.query(
+      `UPDATE workspace_bindings SET status = 'online', last_seen_at = now(), updated_at = now()
+       WHERE device_id = $1 AND user_id = $2 AND revoked_at IS NULL`,
+      [connection.deviceId, connection.userId],
+    );
+    await this.pool.query(
+      `UPDATE tasks SET status = 'approved', wait_reason = NULL, updated_at = now()
+       WHERE status = 'waiting_for_host' AND approved_review_id IS NOT NULL
+         AND workspace_binding_id IN (
+           SELECT id FROM workspace_bindings WHERE device_id = $1 AND user_id = $2
+         )`,
+      [connection.deviceId, connection.userId],
+    );
     this.send(connection, {
       type: "host.registered",
       deviceId: connection.deviceId,
@@ -315,14 +381,28 @@ export class RealtimeHub implements EventPublisher {
   }
 
   private async heartbeat(connection: Connection) {
+    const leaseExpiresAt = new Date(Date.now() + this.config.HOST_LEASE_SECONDS * 1_000);
     await this.pool.query(
       "UPDATE devices SET last_seen_at = now(), updated_at = now() WHERE id = $1 AND user_id = $2",
       [connection.deviceId, connection.userId],
     );
     await this.pool.query(
-      `UPDATE task_runs SET lease_expires_at = now() + ($1 * interval '1 second'), updated_at = now()
+      `UPDATE workspace_bindings SET status = 'online', last_seen_at = now(), updated_at = now()
+       WHERE device_id = $1 AND user_id = $2 AND revoked_at IS NULL`,
+      [connection.deviceId, connection.userId],
+    );
+    await this.pool.query(
+      `UPDATE task_runs SET lease_expires_at = $1, updated_at = now()
        WHERE device_id = $2 AND status IN ('leased', 'running') AND lease_expires_at > now()`,
-      [this.config.HOST_LEASE_SECONDS, connection.deviceId],
+      [leaseExpiresAt, connection.deviceId],
+    );
+    await this.pool.query(
+      `UPDATE workspace_write_leases wl
+       SET expires_at = $1
+       FROM task_runs tr
+       WHERE wl.run_id = tr.id AND tr.device_id = $2
+         AND tr.status IN ('leased', 'running')`,
+      [leaseExpiresAt, connection.deviceId],
     );
     if (connection.agentIds.size) {
       await this.pool.query(
@@ -335,6 +415,27 @@ export class RealtimeHub implements EventPublisher {
   }
 
   private async markAgentsOffline(connection: Connection) {
+    const sameDeviceOnline = [...this.connections].some(
+      (candidate) =>
+        candidate !== connection &&
+        candidate.userId === connection.userId &&
+        candidate.deviceId === connection.deviceId,
+    );
+    if (connection.deviceId && !sameDeviceOnline) {
+      await this.pool.query(
+        `UPDATE workspace_bindings SET status = 'offline', updated_at = now()
+         WHERE device_id = $1 AND user_id = $2 AND revoked_at IS NULL`,
+        [connection.deviceId, connection.userId],
+      );
+      await this.pool.query(
+        `UPDATE tasks SET status = 'waiting_for_host',
+                wait_reason = '项目主机连接已断开。', updated_at = now()
+         WHERE workspace_binding_id IN (
+           SELECT id FROM workspace_bindings WHERE device_id = $1 AND user_id = $2
+         ) AND status IN ('approved', 'queued', 'running', 'waiting')`,
+        [connection.deviceId, connection.userId],
+      );
+    }
     if (!connection.agentIds.size) return;
     const stillOnline = new Set(
       [...this.connections]
@@ -425,6 +526,7 @@ export class RealtimeHub implements EventPublisher {
                 lease_expires_at = NULL, updated_at = now() WHERE id = $1`,
         [runId],
       );
+      await client.query("DELETE FROM workspace_write_leases WHERE run_id = $1", [runId]);
       await client.query("UPDATE tasks SET status = 'review', updated_at = now() WHERE id = $1", [
         run.task_id,
       ]);
@@ -459,6 +561,7 @@ export class RealtimeHub implements EventPublisher {
        WHERE id = $2 RETURNING status`,
       [error, runId],
     );
+    await this.pool.query("DELETE FROM workspace_write_leases WHERE run_id = $1", [runId]);
     if (result.rows[0].status === "failed") {
       await this.pool.query(
         "UPDATE tasks SET status = 'blocked', updated_at = now() WHERE id = $1",
@@ -483,18 +586,19 @@ export class RealtimeHub implements EventPublisher {
   }
 
   private async sweepExpiredLeases() {
-    const expired = await this.pool.query<{ owner_id: string; task_id: string }>(
+    await this.pool.query("DELETE FROM workspace_write_leases WHERE expires_at <= now()");
+    const expired = await this.pool.query<{ user_id: string; task_id: string }>(
       `WITH changed AS (
-         UPDATE task_runs tr SET
+         UPDATE task_runs SET
            status = CASE WHEN attempts < 3 THEN 'queued' ELSE 'failed' END,
            device_id = NULL, lease_token_hash = NULL, lease_expires_at = NULL,
            error = 'Agent Host 租约已过期。', updated_at = now()
-         FROM agents a
-         WHERE tr.agent_id = a.id AND tr.status IN ('leased', 'running') AND tr.lease_expires_at <= now()
-         RETURNING a.owner_id, tr.task_id, tr.status
-       ) SELECT owner_id, task_id FROM changed`,
+         WHERE status IN ('leased', 'running') AND lease_expires_at <= now()
+         RETURNING target_device_id, task_id, status
+       ) SELECT d.user_id, changed.task_id FROM changed
+           JOIN devices d ON d.id = changed.target_device_id`,
     );
-    const owners = new Set(expired.rows.map((row) => row.owner_id));
+    const owners = new Set(expired.rows.map((row) => row.user_id));
     for (const owner of owners) await this.dispatchQueued(owner);
   }
 
