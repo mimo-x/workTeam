@@ -16,10 +16,12 @@ import type {
   AgentTask,
   HumanContact,
   ImRuntimeConfig,
+  PermissionScope,
   TaskRun,
   TeamMessage,
   TeamRoomSnapshot,
   TeamWorkspaceSnapshot,
+  WorkspaceBindingSummary,
 } from "../shared/agent-team";
 import { formatErrorMessage } from "../shared/error";
 
@@ -86,6 +88,8 @@ type CloudRoom = {
   name: string;
   sourceRoomId: string | null;
   directAgentId?: string;
+  memberRole?: "owner" | "admin" | "member";
+  workspaceBinding?: WorkspaceBindingSummary;
   revision: number;
   createdAt: string;
   updatedAt: string;
@@ -113,17 +117,28 @@ type CloudTask = {
   plan: string[];
   acceptanceCriteria: string[];
   requestedAccess: "read" | "write";
+  requestedScopes?: PermissionScope[];
   creatorId: string;
   requestedByUserId?: string | null;
   proposedByAgentId?: string | null;
   sourceRoomId: string;
   taskRoomId: string;
+  parentTaskId?: string | null;
+  rootTaskId?: string | null;
+  delegatedByAgentId?: string | null;
+  depth?: number;
   anchorMessageId: string;
   status: AgentTask["status"];
   revision: number;
   approvedReviewId?: string | null;
   startedByUserId?: string | null;
   startedAt?: string | null;
+  workspaceBindingId?: string | null;
+  workspaceBindingRevision?: number | null;
+  budget?: AgentTask["budget"];
+  budgetUsage?: AgentTask["budgetUsage"];
+  waitReason?: string | null;
+  artifactRefs?: string[];
   contextVersion: number;
   latestSourceSeq: number | string;
   createdAt: string;
@@ -135,6 +150,9 @@ type CloudTask = {
     status: string;
     contextVersion: number;
     outputMessageId?: string | null;
+    targetDeviceId?: string | null;
+    permissionGrantId?: string | null;
+    parentRunId?: string | null;
     error?: string | null;
     createdAt: string;
     updatedAt: string;
@@ -477,6 +495,16 @@ export class BackendClient {
         directPrincipalId: directPeer?.id ?? room.directAgentId,
         externalId: room.openimGroupId ?? undefined,
         ownerId: mapUserId(room.ownerId),
+        memberRole: room.memberRole,
+        workspaceBinding: room.workspaceBinding
+          ? {
+              ...room.workspaceBinding,
+              hostUserId: mapUserId(room.workspaceBinding.hostUserId),
+              lastSeenAt: room.workspaceBinding.lastSeenAt
+                ? timestamp(room.workspaceBinding.lastSeenAt)
+                : undefined,
+            }
+          : undefined,
         revision: room.revision,
         syncSource: "backend",
         createdAt: timestamp(room.createdAt),
@@ -503,6 +531,9 @@ export class BackendClient {
         createdAt: timestamp(run.createdAt),
         updatedAt: timestamp(run.updatedAt),
         error: run.error ?? undefined,
+        targetDeviceId: run.targetDeviceId ?? undefined,
+        permissionGrantId: run.permissionGrantId ?? undefined,
+        parentRunId: run.parentRunId ?? undefined,
       }));
       return {
         id: task.id,
@@ -512,6 +543,11 @@ export class BackendClient {
         plan: Array.isArray(task.plan) ? task.plan : [],
         acceptanceCriteria: Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria : [],
         requestedAccess: task.requestedAccess === "write" ? "write" : "read",
+        requestedScopes:
+          task.requestedScopes ??
+          (task.requestedAccess === "write"
+            ? ["workspace.read", "workspace.write"]
+            : ["workspace.read"]),
         creatorId: mapUserId(task.creatorId),
         requestedByUserId: task.requestedByUserId ? mapUserId(task.requestedByUserId) : undefined,
         proposedByAgentId: task.proposedByAgentId ?? undefined,
@@ -519,6 +555,10 @@ export class BackendClient {
         anchorMessageId: task.anchorMessageId,
         anchorSeq: Number(anchor?.sourceSeq) || 1,
         taskRoomId: task.taskRoomId,
+        parentTaskId: task.parentTaskId ?? undefined,
+        rootTaskId: task.rootTaskId ?? task.id,
+        delegatedByAgentId: task.delegatedByAgentId ?? undefined,
+        depth: Number(task.depth) || 0,
         assigneeIds: task.assignees.map((agent) => agent.id),
         status: task.status,
         revision: Number(task.revision) || 1,
@@ -530,6 +570,13 @@ export class BackendClient {
         approvedReviewId: task.approvedReviewId ?? undefined,
         startedByUserId: task.startedByUserId ? mapUserId(task.startedByUserId) : undefined,
         startedAt: task.startedAt ? timestamp(task.startedAt) : undefined,
+        workspaceBinding:
+          rooms.find((room) => room.roomId === task.sourceRoomId)?.workspaceBinding ?? undefined,
+        workspaceBindingRevision: task.workspaceBindingRevision ?? undefined,
+        budget: task.budget,
+        budgetUsage: task.budgetUsage,
+        waitReason: task.waitReason ?? undefined,
+        artifactRefs: task.artifactRefs ?? [],
         contextVersion: Number(task.contextVersion) || 1,
         latestSourceSeq: Number(task.latestSourceSeq) || Number(anchor?.sourceSeq) || 1,
         consumedContextVersionByAgent: Object.fromEntries(

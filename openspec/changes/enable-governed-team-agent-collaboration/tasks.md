@@ -42,11 +42,11 @@
 
 ## 7. Desktop collaboration experience
 
-- [ ] 7.1 Add room host-binding setup and readiness UI showing only label, repository identity, owner, revision, and online state; verify keyboard interaction, loading/error states, and path privacy in component tests.
-- [ ] 7.2 Add a Task inspector with parent/child hierarchy, assignees, effective scopes, budget use, host state, wait reason, and role-aware review/start controls; verify member/admin/host-owner snapshots render the correct actions.
-- [ ] 7.3 Add the host-owner approval inbox and approval card for deny, once, and Task-scoped decisions with confirmation of exact constraints; verify unauthorized clients receive only a redacted waiting event.
-- [ ] 7.4 Add compact group timeline events and a redacted audit view for delegation, approvals, Runs, failures, and artifacts; verify sensitive values do not appear in rendered text, copied diagnostics, or OpenIM payloads.
-- [ ] 7.5 Document host, permission, Task-tree, approval, audit, waiting, empty, and error patterns in the design system; visually verify light and dark themes at desktop widths.
+- [x] 7.1 Add room host-binding setup and readiness UI showing only label, repository identity, owner, revision, and online state; verify keyboard interaction, loading/error states, and path privacy in component tests.
+- [x] 7.2 Add a Task inspector with parent/child hierarchy, assignees, effective scopes, budget use, host state, wait reason, and role-aware review/start controls; verify member/admin/host-owner snapshots render the correct actions.
+- [x] 7.3 Add the host-owner approval inbox and approval card for deny, once, and Task-scoped decisions with confirmation of exact constraints; verify unauthorized clients receive only a redacted waiting event.
+- [x] 7.4 Add compact group timeline events and a redacted audit view for delegation, approvals, Runs, failures, and artifacts; verify sensitive values do not appear in rendered text, copied diagnostics, or OpenIM payloads.
+- [x] 7.5 Document host, permission, Task-tree, approval, audit, waiting, empty, and error patterns in the design system; visually verify light and dark themes at desktop widths.
 
 ## 8. End-to-end validation and delivery
 
