@@ -16,7 +16,6 @@ import type {
   AgentTask,
   ExternalTeamMessage,
   HumanContact,
-  PermissionScope,
   TaskRun,
   TaskReviewDecision,
   TaskStatus,

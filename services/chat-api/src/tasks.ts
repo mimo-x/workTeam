@@ -8,7 +8,7 @@ import { appendCollaborationAudit } from "./collaboration-audit.js";
 import type { EventPublisher } from "./events.js";
 import { ApiError, parseBody, parseParams, parseQuery, requireRevision } from "./http.js";
 import { enqueueOutbox } from "./outbox.js";
-import { currentTaskGrant } from "./task-permissions.js";
+import { agentScopesForTask, currentTaskGrant } from "./task-permissions.js";
 
 const idParams = z.object({ id: z.string().uuid() });
 const taskStatuses = [
@@ -888,6 +888,17 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
           "Task 包含托管 Agent，但云端 Worker 尚未接入。",
         );
       }
+      const agentScopes = await agentScopesForTask(client, id);
+      const missingAgentScope = task.rows[0].requested_scopes.find(
+        (scope) => !agentScopes.has(scope),
+      );
+      if (missingAgentScope) {
+        return await waitForGate(
+          "waiting_for_assignee",
+          "AGENT_CAPABILITY_MISSING",
+          `至少一个执行 Agent 不具备 ${missingAgentScope} 能力，请重新分派。`,
+        );
+      }
       const root = await client.query<{
         budget: {
           maxDepth: number;
@@ -1010,7 +1021,13 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
       parent_task_id: string | null;
       member_role: string;
     };
-    let parentUpdate: { id: string; taskRoomId: string; status: string } | null = null;
+    let parentUpdate: {
+      id: string;
+      taskRoomId: string;
+      sourceRoomId: string;
+      status: string;
+      artifactRefs: string[];
+    } | null = null;
     try {
       await client.query("BEGIN");
       const found = await client.query<typeof task>(
@@ -1072,7 +1089,9 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
           parentUpdate = {
             id: task.parent_task_id,
             taskRoomId: parent.rows[0].task_room_id,
+            sourceRoomId: task.source_room_id,
             status: "blocked",
+            artifactRefs: [],
           };
         } else if (allDone) {
           const artifactRefs = [
@@ -1087,7 +1106,9 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
           parentUpdate = {
             id: task.parent_task_id,
             taskRoomId: parent.rows[0].task_room_id,
+            sourceRoomId: task.source_room_id,
             status: "review",
+            artifactRefs,
           };
         }
       }
@@ -1108,6 +1129,13 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
         type: "task.children-aggregated",
         taskId: parentUpdate.id,
         status: parentUpdate.status,
+        artifactRefs: parentUpdate.artifactRefs,
+      });
+      await events.publishToRoom(parentUpdate.sourceRoomId, {
+        type: "task.children-aggregated",
+        taskId: parentUpdate.id,
+        status: parentUpdate.status,
+        artifactRefs: parentUpdate.artifactRefs,
       });
     }
     return { id, status };

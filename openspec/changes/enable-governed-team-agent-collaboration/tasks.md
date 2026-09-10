@@ -50,7 +50,8 @@
 
 ## 8. End-to-end validation and delivery
 
-- [ ] 8.1 Add a two-user/two-client backend integration scenario covering group chat, member request, admin review, host grant, two-Agent delegation, write serialization, review, and final result; verify `npm run backend:test` passes.
-- [ ] 8.2 Add failure-path integration scenarios for unauthorized approval, Prompt Injection text, host offline/reconnect, stale revision, revoked grant, exhausted budget, Runtime approval timeout, and duplicate realtime delivery; verify no forbidden or duplicate operation occurs.
-- [ ] 8.3 Run `npm run typecheck`, `npm run lint`, `npm run test:desktop`, `npm run backend:test`, `npm run build`, and `npm run validate:bugs`; record every result and resolve all regressions caused by this change.
-- [ ] 8.4 Update the README and deployment documentation for project-host binding, role responsibilities, permissions, recovery, audit privacy, and first-release exclusions; verify examples match the final API and UI terminology.
+- [x] 8.1 Add a two-user/two-client backend integration scenario covering group chat, member request, admin review, host grant, two-Agent delegation, write serialization, review, and final result; verify `npm run backend:test` passes.
+- [x] 8.2 Add failure-path integration scenarios for unauthorized approval, Prompt Injection text, host offline/reconnect, stale revision, revoked grant, exhausted budget, Runtime approval timeout, and duplicate realtime delivery; verify no forbidden or duplicate operation occurs.
+- [x] 8.3 Run `npm run typecheck`, `npm run lint`, `npm run test:desktop`, `npm run backend:test`, `npm run build`, and `npm run validate:bugs`; record every result and resolve all regressions caused by this change.
+  - 2026-09-11: typecheck passed; lint and formatting passed; 75 desktop tests passed; 8 backend tests passed; Electron production build passed; 13 Bug governance records passed validation.
+- [x] 8.4 Update the README and deployment documentation for project-host binding, role responsibilities, permissions, recovery, audit privacy, and first-release exclusions; verify examples match the final API and UI terminology.

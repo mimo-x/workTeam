@@ -105,26 +105,28 @@ const getTaskGrantContext = async (
   return context;
 };
 
-const agentScopesForTask = async (client: pg.Pool | pg.PoolClient, taskId: string) => {
+export const agentScopesForTask = async (client: pg.Pool | pg.PoolClient, taskId: string) => {
   const result = await client.query<{ capabilities: string[]; workspace_access: string }>(
     `SELECT a.capabilities, a.workspace_access FROM task_assignees ta
      JOIN agents a ON a.id = ta.agent_id
      WHERE ta.task_id = $1 AND a.archived_at IS NULL`,
     [taskId],
   );
-  const scopes = new Set<PermissionScope>();
+  let scopes: Set<PermissionScope> | undefined;
   for (const agent of result.rows) {
     const capabilities = new Set(agent.capabilities);
-    if (capabilities.has("read_workspace")) scopes.add("workspace.read");
+    const agentScopes = new Set<PermissionScope>();
+    if (capabilities.has("read_workspace")) agentScopes.add("workspace.read");
     if (capabilities.has("write_workspace") || agent.workspace_access === "write") {
-      scopes.add("workspace.write");
+      agentScopes.add("workspace.write");
     }
-    if (capabilities.has("run_command")) scopes.add("command.run");
+    if (capabilities.has("run_command")) agentScopes.add("command.run");
     if (capabilities.has("network_read") || capabilities.has("network.read")) {
-      scopes.add("network.read");
+      agentScopes.add("network.read");
     }
+    scopes = scopes ? new Set([...scopes].filter((scope) => agentScopes.has(scope))) : agentScopes;
   }
-  return scopes;
+  return scopes ?? new Set<PermissionScope>();
 };
 
 const safeRelativePrefix = (value: string) => {

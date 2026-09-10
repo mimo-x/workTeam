@@ -4,7 +4,6 @@ import {
   CheckCircle2Icon,
   CheckIcon,
   CircleAlertIcon,
-  Clock3Icon,
   EyeIcon,
   FolderKanbanIcon,
   Globe2Icon,
