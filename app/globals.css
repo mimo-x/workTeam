@@ -85,33 +85,33 @@
     sans-serif;
   --font-ibm-plex-mono:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  --radius: 0.375rem;
-  /* Feishu-aligned semantic palette */
-  --background: #ffffff;
-  --foreground: #1f2329;
+  --radius: 0.75rem;
+  /* Calm collaboration palette: warm surfaces with restrained indigo emphasis. */
+  --background: #fbfbfc;
+  --foreground: #24242b;
   --card: #ffffff;
-  --card-foreground: #1f2329;
+  --card-foreground: #24242b;
   --popover: #ffffff;
-  --popover-foreground: #1f2329;
-  --primary: #1456f0;
+  --popover-foreground: #24242b;
+  --primary: #5b5bd6;
   --primary-foreground: #ffffff;
-  --secondary: #f2f3f5;
-  --secondary-foreground: #1f2329;
-  --muted: #f5f6f7;
-  --muted-foreground: #646a73;
-  --accent: #eff0f1;
-  --accent-foreground: #1f2329;
+  --secondary: #f0f0f5;
+  --secondary-foreground: #292932;
+  --muted: #f4f4f7;
+  --muted-foreground: #6f6f7b;
+  --accent: #ededf4;
+  --accent-foreground: #292932;
   --destructive: #f54a45;
   --success: #32a645;
   --success-foreground: #ffffff;
   --warning: #ed6d0c;
   --warning-foreground: #ffffff;
-  --info: #1456f0;
+  --info: #5b5bd6;
   --info-foreground: #ffffff;
-  --border: #dee0e3;
-  --input: #d0d3d6;
-  --ring: #1456f0;
-  --chart-1: #1456f0;
+  --border: #e4e4e9;
+  --input: #d9d9e1;
+  --ring: #5b5bd6;
+  --chart-1: #5b5bd6;
   --chart-2: #32a645;
   --chart-3: #ed6d0c;
   --chart-4: #f54a45;
@@ -119,22 +119,18 @@
 
   /* Feishu style mapping used by WorkTeam surfaces and motion. */
   --surface-raised: #ffffff;
-  --surface-sunken: #f2f3f5;
-  --surface-subtle: #f5f6f7;
-  --text-secondary: #646a73;
-  --text-placeholder: #8f959e;
-  --text-disabled: #bbbfc4;
-  --icon-primary: #2b2f36;
-  --shadow-color: 31 35 39;
+  --surface-sunken: #f2f2f5;
+  --surface-subtle: #f7f7f9;
+  --text-secondary: #6f6f7b;
+  --text-placeholder: #94949f;
+  --text-disabled: #b9b9c1;
+  --icon-primary: #30303a;
+  --shadow-color: 30 30 44;
   --shadow-down-1:
-    0 1px 2px -2px rgb(var(--shadow-color) / 2%), 0 2px 4px rgb(var(--shadow-color) / 2%),
-    0 2px 8px 2px rgb(var(--shadow-color) / 2%);
+    0 1px 2px rgb(var(--shadow-color) / 3%), 0 4px 12px rgb(var(--shadow-color) / 4%);
   --shadow-down-3:
-    0 3px 6px -6px rgb(var(--shadow-color) / 5%), 0 4px 8px rgb(var(--shadow-color) / 3%),
-    0 6px 18px 6px rgb(var(--shadow-color) / 3%);
-  --shadow-primary:
-    0 3px 6px -6px rgb(36 91 219 / 14%), 0 4px 8px rgb(36 91 219 / 6%),
-    0 6px 18px 6px rgb(36 91 219 / 4%);
+    0 8px 24px rgb(var(--shadow-color) / 7%), 0 2px 8px rgb(var(--shadow-color) / 4%);
+  --shadow-primary: 0 8px 24px rgb(91 91 214 / 12%), 0 2px 8px rgb(91 91 214 / 8%);
   --motion-duration-fast: 100ms;
   --motion-duration-base: 200ms;
   --motion-duration-slow: 300ms;
@@ -151,7 +147,7 @@
   --card-foreground: #f2f3f5;
   --popover: #1a1d21;
   --popover-foreground: #f2f3f5;
-  --primary: #4e83fd;
+  --primary: #8b8bf5;
   --primary-foreground: #ffffff;
   --secondary: #24272c;
   --secondary-foreground: #f2f3f5;
@@ -162,18 +158,18 @@
   --destructive: #ff6b66;
   --success: #4fb764;
   --warning: #f28b2d;
-  --info: #4e83fd;
-  --border: #34383f;
-  --input: #4a4f57;
-  --ring: #4e83fd;
-  --chart-1: #4e83fd;
+  --info: #8b8bf5;
+  --border: #34343c;
+  --input: #474750;
+  --ring: #8b8bf5;
+  --chart-1: #8b8bf5;
   --chart-2: #4fb764;
   --chart-3: #f28b2d;
   --chart-4: #ff6b66;
   --chart-5: #a6aab0;
   --surface-raised: #1a1d21;
-  --surface-sunken: #181a1e;
-  --surface-subtle: #202327;
+  --surface-sunken: #16161a;
+  --surface-subtle: #202025;
   --text-secondary: #a6aab0;
   --text-placeholder: #7d828a;
   --text-disabled: #62666d;
