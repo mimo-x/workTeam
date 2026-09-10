@@ -14,6 +14,7 @@ type RuntimeConfig = {
   workspace: string;
   model?: string;
   threadId?: string | null;
+  [key: string]: unknown;
 };
 
 type CodexItem = {
