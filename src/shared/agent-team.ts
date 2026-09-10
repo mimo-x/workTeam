@@ -117,6 +117,113 @@ export type HumanContact = {
   syncSource?: "local" | "backend";
 };
 
+export type RoomMemberRole = "owner" | "admin" | "member";
+
+export type PermissionScope = "workspace.read" | "workspace.write" | "command.run" | "network.read";
+
+export type WorkspaceBindingStatus = "online" | "offline" | "unknown" | "revoked";
+
+export type WorkspaceBindingSummary = {
+  id: string;
+  hostUserId: string;
+  hostDeviceId: string;
+  label: string;
+  repositoryUrl?: string;
+  revision: number;
+  baselineScopes: PermissionScope[];
+  status: WorkspaceBindingStatus;
+  lastSeenAt?: number;
+};
+
+export type PermissionConstraints = {
+  pathPrefixes?: string[];
+  commandExecutables?: string[];
+  networkDomains?: string[];
+};
+
+export type TaskPermissionGrant = {
+  id: string;
+  taskId: string;
+  taskRevision: number;
+  workspaceBindingId: string;
+  bindingRevision: number;
+  hostUserId: string;
+  hostDeviceId: string;
+  scopes: PermissionScope[];
+  constraints: PermissionConstraints;
+  approvedByUserId: string;
+  createdAt: number;
+  expiresAt: number;
+  revokedAt?: number;
+};
+
+export type ExecutionApprovalStatus = "pending" | "approved" | "denied" | "expired";
+export type ExecutionApprovalDecision = "deny" | "allow_once" | "allow_for_task";
+
+export type ExecutionApprovalRequest = {
+  id: string;
+  idempotencyKey: string;
+  taskId: string;
+  taskRevision: number;
+  runId: string;
+  sessionId: string;
+  turnId: string;
+  agentId: string;
+  workspaceBindingId: string;
+  hostDeviceId: string;
+  providerRequestId: string;
+  requestedScope: PermissionScope;
+  requestedConstraints: PermissionConstraints;
+  summary: string;
+  status: ExecutionApprovalStatus;
+  decision?: ExecutionApprovalDecision;
+  decidedByUserId?: string;
+  createdAt: number;
+  expiresAt: number;
+  decidedAt?: number;
+};
+
+export type TaskBudget = {
+  maxDepth: number;
+  maxDescendants: number;
+  maxRuns: number;
+  maxWallTimeMs: number;
+};
+
+export type TaskBudgetUsage = {
+  descendants: number;
+  runs: number;
+  startedAt: number;
+};
+
+type AgentActionBase = {
+  protocolVersion: 1;
+  actionId: string;
+  taskId: string;
+  taskRevision: number;
+};
+
+export type AgentActionV1 =
+  | (AgentActionBase & {
+      action: "create_subtask";
+      title: string;
+      objective: string;
+      expectedResult: string;
+      assigneeIds: string[];
+      requestedScopes: PermissionScope[];
+      acceptanceCriteria: string[];
+    })
+  | (AgentActionBase & { action: "assign_agent"; subtaskId: string; assigneeIds: string[] })
+  | (AgentActionBase & { action: "request_review"; reviewerAgentId?: string })
+  | (AgentActionBase & {
+      action: "request_permission";
+      requestedScopes: PermissionScope[];
+      constraints: PermissionConstraints;
+      reason: string;
+    })
+  | (AgentActionBase & { action: "block"; reason: string })
+  | (AgentActionBase & { action: "complete"; summary: string; artifactRefs: string[] });
+
 export type TeamMessageStatus = "pending" | "streaming" | "complete" | "error" | "cancelled";
 export type AgentMessageAction = "chat" | "propose-task";
 export type AgentSessionState =
@@ -178,6 +285,8 @@ export type TeamRoomSnapshot = {
   directPrincipalId?: string;
   externalId?: string;
   ownerId?: string;
+  memberRole?: RoomMemberRole;
+  workspaceBinding?: WorkspaceBindingSummary;
   revision?: number;
   syncSource?: "local" | "backend";
   createdAt: number;
@@ -192,6 +301,11 @@ export type TaskStatus =
   | "queued"
   | "running"
   | "waiting"
+  | "waiting_for_host"
+  | "waiting_for_permission"
+  | "waiting_for_approval"
+  | "waiting_for_assignee"
+  | "waiting_for_budget"
   | "review"
   | "blocked"
   | "done"
@@ -211,6 +325,9 @@ export type TaskRun = {
   messageId: string;
   status: TeamMessageStatus;
   contextVersion: number;
+  targetDeviceId?: string;
+  permissionGrantId?: string;
+  parentRunId?: string;
   createdAt: number;
   updatedAt: number;
   error?: string;
@@ -254,6 +371,7 @@ export type AgentTask = {
   plan: string[];
   acceptanceCriteria: string[];
   requestedAccess: "read" | "write";
+  requestedScopes?: PermissionScope[];
   creatorId: string;
   requestedByUserId?: string;
   proposedByAgentId?: string;
@@ -261,6 +379,10 @@ export type AgentTask = {
   anchorMessageId: string;
   anchorSeq: number;
   taskRoomId: string;
+  parentTaskId?: string;
+  rootTaskId?: string;
+  delegatedByAgentId?: string;
+  depth?: number;
   assigneeIds: string[];
   status: TaskStatus;
   revision: number;
@@ -268,6 +390,13 @@ export type AgentTask = {
   approvedReviewId?: string;
   startedByUserId?: string;
   startedAt?: number;
+  workspaceBinding?: WorkspaceBindingSummary;
+  workspaceBindingRevision?: number;
+  permissionGrantIds?: string[];
+  budget?: TaskBudget;
+  budgetUsage?: TaskBudgetUsage;
+  waitReason?: string;
+  artifactRefs?: string[];
   contextVersion: number;
   latestSourceSeq: number;
   consumedContextVersionByAgent: Record<string, number>;
@@ -312,6 +441,8 @@ export type TeamWorkspaceSnapshot = {
   rooms: TeamRoomSnapshot[];
   tasks: AgentTask[];
   loops: AgentLoopSession[];
+  permissionGrants?: TaskPermissionGrant[];
+  executionApprovals?: ExecutionApprovalRequest[];
 };
 
 export type TeamEvent =

@@ -1,8 +1,8 @@
 ## 1. Shared contracts and authorization policy
 
-- [ ] 1.1 Add shared workspace-binding, permission-grant, execution-approval, Task hierarchy, budget, wait-status, and `AgentActionV1` types with backward-compatible snapshot parsers; verify focused parser tests and `npm run typecheck` pass.
-- [ ] 1.2 Implement pure room-role and Task-lifecycle authorization policies for owner/admin/member behavior; verify table-driven tests reject member review/start/status mutations while preserving chat and proposal access.
-- [ ] 1.3 Implement the permission-envelope evaluator and invalidation rules for Task revision, binding revision, parent grants, scope constraints, expiry, and revocation; verify unit tests cover every allow and deny branch.
+- [x] 1.1 Add shared workspace-binding, permission-grant, execution-approval, Task hierarchy, budget, wait-status, and `AgentActionV1` types with backward-compatible snapshot parsers; verify focused parser tests and `npm run typecheck` pass.
+- [x] 1.2 Implement pure room-role and Task-lifecycle authorization policies for owner/admin/member behavior; verify table-driven tests reject member review/start/status mutations while preserving chat and proposal access.
+- [x] 1.3 Implement the permission-envelope evaluator and invalidation rules for Task revision, binding revision, parent grants, scope constraints, expiry, and revocation; verify unit tests cover every allow and deny branch.
 
 ## 2. Backend persistence and room binding
 
@@ -54,4 +54,3 @@
 - [ ] 8.2 Add failure-path integration scenarios for unauthorized approval, Prompt Injection text, host offline/reconnect, stale revision, revoked grant, exhausted budget, Runtime approval timeout, and duplicate realtime delivery; verify no forbidden or duplicate operation occurs.
 - [ ] 8.3 Run `npm run typecheck`, `npm run lint`, `npm run test:desktop`, `npm run backend:test`, `npm run build`, and `npm run validate:bugs`; record every result and resolve all regressions caused by this change.
 - [ ] 8.4 Update the README and deployment documentation for project-host binding, role responsibilities, permissions, recovery, audit privacy, and first-release exclusions; verify examples match the final API and UI terminology.
-

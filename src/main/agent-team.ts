@@ -23,6 +23,12 @@ import type {
   TeamRoomSnapshot,
   TeamWorkspaceSnapshot,
 } from "../shared/agent-team";
+import {
+  normalizeExecutionApprovalRequest,
+  normalizeTaskGovernance,
+  normalizeTaskPermissionGrant,
+  normalizeWorkspaceBindingSummary,
+} from "../shared/collaboration-governance";
 import { formatErrorMessage } from "../shared/error";
 import type { AgentRuntime, AgentRuntimeEvent } from "./agent-runtime";
 import type { AgentRuntimeRegistry } from "./runtime-registry";
@@ -66,7 +72,7 @@ class EventQueue {
   }
 }
 
-const STORAGE_VERSION = 4;
+const STORAGE_VERSION = 5;
 const defaultRuntime: AgentRuntimeBinding = {
   provider: "codex",
   protocol: "app-server",
@@ -2279,6 +2285,8 @@ export class AgentTeamService {
           type: "group",
           agentIds: agents.map((agent) => agent.id),
           humanIds: ["local_user"],
+          ownerId: "local_user",
+          memberRole: "owner",
           createdAt: Date.now(),
           nextSeq: 1,
           messages: [],
@@ -2286,6 +2294,8 @@ export class AgentTeamService {
       ],
       tasks: [],
       loops: [],
+      permissionGrants: [],
+      executionApprovals: [],
     };
   }
 
@@ -2310,6 +2320,7 @@ export class AgentTeamService {
         const hadInterruptedRun = runs.some((run) => run.error === "应用上次退出时任务仍在运行。");
         return {
           ...task,
+          ...normalizeTaskGovernance(task),
           status: hadInterruptedRun ? ("blocked" as const) : task.status,
           objective: task.objective || task.title,
           expectedResult: task.expectedResult || task.title,
@@ -2325,6 +2336,18 @@ export class AgentTeamService {
           contextEvents: Array.isArray(task.contextEvents) ? task.contextEvents : [],
           runs,
         };
+      });
+    }
+    if (Array.isArray(stored.permissionGrants)) {
+      state.permissionGrants = stored.permissionGrants.flatMap((grant) => {
+        const normalized = normalizeTaskPermissionGrant(grant);
+        return normalized ? [normalized] : [];
+      });
+    }
+    if (Array.isArray(stored.executionApprovals)) {
+      state.executionApprovals = stored.executionApprovals.flatMap((approval) => {
+        const normalized = normalizeExecutionApprovalRequest(approval);
+        return normalized ? [normalized] : [];
       });
     }
     if (Array.isArray(stored.sessions)) {
@@ -2440,7 +2463,13 @@ export class AgentTeamService {
       taskId: raw.taskId,
       directPrincipalId: raw.directPrincipalId,
       externalId: raw.externalId,
-      ownerId: raw.ownerId,
+      ownerId: raw.ownerId || (raw.syncSource === "backend" ? undefined : "local_user"),
+      memberRole: ["owner", "admin", "member"].includes(String(raw.memberRole))
+        ? raw.memberRole
+        : raw.syncSource === "backend"
+          ? undefined
+          : "owner",
+      workspaceBinding: normalizeWorkspaceBindingSummary(raw.workspaceBinding),
       revision: Number(raw.revision) || undefined,
       syncSource: raw.syncSource === "backend" ? "backend" : "local",
       createdAt: Number(raw.createdAt) || Date.now(),
