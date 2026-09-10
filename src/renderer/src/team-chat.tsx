@@ -29,6 +29,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
+
 import type {
   AgentDefinition,
   AgentLoopSession,
@@ -83,17 +98,17 @@ const sessionLabels: Record<AgentSession["state"], string> = {
   waiting: "等待下一轮",
 };
 const taskTone: Record<TaskStatus, string> = {
-  pending_review: "border-amber-300/15 bg-amber-300/7 text-amber-300",
-  changes_requested: "border-orange-300/15 bg-orange-300/7 text-orange-300",
-  approved: "border-emerald-300/15 bg-emerald-300/7 text-emerald-300",
-  queued: "border-zinc-300/10 bg-zinc-300/5 text-zinc-400",
-  running: "border-cyan-300/15 bg-cyan-300/7 text-cyan-300",
-  waiting: "border-amber-300/15 bg-amber-300/7 text-amber-300",
-  review: "border-violet-300/15 bg-violet-300/7 text-violet-300",
-  blocked: "border-red-300/15 bg-red-300/7 text-red-300",
-  done: "border-emerald-300/15 bg-emerald-300/7 text-emerald-300",
-  failed: "border-red-300/15 bg-red-300/7 text-red-300",
-  cancelled: "border-zinc-300/10 bg-zinc-300/5 text-zinc-500",
+  pending_review: "border-warning/30 bg-warning/10 text-warning",
+  changes_requested: "border-warning/30 bg-warning/10 text-warning",
+  approved: "border-success/30 bg-success/10 text-success",
+  queued: "border-border bg-muted text-muted-foreground",
+  running: "border-primary/30 bg-primary/10 text-primary",
+  waiting: "border-border bg-muted text-muted-foreground",
+  review: "border-border bg-accent text-accent-foreground",
+  blocked: "border-destructive/30 bg-destructive/10 text-destructive",
+  done: "border-success/30 bg-success/10 text-success",
+  failed: "border-destructive/30 bg-destructive/10 text-destructive",
+  cancelled: "border-border bg-muted text-muted-foreground",
 };
 
 const themeClasses: Record<
@@ -101,24 +116,24 @@ const themeClasses: Record<
   { avatar: string; chip: string; dot: string }
 > = {
   cyan: {
-    avatar: "border-cyan-300/20 bg-cyan-300/10 text-cyan-200",
-    chip: "border-cyan-300/25 bg-cyan-300/10 text-cyan-100",
-    dot: "bg-cyan-300",
+    avatar: "border-info/30 bg-info/10 text-info font-mono",
+    chip: "border-info/30 bg-info/10 text-info font-mono",
+    dot: "bg-info",
   },
   violet: {
-    avatar: "border-violet-300/20 bg-violet-300/10 text-violet-200",
-    chip: "border-violet-300/25 bg-violet-300/10 text-violet-100",
-    dot: "bg-violet-300",
+    avatar: "border-primary/30 bg-primary/10 text-primary font-mono",
+    chip: "border-primary/30 bg-primary/10 text-primary font-mono",
+    dot: "bg-primary",
   },
   amber: {
-    avatar: "border-amber-300/20 bg-amber-300/10 text-amber-200",
-    chip: "border-amber-300/25 bg-amber-300/10 text-amber-100",
-    dot: "bg-amber-300",
+    avatar: "border-warning/30 bg-warning/10 text-warning font-mono",
+    chip: "border-warning/30 bg-warning/10 text-warning font-mono",
+    dot: "bg-warning",
   },
   emerald: {
-    avatar: "border-emerald-300/20 bg-emerald-300/10 text-emerald-200",
-    chip: "border-emerald-300/25 bg-emerald-300/10 text-emerald-100",
-    dot: "bg-emerald-300",
+    avatar: "border-success/30 bg-success/10 text-success font-mono",
+    chip: "border-success/30 bg-success/10 text-success font-mono",
+    dot: "bg-success",
   },
 };
 
@@ -239,7 +254,7 @@ const applyEvent = (state: TeamWorkspaceSnapshot, event: TeamEvent) => {
 const ConnectionBadge = ({ status }: { status: OpenImConnectionState }) => {
   if (status.state === "connecting") {
     return (
-      <span className="flex items-center gap-1.5 text-[10px] text-amber-200/80">
+      <span className="flex items-center gap-1.5 text-[10px] text-warning">
         <LoaderCircleIcon className="size-3 animate-spin" />
         连接中
       </span>
@@ -247,53 +262,58 @@ const ConnectionBadge = ({ status }: { status: OpenImConnectionState }) => {
   }
   if (status.state === "connected") {
     return (
-      <span className="flex items-center gap-1.5 text-[10px] text-emerald-300/80">
-        <span className="size-1.5 rounded-full bg-emerald-300" />
+      <span className="flex items-center gap-1.5 text-[10px] text-success">
+        <span className="size-1.5 rounded-full bg-success" />
         OpenIM
       </span>
     );
   }
   if (status.state === "error") {
     return (
-      <span className="flex items-center gap-1.5 text-[10px] text-red-300/80">
+      <span className="flex items-center gap-1.5 text-[10px] text-destructive">
         <CircleAlertIcon className="size-3" />
         连接失败
       </span>
     );
   }
   return (
-    <span className="flex items-center gap-1.5 text-[10px] text-zinc-600">
-      <span className="size-1.5 rounded-full bg-zinc-600" />
+    <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+      <span className="size-1.5 rounded-full bg-muted-foreground/50" />
       本地实时
     </span>
   );
 };
 
 const MessageBody = ({ content }: { content: string }) => (
-  <div className="team-markdown min-w-0 text-sm leading-6 text-zinc-200">
+  <div className="team-markdown min-w-0 text-[13px] leading-6 text-foreground">
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{
         a: ({ children, ...props }) => (
-          <a {...props} target="_blank" rel="noreferrer" className="text-cyan-300 underline">
+          <a
+            {...props}
+            target="_blank"
+            rel="noreferrer"
+            className="text-primary underline underline-offset-4 hover:text-primary/75"
+          >
             {children}
           </a>
         ),
         code: ({ children, className, ...props }) =>
           className ? (
-            <code {...props} className={`${className} font-mono text-xs`}>
+            <code {...props} className={`${className} font-mono text-[11px]`}>
               {children}
             </code>
           ) : (
             <code
               {...props}
-              className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-[12px] text-cyan-100"
+              className="rounded-md border border-border bg-secondary px-1.5 py-0.5 font-mono text-[11px] text-foreground"
             >
               {children}
             </code>
           ),
         pre: ({ children }) => (
-          <pre className="my-3 overflow-x-auto rounded-xl border border-white/8 bg-black/30 p-3 font-mono text-xs leading-5">
+          <pre className="my-3 overflow-x-auto rounded-lg border border-border bg-secondary/70 p-3.5 font-mono text-xs leading-5 text-foreground">
             {children}
           </pre>
         ),
@@ -305,9 +325,9 @@ const MessageBody = ({ content }: { content: string }) => (
 );
 
 const StatusPill = ({ status }: { status: TaskStatus }) => (
-  <span className={`rounded-full border px-2 py-0.5 text-[9px] ${taskTone[status]}`}>
+  <Badge variant="outline" className={cn("h-5 font-mono text-[10px]", taskTone[status])}>
     {taskLabels[status]}
-  </span>
+  </Badge>
 );
 
 const MessageRow = ({
@@ -324,7 +344,13 @@ const MessageRow = ({
   onOpenTask: (task: AgentTask) => void;
 }) => {
   if (message.senderType === "system") {
-    return <div className="py-3 text-center text-[10px] text-zinc-600">{message.content}</div>;
+    return (
+      <div className="flex items-center gap-3 py-3 text-[10px] text-muted-foreground">
+        <span className="h-px flex-1 bg-border" />
+        <span>{message.content}</span>
+        <span className="h-px flex-1 bg-border" />
+      </div>
+    );
   }
   const isUser = message.senderType === "user";
   const running = message.status === "pending" || message.status === "streaming";
@@ -332,25 +358,27 @@ const MessageRow = ({
 
   if (isUser) {
     return (
-      <article className="flex justify-end gap-3 py-3">
-        <div className="max-w-[min(44rem,78%)]">
-          <div className="mb-1.5 flex items-center justify-end gap-2 text-[10px] text-zinc-600">
+      <article className="flex justify-end gap-2.5 py-3">
+        <div className="max-w-[min(40rem,76%)]">
+          <div className="mb-1 flex items-center justify-end gap-2 font-mono text-[10px] text-muted-foreground">
             <span>{timeLabel(message.createdAt)}</span>
-            <span>{message.senderName}</span>
+            <span className="font-semibold text-foreground">{message.senderName}</span>
           </div>
-          <div className="rounded-2xl rounded-tr-md border border-cyan-300/15 bg-cyan-300/10 px-4 py-3 text-sm leading-6 whitespace-pre-wrap text-cyan-50">
+          <div className="rounded-2xl rounded-tr-md border border-primary/20 bg-primary/10 px-4 py-3 text-[13px] leading-6 whitespace-pre-wrap text-foreground shadow-[var(--shadow-down-1)]">
             {message.content}
           </div>
           {task && (
             <button
               type="button"
               onClick={() => onOpenTask(task)}
-              className="mt-2 flex w-full items-center gap-3 rounded-xl border border-violet-300/12 bg-violet-300/5 px-3 py-2.5 text-left transition hover:border-violet-300/25 hover:bg-violet-300/8"
+              className="mt-1.5 flex w-full items-center gap-2.5 rounded-lg border border-border bg-card p-2 text-left transition hover:bg-accent"
             >
-              <FolderKanbanIcon className="size-4 shrink-0 text-violet-300" />
+              <FolderKanbanIcon className="size-3.5 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-xs text-zinc-300">{task.title}</span>
-                <span className="mt-0.5 block text-[9px] text-zinc-600">
+                <span className="block truncate text-xs font-medium text-foreground">
+                  {task.title}
+                </span>
+                <span className="mt-0.5 block font-mono text-[9px] text-muted-foreground">
                   已创建 Task 小群 · {task.assigneeIds.length} 位 Agent
                 </span>
               </span>
@@ -358,7 +386,7 @@ const MessageRow = ({
             </button>
           )}
         </div>
-        <div className="mt-5 grid size-8 shrink-0 place-items-center rounded-xl border border-white/10 bg-white/8 text-xs font-semibold text-zinc-200">
+        <div className="mt-4 grid size-7 shrink-0 place-items-center rounded-lg border border-primary/20 bg-primary/10 font-mono text-[10px] font-semibold text-primary">
           我
         </div>
       </article>
@@ -366,31 +394,35 @@ const MessageRow = ({
   }
 
   return (
-    <article className="group flex gap-3 py-3">
+    <article className="group flex gap-3 py-4">
       <div
-        className={`mt-5 grid size-8 shrink-0 place-items-center rounded-xl border text-xs font-semibold ${theme.avatar}`}
+        className={`mt-1 grid size-8 shrink-0 place-items-center rounded-xl border font-mono text-[10px] font-semibold ${theme.avatar}`}
       >
         {agent?.initials ?? "AI"}
       </div>
       <div className="min-w-0 max-w-[min(48rem,82%)] flex-1">
         <div className="mb-1.5 flex items-center gap-2 text-[10px]">
-          <span className="font-medium text-zinc-300">{message.senderName}</span>
-          {agent && <span className="text-zinc-600">{agent.title}</span>}
-          <span className="text-zinc-700">{timeLabel(message.createdAt)}</span>
+          <span className="font-semibold text-foreground">{message.senderName}</span>
+          {agent && (
+            <span className="rounded border border-border bg-muted/40 px-1 py-0.5 font-mono text-[9px] text-muted-foreground">
+              {agent.title}
+            </span>
+          )}
+          <span className="font-mono text-muted-foreground">{timeLabel(message.createdAt)}</span>
         </div>
-        <div className="rounded-2xl rounded-tl-md border border-white/8 bg-white/[0.035] px-4 py-3 shadow-sm shadow-black/10">
+        <div className="px-0.5 py-0.5">
           {message.content ? <MessageBody content={message.content} /> : null}
           {message.activity && (
-            <div className="flex items-center gap-2 py-1 text-xs text-zinc-500">
-              <LoaderCircleIcon className="size-3.5 animate-spin text-cyan-300" />
+            <div className="flex items-center gap-2 py-1 font-mono text-[11px] text-muted-foreground">
+              <LoaderCircleIcon className="size-3 animate-spin text-primary" />
               {message.activity}
             </div>
           )}
           {message.status === "cancelled" && (
-            <div className="text-xs text-zinc-600">已停止生成</div>
+            <div className="font-mono text-[11px] text-muted-foreground">已停止生成</div>
           )}
           {message.error && (
-            <div className="mt-2 flex items-start gap-2 rounded-lg bg-red-400/7 px-3 py-2 text-xs leading-5 text-red-300/80">
+            <div className="mt-2 flex items-start gap-2 rounded border border-destructive/30 bg-destructive/10 p-2 font-mono text-[11px] text-destructive">
               <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
               <div className="min-w-0 flex-1">
                 {(() => {
@@ -400,7 +432,7 @@ const MessageRow = ({
                     <>
                       <span className="block whitespace-pre-wrap">{summary.trim()}</span>
                       {raw && (
-                        <details className="mt-1 text-[10px] text-red-200/55">
+                        <details className="mt-1 text-[10px] text-destructive/70">
                           <summary className="cursor-pointer select-none">查看原始报错</summary>
                           <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono">
                             {raw.trim()}
@@ -418,7 +450,7 @@ const MessageRow = ({
           <button
             type="button"
             onClick={() => onStop(message.runId!)}
-            className="mt-2 flex items-center gap-1.5 text-[10px] text-zinc-600 opacity-0 transition hover:text-zinc-300 group-hover:opacity-100"
+            className="mt-2 flex items-center gap-1.5 text-[10px] text-muted-foreground opacity-0 transition hover:text-foreground group-hover:opacity-100"
           >
             <SquareIcon className="size-2.5 fill-current" />
             停止
@@ -1738,129 +1770,141 @@ const ContactsView = ({
           ? "离线"
           : "状态未知";
     return (
-      <article className="rounded-2xl border border-white/7 bg-white/[0.025] p-4 transition hover:border-white/12 hover:bg-white/[0.04]">
-        <div className="flex items-start gap-3">
-          <div
-            className={`grid size-11 shrink-0 place-items-center rounded-2xl border text-sm font-semibold ${themeClasses[agent.theme].avatar}`}
-          >
-            {agent.initials}
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <h3 className="truncate text-sm font-medium">{agent.name}</h3>
-              {agent.visibility === "public" ? (
-                <Globe2Icon className="size-3 text-emerald-300/70" />
-              ) : (
-                <LockIcon className="size-3 text-zinc-600" />
-              )}
-            </div>
-            <p className="mt-0.5 text-[10px] text-zinc-600">
-              {agent.title} · {agent.runtime?.provider ?? "codex"} · {runtimeStatus}
-            </p>
-          </div>
-          <span className={`size-2 rounded-full ${themeClasses[agent.theme].dot}`} />
-        </div>
-        <p className="mt-3 min-h-10 text-xs leading-5 text-zinc-500">{agent.description}</p>
-        <div className="mt-3 flex items-center gap-2">
-          <span className="rounded-full bg-white/5 px-2 py-1 text-[9px] text-zinc-500">
-            {agent.mention}
-          </span>
-          <span className="rounded-full bg-white/5 px-2 py-1 text-[9px] text-zinc-500">
-            {agent.workspaceAccess === "write" ? "工作区可写" : "只读"}
-          </span>
-          <button
-            type="button"
-            disabled={registryOffline}
-            onClick={() => onOpenDirect(agent.id)}
-            title={registryOffline ? "Agent 当前离线，暂时不能执行" : undefined}
-            className="ml-auto flex items-center gap-1.5 rounded-lg border border-cyan-300/15 bg-cyan-300/5 px-2 py-1 text-[9px] text-cyan-200 hover:bg-cyan-300/10 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <MessageSquareMoreIcon className="size-3" />
-            私聊
-          </button>
-          {owned ? (
-            <button
-              type="button"
-              onClick={() => onEditAgents(agent.id)}
-              className="flex items-center gap-1.5 rounded-lg border border-white/8 px-2 py-1 text-[9px] text-zinc-400 hover:border-cyan-300/20 hover:text-cyan-200"
+      <Card size="sm">
+        <CardHeader>
+          <div className="flex min-w-0 items-center gap-3">
+            <div
+              className={`grid size-10 shrink-0 place-items-center rounded-xl border text-sm font-semibold ${themeClasses[agent.theme].avatar}`}
             >
-              <PencilIcon className="size-3" />
-              编辑
-            </button>
-          ) : (
-            <span className="text-[9px] text-zinc-700">他人公开</span>
-          )}
-        </div>
-      </article>
+              {agent.initials}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <CardTitle className="truncate">{agent.name}</CardTitle>
+                <Badge variant="outline" className="font-mono text-[10px]">
+                  {agent.visibility === "public" ? (
+                    <Globe2Icon data-icon="inline-start" />
+                  ) : (
+                    <LockIcon data-icon="inline-start" />
+                  )}
+                  {agent.visibility === "public" ? "公开" : "私有"}
+                </Badge>
+              </div>
+              <CardDescription className="mt-0.5 font-mono text-[10px]">
+                {agent.title} · {agent.runtime?.provider ?? "codex"} · {runtimeStatus}
+              </CardDescription>
+            </div>
+          </div>
+          <CardAction>
+            <span className={`block size-2 rounded-full ${themeClasses[agent.theme].dot}`} />
+          </CardAction>
+        </CardHeader>
+        <CardContent>
+          <p className="min-h-10 text-xs leading-5 text-muted-foreground">{agent.description}</p>
+        </CardContent>
+        <CardFooter className="justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <Badge variant="secondary" className="font-mono text-[10px]">
+              {agent.mention}
+            </Badge>
+            <Badge variant="secondary" className="font-mono text-[10px]">
+              {agent.workspaceAccess === "write" ? "工作区可写" : "只读"}
+            </Badge>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              disabled={registryOffline}
+              onClick={() => onOpenDirect(agent.id)}
+              title={registryOffline ? "Agent 当前离线，暂时不能执行" : undefined}
+            >
+              <MessageSquareMoreIcon data-icon="inline-start" />
+              私聊
+            </Button>
+            {owned ? (
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost"
+                onClick={() => onEditAgents(agent.id)}
+              >
+                <PencilIcon data-icon="inline-start" />
+                编辑
+              </Button>
+            ) : (
+              <span className="font-mono text-[10px] text-muted-foreground">他人公开</span>
+            )}
+          </div>
+        </CardFooter>
+      </Card>
     );
   };
   return (
-    <div className="h-full overflow-y-auto">
-      <header className="electron-drag sticky top-0 z-10 flex h-16 items-center justify-between border-b border-white/7 bg-[#080b12]/92 px-7 backdrop-blur-xl">
+    <div className="h-full overflow-y-auto bg-background">
+      <header className="electron-drag sticky top-0 z-10 flex h-16 items-center justify-between border-b border-border bg-background/95 px-7 backdrop-blur-xl">
         <div>
-          <h1 className="text-sm font-semibold">通讯录</h1>
-          <p className="mt-0.5 text-[10px] text-zinc-600">好友与 Agent 工作者使用统一身份</p>
+          <h1 className="text-sm font-semibold text-foreground">通讯录</h1>
+          <p className="mt-0.5 text-[10px] text-muted-foreground">
+            好友与 Agent 工作者使用统一身份
+          </p>
         </div>
         <div className="electron-no-drag flex items-center gap-2">
-          <label className="flex items-center gap-2 rounded-xl border border-white/9 bg-white/5 px-3 py-2">
-            <SearchIcon className="size-3.5 text-zinc-600" />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索 Agent"
-              aria-label="搜索 Agent"
-              className="w-36 bg-transparent text-xs text-zinc-300 outline-none placeholder:text-zinc-700"
-            />
-          </label>
-          <button
-            type="button"
-            onClick={onEditHumans}
-            className="rounded-xl border border-white/9 bg-white/5 px-3 py-2 text-xs text-zinc-300"
-          >
+          <Input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索 Agent"
+            aria-label="搜索 Agent"
+            className="w-44"
+          />
+          <Button type="button" variant="outline" onClick={onEditHumans}>
             管理好友
-          </button>
-          <button
-            type="button"
-            onClick={() => onEditAgents()}
-            className="flex items-center gap-2 rounded-xl bg-cyan-300 px-3 py-2 text-xs font-semibold text-cyan-950"
-          >
-            <PlusIcon className="size-3.5" />
+          </Button>
+          <Button type="button" onClick={() => onEditAgents()}>
+            <PlusIcon data-icon="inline-start" />
             创建 Agent
-          </button>
+          </Button>
         </div>
       </header>
-      <div className="mx-auto max-w-4xl space-y-8 p-7">
+      <div className="mx-auto flex max-w-4xl flex-col gap-8 p-7">
         <section>
           <div className="mb-3 flex items-center gap-2">
-            <UsersIcon className="size-4 text-zinc-500" />
-            <h2 className="text-xs font-medium text-zinc-300">好友</h2>
-            <span className="text-[10px] text-zinc-700">{state.humans.length}</span>
+            <UsersIcon className="size-4 text-muted-foreground" />
+            <h2 className="text-xs font-medium text-foreground">好友</h2>
+            <Badge variant="secondary" className="font-mono text-[10px]">
+              {state.humans.length}
+            </Badge>
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-2">
             {state.humans.map((human) => (
               <article
                 key={human.id}
-                className="flex items-center gap-3 rounded-2xl border border-white/7 bg-white/[0.025] p-4"
+                className="flex items-center gap-3 rounded-xl border border-border bg-card p-3 shadow-[var(--shadow-down-1)]"
               >
-                <div className="grid size-10 place-items-center rounded-2xl border border-white/10 bg-white/7 text-xs">
+                <div className="grid size-9 place-items-center rounded-xl border border-border bg-muted/50 font-mono text-xs text-foreground">
                   {human.initials}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm text-zinc-300">{human.name}</div>
-                  <div className="mt-0.5 text-[10px] text-zinc-600">{human.title}</div>
+                  <div className="text-sm font-medium text-foreground">{human.name}</div>
+                  <div className="mt-0.5 text-[10px] text-muted-foreground">{human.title}</div>
                 </div>
                 <span
-                  className={`size-2 rounded-full ${human.status === "online" ? "bg-emerald-300" : "bg-zinc-700"}`}
+                  className={cn(
+                    "size-2 rounded-full",
+                    human.status === "online" ? "bg-success" : "bg-muted-foreground/40",
+                  )}
                 />
                 {human.id !== "local_user" && (
-                  <button
+                  <Button
                     type="button"
+                    size="xs"
+                    variant="outline"
                     onClick={() => onOpenDirect(human.id)}
-                    className="flex items-center gap-1.5 rounded-lg border border-cyan-300/15 bg-cyan-300/5 px-2.5 py-1.5 text-[10px] text-cyan-200 hover:bg-cyan-300/10"
                   >
-                    <MessageSquareMoreIcon className="size-3" />
+                    <MessageSquareMoreIcon data-icon="inline-start" />
                     私聊
-                  </button>
+                  </Button>
                 )}
               </article>
             ))}
@@ -1868,11 +1912,13 @@ const ContactsView = ({
         </section>
         <section>
           <div className="mb-3 flex items-center gap-2">
-            <LockIcon className="size-4 text-zinc-500" />
-            <h2 className="text-xs font-medium text-zinc-300">我的私有 Agent</h2>
-            <span className="text-[10px] text-zinc-700">{privateAgents.length}</span>
+            <LockIcon className="size-4 text-muted-foreground" />
+            <h2 className="text-xs font-medium text-foreground">我的私有 Agent</h2>
+            <Badge variant="secondary" className="font-mono text-[10px]">
+              {privateAgents.length}
+            </Badge>
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-2">
             {privateAgents.filter(matches).map((agent) => (
               <AgentCard key={agent.id} agent={agent} />
             ))}
@@ -1880,17 +1926,19 @@ const ContactsView = ({
         </section>
         <section>
           <div className="mb-3 flex items-center gap-2">
-            <Globe2Icon className="size-4 text-emerald-300/70" />
-            <h2 className="text-xs font-medium text-zinc-300">公开 Agent</h2>
-            <span className="text-[10px] text-zinc-700">{publicAgents.length}</span>
+            <Globe2Icon className="size-4 text-muted-foreground" />
+            <h2 className="text-xs font-medium text-foreground">公开 Agent</h2>
+            <Badge variant="secondary" className="font-mono text-[10px]">
+              {publicAgents.length}
+            </Badge>
           </div>
-          <div className="space-y-2">
+          <div className="flex flex-col gap-2">
             {publicAgents.filter(matches).map((agent) => (
               <AgentCard key={agent.id} agent={agent} />
             ))}
           </div>
           {normalizedQuery && !state.agents.some(matches) && (
-            <p className="mt-3 text-center text-[10px] text-zinc-700">没有匹配的 Agent</p>
+            <p className="mt-3 text-center text-xs text-muted-foreground">没有匹配的 Agent</p>
           )}
         </section>
       </div>
@@ -1919,35 +1967,35 @@ const TaskBoard = ({
   ];
   const sorted = [...state.tasks].sort((a, b) => b.updatedAt - a.updatedAt);
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <header className="electron-drag flex h-16 shrink-0 items-center justify-between border-b border-white/7 px-7">
+    <div className="flex h-full min-h-0 flex-col bg-background">
+      <header className="electron-drag flex h-16 shrink-0 items-center justify-between border-b border-border px-7">
         <div>
-          <h1 className="text-sm font-semibold">Task 面板</h1>
-          <p className="mt-0.5 text-[10px] text-zinc-600">
+          <h1 className="text-sm font-semibold text-foreground">Task 面板</h1>
+          <p className="mt-0.5 text-[10px] text-muted-foreground">
             {state.tasks.length} 个任务 · 与来源群实时关联
           </p>
         </div>
-        <div className="electron-no-drag flex items-center gap-2 rounded-full border border-emerald-300/10 bg-emerald-300/5 px-3 py-1.5 text-[10px] text-emerald-300/70">
-          <span className="size-1.5 rounded-full bg-emerald-300" />
+        <Badge variant="outline" className="electron-no-drag font-mono text-[10px] text-success">
+          <span className="size-1.5 rounded-full bg-success" />
           上下文订阅运行中
-        </div>
+        </Badge>
       </header>
       <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden p-6">
-        <div className="grid h-full min-w-[900px] grid-cols-4 gap-4">
+        <div className="grid h-full min-w-[960px] grid-cols-4 gap-4">
           {columns.map((column) => {
             const tasks = sorted.filter((task) => column.statuses.includes(task.status));
             return (
               <section
                 key={column.title}
-                className="flex min-h-0 flex-col rounded-2xl border border-white/7 bg-white/[0.018]"
+                className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-muted/20"
               >
-                <header className="flex items-center justify-between border-b border-white/6 px-4 py-3">
-                  <h2 className="text-xs font-medium text-zinc-400">{column.title}</h2>
-                  <span className="rounded-full bg-white/5 px-2 py-0.5 text-[9px] text-zinc-600">
+                <header className="flex items-center justify-between border-b border-border px-3 py-2.5">
+                  <h2 className="text-xs font-semibold text-foreground">{column.title}</h2>
+                  <Badge variant="secondary" className="font-mono text-[10px]">
                     {tasks.length}
-                  </span>
+                  </Badge>
                 </header>
-                <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+                <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
                   {tasks.map((task) => {
                     const room = state.rooms.find((item) => item.roomId === task.sourceRoomId);
                     const agents = state.agents.filter((agent) =>
@@ -1965,93 +2013,95 @@ const TaskBoard = ({
                       : 0;
                     const unread = Math.max(0, task.contextVersion - consumed);
                     return (
-                      <article
-                        key={task.id}
-                        className="rounded-xl border border-white/7 bg-[#0d1119] p-3.5 transition hover:border-white/14"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => onOpen(task)}
-                          className="w-full text-left"
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <StatusPill status={task.status} />
-                            {unread > 0 && (
-                              <span className="flex items-center gap-1 text-[9px] text-cyan-300">
-                                <EyeIcon className="size-3" />+{unread} 上下文
-                              </span>
-                            )}
-                          </div>
-                          <h3 className="mt-3 text-sm leading-5 text-zinc-200">{task.title}</h3>
-                          <p className="mt-2 truncate text-[10px] text-zinc-600">
+                      <Card key={task.id} size="sm">
+                        <CardHeader>
+                          <StatusPill status={task.status} />
+                          <CardTitle>
+                            <button
+                              type="button"
+                              onClick={() => onOpen(task)}
+                              className="w-full text-left hover:text-primary"
+                            >
+                              {task.title}
+                            </button>
+                          </CardTitle>
+                          <CardDescription className="truncate font-mono text-[10px]">
                             来自 # {room?.name ?? "未知群组"}
-                          </p>
-                          {session && (
-                            <p className="mt-1 truncate font-mono text-[9px] text-zinc-700">
-                              Session {sessionLabels[session.state]} · {session.provider}
-                              {session.error ? ` · ${session.error}` : ""}
-                            </p>
+                          </CardDescription>
+                          {unread > 0 && (
+                            <CardAction>
+                              <Badge variant="secondary" className="font-mono text-[10px]">
+                                <EyeIcon data-icon="inline-start" />+{unread} 上下文
+                              </Badge>
+                            </CardAction>
                           )}
-                          <div className="mt-3 flex items-center justify-between">
-                            <div className="flex -space-x-1">
+                        </CardHeader>
+                        <CardContent>
+                          <p className="truncate font-mono text-[10px] text-muted-foreground">
+                            {session
+                              ? `Session ${sessionLabels[session.state]} · ${session.provider}${session.error ? ` · ${session.error}` : ""}`
+                              : "尚未创建运行会话"}
+                          </p>
+                        </CardContent>
+                        <CardFooter className="flex-col items-stretch gap-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-1">
                               {agents.map((agent) => (
                                 <span
                                   key={agent.id}
-                                  className={`grid size-6 place-items-center rounded-full border text-[8px] ${themeClasses[agent.theme].avatar}`}
+                                  className={`grid size-6 place-items-center rounded-full border font-mono text-[8px] ${themeClasses[agent.theme].avatar}`}
                                 >
                                   {agent.initials}
                                 </span>
                               ))}
                             </div>
-                            <span className="text-[9px] text-zinc-700">
+                            <span className="font-mono text-[9px] text-muted-foreground">
                               {dateLabel(task.updatedAt)}
                             </span>
                           </div>
-                        </button>
-                        {task.status === "review" && (
-                          <button
-                            type="button"
-                            onClick={() => onStatus(task, "done")}
-                            className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-300/10 py-1.5 text-[10px] text-emerald-300"
-                          >
-                            <CheckCircle2Icon className="size-3" />
-                            验收完成
-                          </button>
-                        )}
-                        {(task.status === "pending_review" ||
-                          task.status === "changes_requested") && (
-                          <div className="mt-3 grid grid-cols-2 gap-2">
-                            <button
+                          {task.status === "review" && (
+                            <Button
                               type="button"
-                              onClick={() => onReview(task, "changes_requested")}
-                              className="rounded-lg border border-white/8 py-1.5 text-[10px] text-zinc-500 hover:text-zinc-200"
+                              size="xs"
+                              variant="outline"
+                              onClick={() => onStatus(task, "done")}
                             >
-                              退回修改
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => onReview(task, "approved")}
-                              className="rounded-lg bg-emerald-300/10 py-1.5 text-[10px] text-emerald-300"
-                            >
-                              审核通过
-                            </button>
-                          </div>
-                        )}
-                        {task.status === "approved" && (
-                          <button
-                            type="button"
-                            onClick={() => onStart(task)}
-                            className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg bg-cyan-300 py-1.5 text-[10px] font-medium text-cyan-950"
-                          >
-                            <SendIcon className="size-3" />
-                            开始执行
-                          </button>
-                        )}
-                      </article>
+                              <CheckCircle2Icon data-icon="inline-start" />
+                              验收完成
+                            </Button>
+                          )}
+                          {(task.status === "pending_review" ||
+                            task.status === "changes_requested") && (
+                            <div className="grid grid-cols-2 gap-2">
+                              <Button
+                                type="button"
+                                size="xs"
+                                variant="outline"
+                                onClick={() => onReview(task, "changes_requested")}
+                              >
+                                退回修改
+                              </Button>
+                              <Button
+                                type="button"
+                                size="xs"
+                                onClick={() => onReview(task, "approved")}
+                              >
+                                审核通过
+                              </Button>
+                            </div>
+                          )}
+                          {task.status === "approved" && (
+                            <Button type="button" size="xs" onClick={() => onStart(task)}>
+                              <SendIcon data-icon="inline-start" />
+                              开始执行
+                            </Button>
+                          )}
+                        </CardFooter>
+                      </Card>
                     );
                   })}
                   {!tasks.length && (
-                    <div className="grid h-28 place-items-center text-[10px] text-zinc-700">
+                    <div className="grid h-28 place-items-center text-xs text-muted-foreground">
                       暂无 Task
                     </div>
                   )}
@@ -2663,61 +2713,88 @@ export const TeamChat = ({
   });
   return (
     <div className="relative flex h-full min-h-0">
-      <aside className="flex w-60 shrink-0 flex-col border-r border-white/7 bg-[#0b0e15]/75">
-        <header className="electron-drag flex h-16 items-center justify-between border-b border-white/7 px-4">
-          <div>
-            <div className="text-xs font-medium text-zinc-300">消息</div>
-            <div className="mt-0.5 text-[9px] text-zinc-600">全部会话按最近消息排序</div>
+      <aside className="flex w-56 shrink-0 flex-col border-r border-border bg-secondary/60">
+        <header className="app-titlebar electron-drag flex h-12 items-center justify-between border-b border-border px-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold tracking-wider text-foreground uppercase">
+              Threads
+            </span>
+            <Badge variant="outline" className="h-5 font-mono text-[10px] text-muted-foreground">
+              {conversations.length}
+            </Badge>
           </div>
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon-xs"
             onClick={() => {
               setEditingRoom(undefined);
               setRoomDialogOpen(true);
             }}
-            className="electron-no-drag grid size-8 place-items-center rounded-lg text-zinc-500 hover:bg-white/5 hover:text-white"
+            className="electron-no-drag"
             title="新建群组"
+            aria-label="新建群组"
           >
-            <PlusIcon className="size-4" />
-          </button>
+            <PlusIcon />
+          </Button>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto p-3">
-          <div className="mb-2 flex items-center justify-between px-2">
-            <span className="text-[9px] tracking-[0.14em] text-zinc-700 uppercase">最近会话</span>
-            <span className="text-[9px] text-zinc-700">{conversations.length}</span>
-          </div>
-          <div className="space-y-1">
+        <div className="min-h-0 flex-1 overflow-y-auto p-2">
+          <div className="flex flex-col gap-0.5">
             {conversations.map((item) => {
               const itemTask = state.tasks.find((candidate) => candidate.id === item.taskId);
               const itemAgent = state.agents.find(
                 (candidate) => candidate.id === item.directPrincipalId,
               );
               const isSelected = room?.roomId === item.roomId;
+              const kind =
+                item.type === "task"
+                  ? {
+                      label: "任务",
+                      icon: <FolderKanbanIcon className="size-3.5" />,
+                      tone: "border-warning/30 bg-warning/10 text-warning",
+                    }
+                  : item.type === "group"
+                    ? {
+                        label: "群聊",
+                        icon: <UsersIcon className="size-3.5" />,
+                        tone: "border-info/30 bg-info/10 text-info",
+                      }
+                    : itemAgent
+                      ? {
+                          label: "Agent",
+                          icon: <BotIcon className="size-3.5" />,
+                          tone: "border-primary/30 bg-primary/10 text-primary",
+                        }
+                      : {
+                          label: "私聊",
+                          icon: <MessageSquareMoreIcon className="size-3.5" />,
+                          tone: "border-border bg-card text-muted-foreground",
+                        };
               return (
                 <button
                   key={item.roomId}
                   type="button"
                   onClick={() => setSelectedRoomId(item.roomId)}
-                  className={`flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left ${isSelected ? (item.type === "task" ? "bg-violet-300/8 text-violet-100" : "bg-cyan-300/8 text-cyan-100") : "text-zinc-500 hover:bg-white/4"}`}
+                  className={cn(
+                    "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-left transition",
+                    isSelected
+                      ? "bg-primary/10 text-foreground ring-1 ring-primary/20"
+                      : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                  )}
                 >
                   <span
-                    className={`grid size-8 shrink-0 place-items-center rounded-xl ${item.type === "task" ? "bg-violet-300/7 text-violet-300" : item.type === "direct" ? "bg-cyan-300/7 text-cyan-300" : "bg-white/5"}`}
-                  >
-                    {item.type === "task" ? (
-                      <FolderKanbanIcon className="size-3.5" />
-                    ) : item.type === "direct" ? (
-                      itemAgent ? (
-                        <BotIcon className="size-3.5" />
-                      ) : (
-                        <MessageSquareMoreIcon className="size-3.5" />
-                      )
-                    ) : (
-                      <UsersIcon className="size-3.5" />
+                    className={cn(
+                      "grid size-8 shrink-0 place-items-center rounded-lg border",
+                      kind.tone,
                     )}
+                  >
+                    {kind.icon}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs">{item.name}</span>
-                    <span className="mt-0.5 block truncate text-[9px] text-zinc-700">
+                    <span className="block truncate text-xs font-medium text-foreground">
+                      {item.name}
+                    </span>
+                    <span className="mt-1 block truncate font-mono text-[10px] text-muted-foreground">
                       {item.type === "task" && itemTask ? (
                         <StatusPill status={itemTask.status} />
                       ) : item.type === "direct" ? (
@@ -2731,11 +2808,21 @@ export const TeamChat = ({
                       )}
                     </span>
                   </span>
-                  {item.messages.length > 0 && (
-                    <span className="shrink-0 text-[8px] text-zinc-700">
-                      {timeLabel(item.messages.at(-1)?.updatedAt ?? item.createdAt)}
+                  <span className="flex w-11 shrink-0 flex-col items-end gap-1">
+                    <span
+                      className={cn(
+                        "rounded border px-1.5 py-0.5 text-[9px] font-medium",
+                        kind.tone,
+                      )}
+                    >
+                      {kind.label}
                     </span>
-                  )}
+                    <span className="h-3 font-mono text-[9px] text-muted-foreground/70">
+                      {item.messages.length > 0
+                        ? timeLabel(item.messages.at(-1)?.updatedAt ?? item.createdAt)
+                        : null}
+                    </span>
+                  </span>
                 </button>
               );
             })}
@@ -2744,19 +2831,27 @@ export const TeamChat = ({
       </aside>
 
       <section className="flex min-w-0 flex-1 flex-col">
-        <header className="electron-drag flex h-16 shrink-0 items-center justify-between border-b border-white/7 px-5">
-          <div className="flex min-w-0 items-center gap-3">
+        <header className="app-titlebar electron-drag flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
+          <div className="flex min-w-0 items-center gap-2.5">
             {room?.type === "task" && (
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="icon-xs"
                 onClick={() => sourceRoom && setSelectedRoomId(sourceRoom.roomId)}
-                className="electron-no-drag grid size-8 place-items-center rounded-lg text-zinc-600 hover:bg-white/5 hover:text-white"
+                className="electron-no-drag"
+                aria-label="返回来源群"
               >
-                <ArrowLeftIcon className="size-4" />
-              </button>
+                <ArrowLeftIcon />
+              </Button>
             )}
             <div
-              className={`grid size-8 shrink-0 place-items-center rounded-xl ${room?.type === "task" ? "bg-violet-300/8 text-violet-300" : "bg-cyan-300/8 text-cyan-300"}`}
+              className={cn(
+                "grid size-6 shrink-0 place-items-center rounded border",
+                room?.type === "task"
+                  ? "border-warning/30 bg-warning/10 text-warning"
+                  : "border-border bg-muted/40 text-muted-foreground",
+              )}
             >
               {room?.type === "task" ? (
                 <FolderKanbanIcon className="size-4" />
@@ -2770,72 +2865,79 @@ export const TeamChat = ({
                 <UsersIcon className="size-4" />
               )}
             </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h1 className="truncate text-sm font-medium text-zinc-200">{room?.name}</h1>
-                {task && <StatusPill status={task.status} />}
-                {runningCount > 0 && (
-                  <span className="text-[9px] text-cyan-300">{runningCount} 个运行中</span>
-                )}
-              </div>
-              <div className="mt-0.5 flex items-center gap-2">
-                <ConnectionBadge status={connection} />
-                {room?.type === "task" && sourceRoom && (
-                  <span className="text-[9px] text-zinc-600">关联 # {sourceRoom.name}</span>
-                )}
-              </div>
+            <div className="flex min-w-0 items-center gap-2">
+              <h1 className="truncate text-xs font-semibold text-foreground">{room?.name}</h1>
+              {task && <StatusPill status={task.status} />}
+              {runningCount > 0 && (
+                <Badge variant="outline" className="h-5 font-mono text-[10px]">
+                  {runningCount} running
+                </Badge>
+              )}
+              {room?.type === "task" && sourceRoom && (
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  #{sourceRoom.name}
+                </span>
+              )}
             </div>
           </div>
-          <div className="electron-no-drag flex items-center gap-1">
+          <div className="electron-no-drag flex items-center gap-2">
+            <ConnectionBadge status={connection} />
             {room &&
               room.type !== "direct" &&
               (room.syncSource !== "backend" ||
                 (room.type === "group" && room.ownerId === "local_user")) && (
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="icon-xs"
                   onClick={() => {
                     setEditingRoom(room);
                     setRoomDialogOpen(true);
                   }}
-                  className="grid size-8 place-items-center rounded-lg text-zinc-600 hover:bg-white/5 hover:text-zinc-300"
                   title={room.type === "task" ? "管理 Task 小群成员" : "管理群成员"}
+                  aria-label={room.type === "task" ? "管理 Task 小群成员" : "管理群成员"}
                 >
-                  <UserRoundCogIcon className="size-4" />
-                </button>
+                  <UserRoundCogIcon />
+                </Button>
               )}
             {room?.type === "group" && room.syncSource !== "backend" && (
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="icon-xs"
                 onClick={() => setSettingsOpen(true)}
-                className="grid size-8 place-items-center rounded-lg text-zinc-600 hover:bg-white/5 hover:text-zinc-300"
                 title="OpenIM 设置"
+                aria-label="OpenIM 设置"
               >
-                <Settings2Icon className="size-4" />
-              </button>
+                <Settings2Icon />
+              </Button>
             )}
           </div>
         </header>
         {visibleLoop && room?.type !== "task" && (
-          <div className="border-b border-cyan-300/8 bg-cyan-300/[0.025] px-5 py-3">
+          <div className="border-b border-border bg-muted/30 px-4 py-2">
             <div className="flex items-center gap-3">
-              <div className="grid size-8 shrink-0 place-items-center rounded-lg bg-cyan-300/8 text-cyan-300">
+              <div className="grid size-7 shrink-0 place-items-center rounded border border-border bg-card text-primary">
                 <Repeat2Icon
                   className={`size-4 ${visibleLoop.status === "running" ? "animate-pulse" : ""}`}
                 />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="truncate text-xs text-zinc-300">{visibleLoop.title}</span>
+                  <span className="truncate text-xs font-medium text-foreground">
+                    {visibleLoop.title}
+                  </span>
                   <span
-                    className={`rounded-full border px-2 py-0.5 text-[9px] ${
+                    className={cn(
+                      "rounded border px-1.5 py-0.5 font-mono text-[10px]",
                       visibleLoop.status === "running"
-                        ? "border-cyan-300/15 bg-cyan-300/8 text-cyan-300"
+                        ? "border-primary/30 bg-primary/10 text-primary"
                         : visibleLoop.status === "paused"
-                          ? "border-amber-300/15 bg-amber-300/8 text-amber-300"
+                          ? "border-warning/30 bg-warning/10 text-warning"
                           : visibleLoop.status === "completed"
-                            ? "border-emerald-300/15 bg-emerald-300/8 text-emerald-300"
-                            : "border-white/8 bg-white/4 text-zinc-500"
-                    }`}
+                            ? "border-success/30 bg-success/10 text-success"
+                            : "border-border bg-muted text-muted-foreground",
+                    )}
                   >
                     {visibleLoop.status === "running"
                       ? "运行中"
@@ -2847,18 +2949,18 @@ export const TeamChat = ({
                             ? "已终止"
                             : "失败"}
                   </span>
-                  <span className="text-[9px] text-zinc-600">
+                  <span className="font-mono text-[10px] text-muted-foreground">
                     {visibleLoop.completedTurns}
                     {visibleLoop.targetTurns ? ` / ${visibleLoop.targetTurns}` : " 次回复"}
                   </span>
                 </div>
-                <p className="mt-1 truncate text-[10px] text-zinc-600">
+                <p className="mt-1 truncate text-[10px] text-muted-foreground">
                   {visibleLoop.endReason || visibleLoop.objective}
                 </p>
                 {visibleLoop.targetTurns && (
-                  <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/5">
+                  <div className="mt-2 h-1 overflow-hidden rounded-full bg-muted">
                     <div
-                      className="h-full rounded-full bg-cyan-300/70 transition-[width]"
+                      className="h-full rounded-full bg-primary transition-[width]"
                       style={{
                         width: `${Math.min(100, (visibleLoop.completedTurns / visibleLoop.targetTurns) * 100)}%`,
                       }}
@@ -2868,65 +2970,75 @@ export const TeamChat = ({
               </div>
               <div className="flex shrink-0 items-center gap-1">
                 {visibleLoop.status === "running" && (
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
+                    size="icon-xs"
                     onClick={() => void controlLoop(visibleLoop, "pause")}
-                    className="grid size-8 place-items-center rounded-lg text-zinc-600 hover:bg-white/5 hover:text-amber-300"
                     title="暂停 Loop"
+                    aria-label="暂停 Loop"
                   >
-                    <PauseIcon className="size-3.5" />
-                  </button>
+                    <PauseIcon />
+                  </Button>
                 )}
                 {visibleLoop.status === "paused" && (
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
+                    size="icon-xs"
                     onClick={() => void controlLoop(visibleLoop, "resume")}
-                    className="grid size-8 place-items-center rounded-lg text-zinc-600 hover:bg-white/5 hover:text-cyan-300"
                     title="继续 Loop"
+                    aria-label="继续 Loop"
                   >
-                    <PlayIcon className="size-3.5" />
-                  </button>
+                    <PlayIcon />
+                  </Button>
                 )}
                 {(visibleLoop.status === "running" || visibleLoop.status === "paused") && (
-                  <button
+                  <Button
                     type="button"
+                    variant="destructive"
+                    size="icon-xs"
                     onClick={() => void controlLoop(visibleLoop, "cancel")}
-                    className="grid size-8 place-items-center rounded-lg text-zinc-600 hover:bg-red-300/5 hover:text-red-300"
                     title="终止 Loop"
+                    aria-label="终止 Loop"
                   >
-                    <XIcon className="size-3.5" />
-                  </button>
+                    <XIcon />
+                  </Button>
                 )}
               </div>
             </div>
           </div>
         )}
         {task && sourceRoom && (
-          <div className="border-b border-violet-300/8 bg-violet-300/[0.025] px-5 py-3">
+          <div className="border-b border-border bg-card px-4 py-2.5">
             <div className="flex items-start gap-3">
-              <div className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-violet-300/8 text-violet-300">
-                <MessageSquareMoreIcon className="size-4" />
+              <div className="mt-0.5 grid size-6 shrink-0 place-items-center rounded border border-border bg-muted/40 text-muted-foreground">
+                <MessageSquareMoreIcon className="size-3" />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <StatusPill status={task.status} />
-                  <span className="truncate text-xs text-zinc-300">{task.title}</span>
-                  <span className="text-[9px] text-zinc-700">v{task.revision}</span>
+                  <span className="truncate text-xs font-semibold text-foreground">
+                    {task.title}
+                  </span>
+                  <span className="font-mono text-[10px] text-muted-foreground">
+                    v{task.revision}
+                  </span>
                 </div>
-                <p className="mt-1 text-[10px] leading-4 text-zinc-500">{task.objective}</p>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">{task.objective}</p>
                 {!!task.plan.length && (
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {task.plan.map((step, index) => (
                       <span
                         key={`${index}-${step}`}
-                        className="rounded-md border border-white/6 bg-black/15 px-2 py-1 text-[9px] text-zinc-500"
+                        className="rounded border border-border bg-muted/30 px-2 py-0.5 font-mono text-[10px] text-muted-foreground"
                       >
                         {index + 1}. {step}
                       </span>
                     ))}
                   </div>
                 )}
-                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[9px] text-zinc-600">
+                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[10px] text-muted-foreground">
                   <span>
                     来源：{sourceRoom.name} · 消息 #{task.anchorSeq}
                   </span>
@@ -2942,38 +3054,36 @@ export const TeamChat = ({
               <div className="flex shrink-0 items-center gap-2">
                 {(task.status === "pending_review" || task.status === "changes_requested") && (
                   <>
-                    <button
+                    <Button
                       type="button"
+                      variant="outline"
+                      size="xs"
                       onClick={() => void reviewTask(task, "changes_requested")}
-                      className="rounded-lg border border-white/8 px-2.5 py-1.5 text-[9px] text-zinc-500 hover:text-zinc-200"
                     >
                       退回修改
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
+                      size="xs"
                       onClick={() => void reviewTask(task, "approved")}
-                      className="rounded-lg bg-emerald-300/10 px-2.5 py-1.5 text-[9px] text-emerald-300"
                     >
                       审核通过
-                    </button>
+                    </Button>
                   </>
                 )}
                 {task.status === "approved" && (
-                  <button
-                    type="button"
-                    onClick={() => void startTask(task)}
-                    className="rounded-lg bg-cyan-300 px-2.5 py-1.5 text-[9px] font-medium text-cyan-950"
-                  >
+                  <Button type="button" size="xs" onClick={() => void startTask(task)}>
                     开始执行
-                  </button>
+                  </Button>
                 )}
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="xs"
                   onClick={() => setSelectedRoomId(sourceRoom.roomId)}
-                  className="px-1 text-[9px] text-violet-300/70 hover:text-violet-200"
                 >
                   查看主群
-                </button>
+                </Button>
               </div>
             </div>
           </div>
@@ -2983,17 +3093,17 @@ export const TeamChat = ({
             {!room?.messages.length && (
               <div className="grid min-h-[46vh] place-items-center text-center">
                 <div className="max-w-md">
-                  <div className="mx-auto grid size-12 place-items-center rounded-2xl border border-cyan-300/12 bg-cyan-300/7 text-cyan-300">
-                    <BotIcon className="size-5" />
+                  <div className="mx-auto grid size-10 place-items-center rounded border border-border bg-muted/40 text-muted-foreground">
+                    <BotIcon className="size-4" />
                   </div>
-                  <h2 className="mt-5 text-base font-semibold text-zinc-200">
+                  <h2 className="mt-4 text-base font-semibold text-foreground">
                     {room?.type === "task"
                       ? "Task 小群已建立"
                       : room?.type === "direct"
                         ? `开始和 ${room.name} 私聊`
                         : "从一条群消息开始"}
                   </h2>
-                  <p className="mt-2 text-sm leading-6 text-zinc-600">
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
                     {room?.type === "task"
                       ? "在这里继续讨论细节；Agent 会持续看到来源群的新消息，审核通过前不会执行。"
                       : room?.type === "direct"
@@ -3022,55 +3132,57 @@ export const TeamChat = ({
             <div ref={endRef} />
           </div>
         </div>
-        <footer className="shrink-0 border-t border-white/7 bg-[#080b12]/92 px-6 py-4 backdrop-blur-xl">
+        <footer className="app-titlebar shrink-0 border-t border-border px-6 py-4">
           <div className="mx-auto max-w-4xl">
             {room?.type === "direct" ? (
-              <div className="mb-2 text-[9px] text-zinc-700">
+              <div className="mb-2 font-mono text-[10px] text-muted-foreground">
                 {directAgent ? "Agent 会在当前私聊中自动回复" : "好友私聊"}
               </div>
             ) : (
               <div className="mb-2 flex items-center justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-2 text-[9px] text-zinc-600">
-                  <span className="rounded-md border border-white/7 bg-white/[0.025] px-2 py-1 font-medium text-zinc-400">
+                <div className="flex min-w-0 items-center gap-2 font-mono text-[10px] text-muted-foreground">
+                  <span className="rounded border border-border bg-muted/40 px-2 py-1 font-medium text-foreground">
                     @
                   </span>
                   <span>在消息栏输入 @ 选择 Agent，可连续提及多个</span>
                   {!!mentionedAgents.length && (
-                    <span className="truncate text-cyan-300/75">
+                    <span className="truncate text-primary">
                       将通知：{mentionedAgents.map((agent) => agent.name).join("、")}
                     </span>
                   )}
                 </div>
-                <div className="flex shrink-0 rounded-lg border border-white/7 bg-black/20 p-0.5">
+                <div className="flex shrink-0 rounded-lg border border-border bg-muted/40 p-0.5">
                   <button
                     type="button"
                     onClick={() => setAgentAction("chat")}
-                    className={`rounded-md px-2.5 py-1 text-[9px] transition ${
+                    className={cn(
+                      "rounded-md px-2.5 py-1 text-[10px] transition",
                       agentAction === "chat"
-                        ? "bg-white/8 text-zinc-200"
-                        : "text-zinc-600 hover:text-zinc-300"
-                    }`}
+                        ? "bg-card text-foreground shadow-[var(--shadow-down-1)]"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
                   >
                     群聊回复
                   </button>
                   <button
                     type="button"
                     onClick={() => setAgentAction("propose-task")}
-                    className={`rounded-md px-2.5 py-1 text-[9px] transition ${
+                    className={cn(
+                      "rounded-md px-2.5 py-1 text-[10px] transition",
                       agentAction === "propose-task"
-                        ? "bg-violet-300/12 text-violet-200"
-                        : "text-zinc-600 hover:text-zinc-300"
-                    }`}
+                        ? "bg-primary/10 text-primary"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
                   >
                     规划 Task
                   </button>
                 </div>
               </div>
             )}
-            <div className="relative rounded-2xl border border-white/9 bg-white/[0.035] p-2 shadow-xl shadow-black/10 focus-within:border-cyan-300/20">
+            <div className="relative rounded-2xl border border-input bg-card p-2.5 shadow-[var(--shadow-down-1)] transition-colors focus-within:border-primary focus-within:ring-3 focus-within:ring-primary/15">
               {mention && (
-                <div className="absolute bottom-full left-0 z-30 mb-2 w-72 overflow-hidden rounded-xl border border-white/10 bg-[#111620] p-1.5 shadow-2xl shadow-black/50">
-                  <div className="px-2 py-1.5 text-[9px] tracking-[0.12em] text-zinc-600 uppercase">
+                <div className="absolute bottom-full left-0 mb-2 w-72 overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-[var(--shadow-down-3)]">
+                  <div className="px-2 py-1.5 text-[10px] tracking-wider text-muted-foreground uppercase">
                     {mention.query ? `搜索 “${mention.query}”` : "选择要提及的 Agent"}
                   </div>
                   {mentionCandidates.map((agent, index) => {
@@ -3081,9 +3193,10 @@ export const TeamChat = ({
                         type="button"
                         onMouseDown={(event) => event.preventDefault()}
                         onClick={() => insertMention(agent)}
-                        className={`flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition ${
-                          index === mentionIndex ? "bg-white/8" : "hover:bg-white/5"
-                        }`}
+                        className={cn(
+                          "flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition",
+                          index === mentionIndex ? "bg-accent" : "hover:bg-muted",
+                        )}
                       >
                         <span
                           className={`grid size-7 shrink-0 place-items-center rounded-lg border text-[9px] ${theme.avatar}`}
@@ -3091,11 +3204,13 @@ export const TeamChat = ({
                           {agent.initials}
                         </span>
                         <span className="min-w-0 flex-1">
-                          <span className="flex items-center gap-2 text-xs text-zinc-300">
+                          <span className="flex items-center gap-2 text-xs text-foreground">
                             {agent.name}
-                            <span className="text-[9px] text-zinc-600">{agent.mention}</span>
+                            <span className="font-mono text-[10px] text-muted-foreground">
+                              {agent.mention}
+                            </span>
                           </span>
-                          <span className="block truncate text-[9px] text-zinc-600">
+                          <span className="block truncate text-[10px] text-muted-foreground">
                             {agent.title} · {agent.description}
                           </span>
                         </span>
@@ -3103,18 +3218,18 @@ export const TeamChat = ({
                     );
                   })}
                   {!mentionCandidates.length && (
-                    <div className="px-2 py-3 text-[10px] text-zinc-600">
+                    <div className="px-2 py-3 text-[10px] text-muted-foreground">
                       当前群里没有匹配的 Agent
                     </div>
                   )}
                   {!!mentionCandidates.length && (
-                    <div className="border-t border-white/6 px-2 pt-1.5 text-[8px] text-zinc-700">
+                    <div className="border-t border-border px-2 pt-1.5 text-[9px] text-muted-foreground">
                       ↑↓ 选择 · Enter 插入 · Esc 关闭
                     </div>
                   )}
                 </div>
               )}
-              <textarea
+              <Textarea
                 ref={composerRef}
                 value={draft}
                 onChange={(event) => {
@@ -3170,10 +3285,10 @@ export const TeamChat = ({
                         : "讨论任务细节；消息会更新上下文，但不会立即执行…"
                       : `给 ${room?.name ?? "联系人"} 发消息…`
                 }
-                className="w-full resize-none bg-transparent px-2 py-1 text-sm leading-6 text-zinc-200 outline-none placeholder:text-zinc-700"
+                className="min-h-14 resize-none border-0 bg-transparent px-2 py-1 text-sm leading-6 shadow-none focus-visible:bg-transparent focus-visible:ring-0"
               />
               <div className="flex items-center justify-between px-2 pb-1">
-                <span className="text-[9px] text-zinc-700">
+                <span className="font-mono text-[10px] text-muted-foreground">
                   {room?.type === "direct"
                     ? directAgent
                       ? "连续 Agent 会话，不创建 Task"
@@ -3186,8 +3301,9 @@ export const TeamChat = ({
                         ? "Agent 在当前会话回复；不会创建或启动 Task"
                         : "输入 @ 提及 Agent；未提及时只发送普通消息"}
                 </span>
-                <button
+                <Button
                   type="button"
+                  size="icon"
                   disabled={
                     sending ||
                     !draft.trim() ||
@@ -3196,43 +3312,48 @@ export const TeamChat = ({
                       !mentionedAgents.length)
                   }
                   onClick={() => void send()}
-                  className="grid size-8 place-items-center rounded-xl bg-cyan-300 text-cyan-950 disabled:opacity-30"
+                  aria-label="发送消息"
                 >
-                  {sending ? (
-                    <LoaderCircleIcon className="size-4 animate-spin" />
-                  ) : (
-                    <SendIcon className="size-4" />
-                  )}
-                </button>
+                  {sending ? <LoaderCircleIcon className="animate-spin" /> : <SendIcon />}
+                </Button>
               </div>
             </div>
-            {error && <p className="mt-2 text-[10px] text-red-300/80">{error}</p>}
+            {error && <p className="mt-2 text-[11px] text-destructive">{error}</p>}
           </div>
         </footer>
       </section>
 
-      <aside className="hidden w-64 shrink-0 border-l border-white/7 bg-[#0b0e15]/65 xl:flex xl:flex-col">
-        <div className="border-b border-white/7 px-4 py-[22px] text-[10px] font-medium tracking-[0.16em] text-zinc-600 uppercase">
-          {room?.type === "task" ? "实时上下文" : room?.type === "direct" ? "联系人" : "群内工作"}
+      <aside className="hidden w-64 shrink-0 border-l border-border bg-card xl:flex xl:flex-col">
+        <div className="flex h-12 items-center border-b border-border px-3 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
+          {room?.type === "task"
+            ? "Context Feed"
+            : room?.type === "direct"
+              ? "Contact Info"
+              : "Room Inspector"}
         </div>
         {room?.type === "group" ? (
-          <div className="min-h-0 flex-1 overflow-y-auto p-3">
-            <div className="mb-2 px-2 text-[9px] text-zinc-700 uppercase">Agent 成员</div>
+          <div className="min-h-0 flex-1 overflow-y-auto p-2">
+            <div className="mb-1.5 px-2 font-mono text-[10px] tracking-wider text-muted-foreground uppercase">
+              Agents
+            </div>
             {roomAgents.map((agent) => {
               const active = state.tasks.some(
                 (candidate) =>
                   candidate.assigneeIds.includes(agent.id) && candidate.status === "running",
               );
               return (
-                <div key={agent.id} className="flex items-center gap-3 rounded-xl px-2 py-2.5">
+                <div
+                  key={agent.id}
+                  className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-muted/40"
+                >
                   <div
-                    className={`grid size-8 place-items-center rounded-xl border text-xs ${themeClasses[agent.theme].avatar}`}
+                    className={`grid size-6 place-items-center rounded border font-mono text-[10px] font-medium ${themeClasses[agent.theme].avatar}`}
                   >
                     {agent.initials}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-xs text-zinc-300">{agent.name}</div>
-                    <div className="mt-0.5 text-[9px] text-zinc-600">
+                    <div className="truncate text-xs font-medium text-foreground">{agent.name}</div>
+                    <div className="font-mono text-[10px] text-muted-foreground">
                       {active
                         ? "正在工作"
                         : agent.visibility === "public"
@@ -3241,32 +3362,41 @@ export const TeamChat = ({
                     </div>
                   </div>
                   <span
-                    className={`size-1.5 rounded-full ${active ? "animate-pulse bg-cyan-300" : "bg-emerald-300/70"}`}
+                    className={`size-1.5 rounded-full ${active ? "animate-pulse bg-primary" : "bg-muted-foreground/50"}`}
                   />
                 </div>
               );
             })}
-            <div className="mt-4 mb-2 px-2 text-[9px] text-zinc-700 uppercase">好友成员</div>
+            <div className="mt-3 mb-1.5 px-2 font-mono text-[10px] tracking-wider text-muted-foreground uppercase">
+              Members
+            </div>
             {roomHumans.map((human) => (
-              <div key={human.id} className="flex items-center gap-3 rounded-xl px-2 py-2.5">
-                <div className="grid size-8 place-items-center rounded-xl border border-white/9 bg-white/5 text-xs">
+              <div
+                key={human.id}
+                className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-muted/40"
+              >
+                <div className="grid size-6 place-items-center rounded border border-border bg-muted/50 font-mono text-[10px] text-foreground">
                   {human.initials}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-xs text-zinc-300">{human.name}</div>
-                  <div className="mt-0.5 text-[9px] text-zinc-600">{human.title}</div>
+                  <div className="truncate text-xs font-medium text-foreground">{human.name}</div>
+                  <div className="truncate font-mono text-[10px] text-muted-foreground">
+                    {human.title}
+                  </div>
                 </div>
                 <span
-                  className={`size-1.5 rounded-full ${human.status === "online" ? "bg-emerald-300" : "bg-zinc-700"}`}
+                  className={`size-1.5 rounded-full ${human.status === "online" ? "bg-success" : "bg-muted-foreground/40"}`}
                 />
               </div>
             ))}
-            <div className="mt-5 mb-2 flex items-center justify-between px-2">
-              <span className="text-[9px] text-zinc-700 uppercase">关联 Task</span>
+            <div className="mt-4 mb-1.5 flex items-center justify-between px-2">
+              <span className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase">
+                Tasks
+              </span>
               <button
                 type="button"
                 onClick={() => onViewChange("tasks")}
-                className="text-[9px] text-cyan-300/60"
+                className="font-mono text-[10px] text-muted-foreground hover:text-foreground"
               >
                 查看全部
               </button>
@@ -3276,46 +3406,46 @@ export const TeamChat = ({
                 key={item.id}
                 type="button"
                 onClick={() => openTask(item)}
-                className="mb-2 w-full rounded-xl border border-white/6 bg-white/[0.02] p-3 text-left"
+                className="mb-1 w-full rounded border border-border bg-muted/20 p-2 text-left hover:bg-muted/50"
               >
                 <div className="flex items-center justify-between gap-2">
                   <StatusPill status={item.status} />
-                  <span className="text-[9px] text-zinc-700">{timeLabel(item.updatedAt)}</span>
+                  <span className="font-mono text-[9px] text-muted-foreground">
+                    {timeLabel(item.updatedAt)}
+                  </span>
                 </div>
-                <div className="mt-2 line-clamp-2 text-xs leading-5 text-zinc-400">
-                  {item.title}
-                </div>
+                <div className="mt-1 line-clamp-2 text-xs text-foreground">{item.title}</div>
               </button>
             ))}
           </div>
         ) : room?.type === "task" ? (
           <div className="min-h-0 flex-1 overflow-y-auto p-3">
-            <div className="rounded-xl border border-violet-300/10 bg-violet-300/5 p-3">
+            <div className="rounded border border-border bg-muted/20 p-2.5">
               <div className="flex items-center justify-between">
-                <span className="text-[10px] text-violet-200">
-                  上下文版本 {task?.contextVersion}
+                <span className="font-mono text-[10px] text-foreground">
+                  context v{task?.contextVersion}
                 </span>
                 {task && <StatusPill status={task.status} />}
               </div>
-              <p className="mt-2 text-[10px] leading-5 text-zinc-600">
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
                 这些是主群持续同步到当前 Task 的消息引用。
               </p>
             </div>
-            <div className="mt-4 space-y-2">
+            <div className="mt-2 flex flex-col gap-1.5">
               {sourceContext.map((message) => (
                 <button
                   key={message.id}
                   type="button"
                   onClick={() => sourceRoom && setSelectedRoomId(sourceRoom.roomId)}
-                  className="w-full rounded-xl border border-white/6 bg-white/[0.02] p-3 text-left"
+                  className="w-full rounded border border-border bg-card p-2 text-left hover:bg-muted/40"
                 >
-                  <div className="flex items-center justify-between text-[9px] text-zinc-700">
+                  <div className="flex items-center justify-between font-mono text-[9px] text-muted-foreground">
                     <span>
                       {message.senderName} · #{message.seq}
                     </span>
                     <span>{timeLabel(message.createdAt)}</span>
                   </div>
-                  <p className="mt-1.5 line-clamp-3 text-[10px] leading-5 text-zinc-500">
+                  <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
                     {message.content}
                   </p>
                 </button>
@@ -3327,7 +3457,7 @@ export const TeamChat = ({
                   <button
                     type="button"
                     onClick={() => void updateTaskStatus(task, "done")}
-                    className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-emerald-300/10 py-2 text-[10px] text-emerald-300"
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-success/10 py-2 text-[10px] text-success"
                   >
                     <CheckCircle2Icon className="size-3" />
                     验收
@@ -3337,7 +3467,7 @@ export const TeamChat = ({
                   <button
                     type="button"
                     onClick={() => void updateTaskStatus(task, "waiting")}
-                    className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-amber-300/8 py-2 text-[10px] text-amber-300"
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-warning/10 py-2 text-[10px] text-warning"
                   >
                     <Clock3Icon className="size-3" />
                     等待
@@ -3348,37 +3478,48 @@ export const TeamChat = ({
           </div>
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
-            <div className="rounded-2xl border border-white/7 bg-white/[0.025] p-4 text-center">
+            <div className="rounded border border-border bg-card p-3 text-center">
               <div
-                className={`mx-auto grid size-14 place-items-center rounded-2xl border text-base ${directAgent ? themeClasses[directAgent.theme].avatar : "border-white/10 bg-white/5 text-zinc-300"}`}
+                className={cn(
+                  "mx-auto grid size-12 place-items-center rounded border font-mono text-sm font-semibold",
+                  directAgent
+                    ? themeClasses[directAgent.theme].avatar
+                    : "border-border bg-muted/40 text-foreground",
+                )}
               >
                 {directAgent?.initials ?? directHuman?.initials ?? "?"}
               </div>
-              <div className="mt-3 text-sm text-zinc-200">
+              <div className="mt-2.5 text-xs font-semibold text-foreground">
                 {directAgent?.name ?? directHuman?.name ?? room?.name}
               </div>
-              <div className="mt-1 text-[10px] text-zinc-600">
+              <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
                 {directAgent
                   ? `${directAgent.title} · ${directAgent.executionLocation === "local" ? "本机运行" : "托管运行"}`
                   : (directHuman?.title ?? "好友")}
               </div>
               {directAgent && (
                 <>
-                  <p className="mt-4 text-left text-xs leading-5 text-zinc-500">
+                  <p className="mt-3 text-left text-xs text-muted-foreground">
                     {directAgent.description}
                   </p>
                   <div className="mt-4 flex flex-wrap justify-center gap-2">
-                    <span className="rounded-full bg-white/5 px-2 py-1 text-[9px] text-zinc-500">
+                    <Badge
+                      variant="outline"
+                      className="font-mono text-[10px] text-muted-foreground"
+                    >
                       {directAgent.visibility === "public" ? "公开 Agent" : "私有 Agent"}
-                    </span>
-                    <span className="rounded-full bg-white/5 px-2 py-1 text-[9px] text-zinc-500">
+                    </Badge>
+                    <Badge
+                      variant="outline"
+                      className="font-mono text-[10px] text-muted-foreground"
+                    >
                       {directAgent.workspaceAccess === "write" ? "工作区可写" : "只读"}
-                    </span>
+                    </Badge>
                   </div>
                 </>
               )}
             </div>
-            <p className="mt-4 text-[10px] leading-5 text-zinc-700">
+            <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
               {directAgent
                 ? "当前私聊使用独立的连续 Codex 上下文，不会混入群聊或自动创建 Task。"
                 : "这是好友的一对一会话，所有私聊都会保留在左侧消息列表中。"}
