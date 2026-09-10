@@ -80,6 +80,10 @@ WHERE status NOT IN ('pending_review', 'changes_requested', 'done', 'failed', 'c
 CREATE INDEX IF NOT EXISTS tasks_root_parent_idx ON tasks(root_task_id, parent_task_id);
 CREATE INDEX IF NOT EXISTS tasks_binding_status_idx ON tasks(workspace_binding_id, status);
 
+ALTER TABLE task_reviews
+  ADD COLUMN IF NOT EXISTS reviewer_role text NOT NULL DEFAULT 'member'
+    CHECK (reviewer_role IN ('owner', 'admin', 'member'));
+
 CREATE TABLE IF NOT EXISTS task_permission_grants (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   task_id uuid NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,

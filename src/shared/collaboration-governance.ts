@@ -70,9 +70,7 @@ export const normalizeWorkspaceBindingSummary = (
     label: label.slice(0, 120),
     repositoryUrl: stringValue(value.repositoryUrl) || undefined,
     revision: Math.max(1, Math.floor(Number(value.revision) || 1)),
-    baselineScopes: normalizePermissionScopes(value.baselineScopes).filter(
-      (scope) => scope === "workspace.read" || scope === "network.read",
-    ),
+    baselineScopes: normalizePermissionScopes(value.baselineScopes),
     status,
     lastSeenAt: Number(value.lastSeenAt) || undefined,
   };
@@ -459,6 +457,7 @@ export const evaluatePermissionEnvelope = (
       };
 
     if (
+      scope === "workspace.read" &&
       input.baselineScopes.includes(scope) &&
       !input.request.path &&
       !input.request.commandExecutable &&

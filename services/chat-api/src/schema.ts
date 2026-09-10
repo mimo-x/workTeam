@@ -359,6 +359,7 @@ export const taskReviews = pgTable(
       .notNull()
       .references(() => users.id),
     reviewerNameSnapshot: text("reviewer_name_snapshot").notNull(),
+    reviewerRole: text("reviewer_role").notNull().default("member"),
     decision: text("decision").notNull(),
     comment: text("comment").notNull().default(""),
     taskSnapshot: jsonb("task_snapshot").$type<Record<string, unknown>>().notNull(),

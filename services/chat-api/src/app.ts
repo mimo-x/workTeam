@@ -21,6 +21,7 @@ import { registerRoomRoutes } from "./rooms.js";
 import { EnvelopeCipher, LocalKeyProvider, VaultTransitKeyProvider } from "./security.js";
 import { registerSettingsRoutes } from "./settings.js";
 import { registerTaskRoutes } from "./tasks.js";
+import { registerTaskPermissionRoutes } from "./task-permissions.js";
 import { registerOpenImWebhooks } from "./webhooks.js";
 import { z } from "zod";
 
@@ -86,6 +87,7 @@ export const createApp = async (config: AppConfig, overrides: AppOverrides = {})
   registerAgentRoutes(app, pool, cipher, realtime);
   registerRoomRoutes(app, pool, realtime);
   registerTaskRoutes(app, pool, realtime);
+  registerTaskPermissionRoutes(app, pool, realtime);
   registerSettingsRoutes(app, pool, cipher, realtime);
   registerImportRoutes(app, pool, cipher);
 

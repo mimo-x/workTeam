@@ -46,7 +46,7 @@ test("workspace binding summaries discard private or malformed fields", () => {
     label: "Project Alpha",
     repositoryUrl: "https://example.test/repo.git",
     revision: 2,
-    baselineScopes: ["workspace.read"],
+    baselineScopes: ["workspace.read", "workspace.write"],
     status: "online",
     lastSeenAt: undefined,
   });

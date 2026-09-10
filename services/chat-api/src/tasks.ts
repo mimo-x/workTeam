@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { EventPublisher } from "./events.js";
 import { ApiError, parseBody, parseParams, parseQuery, requireRevision } from "./http.js";
 import { enqueueOutbox } from "./outbox.js";
+import { currentTaskGrant } from "./task-permissions.js";
 
 const idParams = z.object({ id: z.string().uuid() });
 const taskStatuses = [
@@ -33,6 +34,12 @@ const listQuery = z.object({
 });
 const statusBody = z.object({
   status: z.enum(["waiting", "review", "blocked", "done", "failed", "cancelled"]),
+});
+const budgetBody = z.object({
+  maxDepth: z.number().int().min(0).max(8),
+  maxDescendants: z.number().int().min(0).max(100),
+  maxRuns: z.number().int().min(1).max(500),
+  maxWallTimeMs: z.number().int().min(60_000).max(86_400_000),
 });
 const reviewBody = z.object({
   decision: z.enum(["approved", "changes_requested", "rejected"]),
@@ -74,6 +81,12 @@ const governedScopes = (input: {
   scopes.add("workspace.read");
   if (input.requestedAccess === "write") scopes.add("workspace.write");
   return [...scopes];
+};
+
+const requireAdminRole = (role: string | null | undefined) => {
+  if (role !== "owner" && role !== "admin") {
+    throw new ApiError(403, "ROOM_ADMIN_REQUIRED", "只有群主或管理员可以执行此操作。");
+  }
 };
 
 type AgentForRun = {
@@ -374,9 +387,13 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
     let taskRoomId = "";
     try {
       await client.query("BEGIN");
-      const task = await client.query<{ task_room_id: string; revision: number; status: string }>(
+      const task = await client.query<{
+        task_room_id: string;
+        revision: number;
+        status: string;
+      }>(
         `SELECT t.task_room_id, t.revision, t.status
-         FROM tasks t JOIN room_members rm ON rm.room_id = t.task_room_id
+         FROM tasks t JOIN room_members rm ON rm.room_id = t.source_room_id
          WHERE t.id = $1 AND rm.user_id = $2 FOR UPDATE`,
         [id, request.user.sub],
       );
@@ -417,6 +434,11 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
           id,
         ],
       );
+      await client.query(
+        `UPDATE task_permission_grants SET revoked_at = now()
+         WHERE task_id = $1 AND revoked_at IS NULL`,
+        [id],
+      );
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -430,6 +452,57 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
       revision: revision + 1,
     });
     return { id, status: "pending_review", revision: revision + 1 };
+  });
+
+  app.patch("/v1/tasks/:id/budget", { preHandler: [app.authenticate] }, async (request) => {
+    const { id } = parseParams(idParams, request);
+    const budget = parseBody(budgetBody, request);
+    const revision = requireRevision(request);
+    const client = await pool.connect();
+    let taskRoomId = "";
+    try {
+      await client.query("BEGIN");
+      const task = await client.query<{
+        revision: number;
+        task_room_id: string;
+        member_role: string;
+      }>(
+        `SELECT t.revision, t.task_room_id, rm.role AS member_role FROM tasks t
+         JOIN room_members rm ON rm.room_id = t.source_room_id
+         WHERE t.id = $1 AND rm.user_id = $2 FOR UPDATE`,
+        [id, request.user.sub],
+      );
+      if (!task.rows[0]) throw new ApiError(404, "TASK_NOT_FOUND", "Task 不存在。");
+      requireAdminRole(task.rows[0].member_role);
+      if (task.rows[0].revision !== revision) {
+        throw new ApiError(409, "REVISION_CONFLICT", "Task 已被修改，请刷新后重试。");
+      }
+      taskRoomId = task.rows[0].task_room_id;
+      await client.query(
+        `UPDATE tasks SET budget = $1::jsonb, revision = revision + 1,
+                status = 'pending_review', approved_review_id = NULL,
+                wait_reason = '任务预算已修改，请重新审核。', updated_at = now()
+         WHERE id = $2`,
+        [JSON.stringify(budget), id],
+      );
+      await client.query(
+        "UPDATE task_permission_grants SET revoked_at = now() WHERE task_id = $1 AND revoked_at IS NULL",
+        [id],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+    await events.publishToRoom(taskRoomId, {
+      type: "task.budget.updated",
+      taskId: id,
+      revision: revision + 1,
+      budget,
+    });
+    return { id, revision: revision + 1, status: "pending_review", budget };
   });
 
   app.post("/v1/tasks/:id/reviews", { preHandler: [app.authenticate] }, async (request) => {
@@ -450,13 +523,17 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
         plan: unknown;
         acceptance_criteria: unknown;
         requested_access: string;
+        requested_scopes: string[];
         status: string;
+        member_role: string;
       }>(
-        `SELECT t.* FROM tasks t JOIN room_members rm ON rm.room_id = t.task_room_id
+        `SELECT t.*, rm.role AS member_role FROM tasks t
+         JOIN room_members rm ON rm.room_id = t.source_room_id
          WHERE t.id = $1 AND rm.user_id = $2 FOR UPDATE`,
         [id, request.user.sub],
       );
       if (!task.rows[0]) throw new ApiError(404, "TASK_NOT_FOUND", "Task 不存在。");
+      requireAdminRole(task.rows[0].member_role);
       if (task.rows[0].revision !== revision) {
         throw new ApiError(409, "REVISION_CONFLICT", "Task 已被修改，请重新审核最新版本。");
       }
@@ -474,12 +551,13 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
         plan: task.rows[0].plan,
         acceptanceCriteria: task.rows[0].acceptance_criteria,
         requestedAccess: task.rows[0].requested_access,
+        requestedScopes: task.rows[0].requested_scopes,
       };
       const inserted = await client.query(
         `INSERT INTO task_reviews(
            task_id, task_revision, reviewer_user_id, reviewer_name_snapshot,
-           decision, comment, task_snapshot
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
+           reviewer_role, decision, comment, task_snapshot
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
          RETURNING id, task_id AS "taskId", task_revision AS "taskRevision",
                    reviewer_user_id AS "reviewerUserId",
                    reviewer_name_snapshot AS "reviewerName", decision, comment,
@@ -489,6 +567,7 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
           revision,
           request.user.sub,
           user.rows[0]?.display_name ?? "用户",
+          task.rows[0].member_role,
           input.decision,
           input.comment,
           JSON.stringify(snapshot),
@@ -520,7 +599,7 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
     return review;
   });
 
-  app.post("/v1/tasks/:id/start", { preHandler: [app.authenticate] }, async (request) => {
+  app.post("/v1/tasks/:id/start", { preHandler: [app.authenticate] }, async (request, reply) => {
     const { id } = parseParams(idParams, request);
     const revision = requireRevision(request);
     const client = await pool.connect();
@@ -536,14 +615,32 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
         approved_review_id: string | null;
         context_version: number;
         requested_access: string;
+        requested_scopes: Array<
+          "workspace.read" | "workspace.write" | "command.run" | "network.read"
+        >;
+        workspace_binding_id: string | null;
+        binding_revision: number | null;
+        host_device_id: string | null;
+        binding_status: string | null;
+        binding_revoked_at: Date | null;
+        current_binding_revision: number | null;
+        baseline_scopes: string[] | null;
+        member_role: string;
       }>(
         `SELECT t.task_room_id, t.revision, t.status, t.approved_review_id, t.context_version,
-                t.requested_access
-         FROM tasks t JOIN room_members rm ON rm.room_id = t.task_room_id
+                t.requested_access, t.requested_scopes, t.workspace_binding_id,
+                t.binding_revision, wb.device_id AS host_device_id,
+                wb.status AS binding_status, wb.revoked_at AS binding_revoked_at,
+                wb.revision AS current_binding_revision, wb.baseline_scopes,
+                rm.role AS member_role
+         FROM tasks t JOIN room_members rm ON rm.room_id = t.source_room_id
+         LEFT JOIN workspace_bindings wb ON wb.id = t.workspace_binding_id
          WHERE t.id = $1 AND rm.user_id = $2 FOR UPDATE`,
         [id, request.user.sub],
       );
       if (!task.rows[0]) throw new ApiError(404, "TASK_NOT_FOUND", "Task 不存在。");
+      requireAdminRole(task.rows[0].member_role);
+      taskRoomId = task.rows[0].task_room_id;
       if (task.rows[0].revision !== revision) {
         throw new ApiError(409, "REVISION_CONFLICT", "Task 已被修改，请重新审核最新版本。");
       }
@@ -551,12 +648,81 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
         throw new ApiError(409, "REVIEW_REQUIRED", "当前版本尚未通过人工审核。");
       }
       const approval = await client.query(
-        `SELECT id FROM task_reviews
-         WHERE id = $1 AND task_id = $2 AND task_revision = $3 AND decision = 'approved'`,
+        `SELECT tr.id FROM task_reviews tr
+         JOIN tasks approved_task ON approved_task.id = tr.task_id
+         JOIN room_members reviewer ON reviewer.room_id = approved_task.source_room_id
+           AND reviewer.user_id = tr.reviewer_user_id
+         WHERE tr.id = $1 AND tr.task_id = $2 AND tr.task_revision = $3
+           AND tr.decision = 'approved' AND reviewer.role IN ('owner', 'admin')`,
         [task.rows[0].approved_review_id, id, revision],
       );
       if (!approval.rowCount) {
         throw new ApiError(409, "REVIEW_STALE", "审核记录与当前 Task 版本不一致。");
+      }
+      const waitForGate = async (
+        status: "waiting_for_host" | "waiting_for_permission",
+        code: string,
+        message: string,
+      ) => {
+        await client.query(
+          "UPDATE tasks SET status = $1, wait_reason = $2, updated_at = now() WHERE id = $3",
+          [status, message, id],
+        );
+        await client.query("COMMIT");
+        await events.publishToRoom(taskRoomId, {
+          type: "task.waiting",
+          taskId: id,
+          status,
+          reason: message,
+        });
+        return reply.status(409).send({ error: { code, message }, id, status });
+      };
+      if (
+        !task.rows[0].workspace_binding_id ||
+        !task.rows[0].host_device_id ||
+        task.rows[0].binding_revoked_at ||
+        task.rows[0].binding_revision !== task.rows[0].current_binding_revision
+      ) {
+        return await waitForGate(
+          "waiting_for_host",
+          "WORKSPACE_BINDING_REQUIRED",
+          "Task 需要当前有效的项目主机绑定。",
+        );
+      }
+      if (task.rows[0].binding_status !== "online") {
+        return await waitForGate(
+          "waiting_for_host",
+          "HOST_OFFLINE",
+          "项目主机当前离线，恢复在线后可继续。",
+        );
+      }
+      const baselineScopes = new Set(task.rows[0].baseline_scopes ?? []);
+      const scopeOutsideRoom = task.rows[0].requested_scopes.find(
+        (scope) => !baselineScopes.has(scope),
+      );
+      if (scopeOutsideRoom) {
+        return await waitForGate(
+          "waiting_for_permission",
+          "ROOM_SCOPE_EXCEEDED",
+          `项目主机尚未向群组开放 ${scopeOutsideRoom}。`,
+        );
+      }
+      const permissionGrant = await currentTaskGrant(client, {
+        taskId: id,
+        taskRevision: revision,
+        workspaceBindingId: task.rows[0].workspace_binding_id,
+        bindingRevision: task.rows[0].binding_revision!,
+        requiredScopes: task.rows[0].requested_scopes,
+      });
+      if (
+        task.rows[0].requested_scopes.some((scope) => scope !== "workspace.read") &&
+        !permissionGrant
+      ) {
+        return await waitForGate(
+          "waiting_for_permission",
+          "HOST_GRANT_REQUIRED",
+          "当前 Task revision 尚未获得项目主机权限授权。",
+        );
       }
       const agents = await client.query<AgentForRun>(
         `SELECT a.* FROM task_assignees ta JOIN agents a ON a.id = ta.agent_id
@@ -578,8 +744,11 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
         await client.query(
           `INSERT INTO task_runs(
              id, task_id, agent_id, status, execution_target, context_version,
-             agent_snapshot, approval_id, started_by_user_id
-           ) VALUES ($1,$2,$3,'queued',$4,$5,$6::jsonb,$7,$8)`,
+             agent_snapshot, approval_id, started_by_user_id, target_device_id,
+             permission_grant_id, idempotency_key, requested_scopes, write_intent
+           ) VALUES (
+             $1,$2,$3,'queued',$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12::jsonb,$13
+           )`,
           [
             runId,
             id,
@@ -595,13 +764,17 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
             }),
             task.rows[0].approved_review_id,
             request.user.sub,
+            task.rows[0].host_device_id,
+            permissionGrant?.id ?? null,
+            `task:${id}:revision:${revision}:agent:${agent.id}`,
+            JSON.stringify(task.rows[0].requested_scopes),
+            task.rows[0].requested_scopes.includes("workspace.write"),
           ],
         );
       }
-      taskRoomId = task.rows[0].task_room_id;
       await client.query(
         `UPDATE tasks SET status = 'queued', started_by_user_id = $1,
-                started_at = now(), updated_at = now() WHERE id = $2`,
+                started_at = now(), wait_reason = NULL, updated_at = now() WHERE id = $2`,
         [request.user.sub, id],
       );
       await client.query("COMMIT");
@@ -624,15 +797,19 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
   app.patch("/v1/tasks/:id/status", { preHandler: [app.authenticate] }, async (request) => {
     const { id } = parseParams(idParams, request);
     const { status } = parseBody(statusBody, request);
-    const result = await pool.query<{ task_room_id: string }>(
-      `UPDATE tasks t SET status = $1, updated_at = now()
-       WHERE t.id = $2 AND EXISTS (
-         SELECT 1 FROM room_members rm WHERE rm.room_id = t.task_room_id AND rm.user_id = $3
-       ) RETURNING task_room_id`,
-      [status, id, request.user.sub],
+    const task = await pool.query<{ task_room_id: string; member_role: string }>(
+      `SELECT t.task_room_id, rm.role AS member_role FROM tasks t
+       JOIN room_members rm ON rm.room_id = t.source_room_id
+       WHERE t.id = $1 AND rm.user_id = $2`,
+      [id, request.user.sub],
     );
-    if (!result.rows[0]) throw new ApiError(404, "TASK_NOT_FOUND", "Task 不存在。");
-    await events.publishToRoom(result.rows[0].task_room_id, {
+    if (!task.rows[0]) throw new ApiError(404, "TASK_NOT_FOUND", "Task 不存在。");
+    requireAdminRole(task.rows[0].member_role);
+    await pool.query("UPDATE tasks SET status = $1, updated_at = now() WHERE id = $2", [
+      status,
+      id,
+    ]);
+    await events.publishToRoom(task.rows[0].task_room_id, {
       type: "task.updated",
       taskId: id,
       status,

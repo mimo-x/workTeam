@@ -13,9 +13,9 @@
 
 ## 3. Governed Task authorization
 
-- [ ] 3.1 Apply the shared role policy to Task proposal, review, start, budget, and lifecycle endpoints instead of membership-only checks; verify backend integration tests cover owner, admin, member, removed member, and host-owner-only cases.
-- [ ] 3.2 Add Task permission-grant create, list, and revoke endpoints restricted to the bound host owner; verify grant constraints cannot exceed requested scopes, room baseline, parent grant, Agent capabilities, or current revisions.
-- [ ] 3.3 Make Task start require both a current admin review and a valid host grant whenever machine scopes are requested; verify missing or stale gates produce actionable waiting states without creating a TaskRun.
+- [x] 3.1 Apply the shared role policy to Task proposal, review, start, budget, and lifecycle endpoints instead of membership-only checks; verify backend integration tests cover owner, admin, member, removed member, and host-owner-only cases.
+- [x] 3.2 Add Task permission-grant create, list, and revoke endpoints restricted to the bound host owner; verify grant constraints cannot exceed requested scopes, room baseline, parent grant, Agent capabilities, or current revisions.
+- [x] 3.3 Make Task start require both a current admin review and a valid host grant whenever machine scopes are requested; verify missing or stale gates produce actionable waiting states without creating a TaskRun.
 - [ ] 3.4 Add audience-aware append-only audit serialization for binding, review, grant, delegation, execution, denial, failure, and revocation events; verify secrets and host paths are redacted in room-member responses.
 
 ## 4. Single-host routing and recovery

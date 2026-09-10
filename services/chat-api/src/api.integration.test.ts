@@ -333,6 +333,7 @@ test("two users can become friends, create an Agent room, and sync settings", as
         deviceId: bobDeviceId,
         label: "Project Alpha checkout 2",
         repositoryUrl: "https://example.test/project-alpha.git",
+        baselineScopes: ["workspace.read", "workspace.write", "command.run", "network.read"],
       },
     });
     assert.equal(secondBinding.statusCode, 201, secondBinding.body);
@@ -352,6 +353,41 @@ test("two users can become friends, create an Agent room, and sync settings", as
     });
     assert.equal(rebound.statusCode, 200, rebound.body);
     assert.deepEqual(rebound.json().tasksRequiringReconfirmation, [taskId]);
+
+    for (const attempt of [
+      app.inject({
+        method: "POST",
+        url: `/v1/tasks/${taskId}/reviews`,
+        headers: { authorization: `Bearer ${bob.accessToken}`, "if-match": "2" },
+        payload: { decision: "approved" },
+      }),
+      app.inject({
+        method: "POST",
+        url: `/v1/tasks/${taskId}/start`,
+        headers: { authorization: `Bearer ${bob.accessToken}`, "if-match": "2" },
+      }),
+      app.inject({
+        method: "PATCH",
+        url: `/v1/tasks/${taskId}/status`,
+        headers: { authorization: `Bearer ${bob.accessToken}` },
+        payload: { status: "waiting" },
+      }),
+      app.inject({
+        method: "PATCH",
+        url: `/v1/tasks/${taskId}/budget`,
+        headers: { authorization: `Bearer ${bob.accessToken}`, "if-match": "2" },
+        payload: {
+          maxDepth: 4,
+          maxDescendants: 20,
+          maxRuns: 30,
+          maxWallTimeMs: 3_600_000,
+        },
+      }),
+    ]) {
+      const response = await attempt;
+      assert.equal(response.statusCode, 403, response.body);
+      assert.equal(response.json().error.code, "ROOM_ADMIN_REQUIRED");
+    }
 
     const contextMessage = {
       sendID: (bob.user as { openimUserId?: string }).openimUserId,
@@ -399,6 +435,32 @@ test("two users can become friends, create an Agent room, and sync settings", as
     assert.equal(childTaskDetail.json().rootTaskId, taskId);
     assert.equal(childTaskDetail.json().depth, 1);
     assert.equal(childTaskDetail.json().workspaceBindingId, secondBindingId);
+    await pool.query("UPDATE room_members SET role = 'admin' WHERE room_id = $1 AND user_id = $2", [
+      room.json().id,
+      bob.user.id,
+    ]);
+    const adminReview = await app.inject({
+      method: "POST",
+      url: `/v1/tasks/${childTask.json().id}/reviews`,
+      headers: { authorization: `Bearer ${bob.accessToken}`, "if-match": "1" },
+      payload: { decision: "approved", comment: "管理员审核通过" },
+    });
+    assert.equal(adminReview.statusCode, 200, adminReview.body);
+    const persistedAdminReview = await pool.query(
+      "SELECT reviewer_role FROM task_reviews WHERE id = $1",
+      [adminReview.json().id],
+    );
+    assert.equal(persistedAdminReview.rows[0].reviewer_role, "admin");
+    await pool.query(
+      "UPDATE room_members SET role = 'member' WHERE room_id = $1 AND user_id = $2",
+      [room.json().id, bob.user.id],
+    );
+    const demotedAdminStart = await app.inject({
+      method: "POST",
+      url: `/v1/tasks/${childTask.json().id}/start`,
+      headers: { authorization: `Bearer ${bob.accessToken}`, "if-match": "1" },
+    });
+    assert.equal(demotedAdminStart.statusCode, 403, demotedAdminStart.body);
     const taskDetail = await app.inject({
       method: "GET",
       url: `/v1/tasks/${taskId}`,
@@ -470,6 +532,254 @@ test("two users can become friends, create an Agent room, and sync settings", as
     );
     assert.equal(persistedRun.rows[0].approval_id, approved.json().id);
     assert.equal(persistedRun.rows[0].started_by_user_id, alice.user.id);
+
+    const permissionAnchor = await app.inject({
+      method: "POST",
+      url: "/internal/openim/callbacks/message/after?token=test-callback-token-long-enough",
+      payload: {
+        sendID: (alice.user as { openimUserId?: string }).openimUserId,
+        groupID: room.json().openimGroupId,
+        serverMsgID: "server-permission-4",
+        clientMsgID: "client-permission-4",
+        content: JSON.stringify({ content: "请执行一个需要写权限的独立检查" }),
+        contentType: 101,
+        seq: 4,
+        sendTime: Date.now(),
+      },
+    });
+    assert.equal(permissionAnchor.statusCode, 200, permissionAnchor.body);
+    const permissionTask = await app.inject({
+      method: "POST",
+      url: "/v1/tasks",
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+      payload: {
+        sourceRoomId: room.json().id,
+        anchorMessageId: "server-permission-4",
+        title: "写权限检查",
+        objective: "写入并验证测试文件",
+        expectedResult: "检查通过",
+        plan: ["写入测试文件", "验证结果"],
+        acceptanceCriteria: ["结果可复核"],
+        requestedAccess: "write",
+        requestedScopes: ["workspace.read", "workspace.write", "command.run"],
+        assigneeIds: [agent.id],
+      },
+    });
+    assert.equal(permissionTask.statusCode, 201, permissionTask.body);
+    const permissionTaskId = permissionTask.json().id as string;
+    const permissionReview = await app.inject({
+      method: "POST",
+      url: `/v1/tasks/${permissionTaskId}/reviews`,
+      headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "1" },
+      payload: { decision: "approved" },
+    });
+    assert.equal(permissionReview.statusCode, 200, permissionReview.body);
+    const missingGrantStart = await app.inject({
+      method: "POST",
+      url: `/v1/tasks/${permissionTaskId}/start`,
+      headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "1" },
+    });
+    assert.equal(missingGrantStart.statusCode, 409, missingGrantStart.body);
+    assert.equal(missingGrantStart.json().error.code, "HOST_GRANT_REQUIRED");
+    assert.equal(missingGrantStart.json().status, "waiting_for_permission");
+    assert.equal(
+      Number(
+        (await pool.query("SELECT count(*) FROM task_runs WHERE task_id = $1", [permissionTaskId]))
+          .rows[0].count,
+      ),
+      0,
+    );
+
+    const nonHostGrant = await app.inject({
+      method: "POST",
+      url: `/v1/tasks/${permissionTaskId}/permission-grants`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+      payload: { scopes: ["workspace.write"], constraints: { pathPrefixes: ["src"] } },
+    });
+    assert.equal(nonHostGrant.statusCode, 403, nonHostGrant.body);
+    const scopeExpansion = await app.inject({
+      method: "POST",
+      url: `/v1/tasks/${permissionTaskId}/permission-grants`,
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+      payload: { scopes: ["network.read"], constraints: { networkDomains: ["example.test"] } },
+    });
+    assert.equal(scopeExpansion.statusCode, 400, scopeExpansion.body);
+    assert.equal(scopeExpansion.json().error.code, "TASK_SCOPE_EXCEEDED");
+    await pool.query(
+      `UPDATE workspace_bindings SET baseline_scopes = '["workspace.read"]'::jsonb
+       WHERE id = $1`,
+      [secondBindingId],
+    );
+    const roomScopeExpansion = await app.inject({
+      method: "POST",
+      url: `/v1/tasks/${permissionTaskId}/permission-grants`,
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+      payload: { scopes: ["workspace.write"], constraints: { pathPrefixes: ["src"] } },
+    });
+    assert.equal(roomScopeExpansion.statusCode, 400, roomScopeExpansion.body);
+    assert.equal(roomScopeExpansion.json().error.code, "ROOM_SCOPE_EXCEEDED");
+    await pool.query(
+      `UPDATE workspace_bindings
+       SET baseline_scopes = '["workspace.read","workspace.write","command.run","network.read"]'::jsonb
+       WHERE id = $1`,
+      [secondBindingId],
+    );
+    const missingCapability = await app.inject({
+      method: "POST",
+      url: `/v1/tasks/${permissionTaskId}/permission-grants`,
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+      payload: { scopes: ["command.run"], constraints: { commandExecutables: ["npm"] } },
+    });
+    assert.equal(missingCapability.statusCode, 400, missingCapability.body);
+    assert.equal(missingCapability.json().error.code, "AGENT_CAPABILITY_MISSING");
+    await pool.query("UPDATE workspace_bindings SET revision = revision + 1 WHERE id = $1", [
+      secondBindingId,
+    ]);
+    const staleBindingGrant = await app.inject({
+      method: "POST",
+      url: `/v1/tasks/${permissionTaskId}/permission-grants`,
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+      payload: { scopes: ["workspace.write"], constraints: { pathPrefixes: ["src"] } },
+    });
+    assert.equal(staleBindingGrant.statusCode, 409, staleBindingGrant.body);
+    assert.equal(staleBindingGrant.json().error.code, "WORKSPACE_BINDING_STALE");
+    await pool.query("UPDATE workspace_bindings SET revision = revision - 1 WHERE id = $1", [
+      secondBindingId,
+    ]);
+    await pool.query(
+      `UPDATE agents
+       SET capabilities = '["chat","read_workspace","write_workspace","run_command"]'::jsonb
+       WHERE id = $1`,
+      [agent.id],
+    );
+    const taskGrant = await app.inject({
+      method: "POST",
+      url: `/v1/tasks/${permissionTaskId}/permission-grants`,
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+      payload: {
+        scopes: ["workspace.write", "command.run"],
+        constraints: { pathPrefixes: ["src"], commandExecutables: ["npm"] },
+        expiresInSeconds: 3_600,
+      },
+    });
+    assert.equal(taskGrant.statusCode, 201, taskGrant.body);
+    const grantId = taskGrant.json().id as string;
+    const redactedGrants = await app.inject({
+      method: "GET",
+      url: `/v1/tasks/${permissionTaskId}/permission-grants`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    });
+    assert.equal(redactedGrants.statusCode, 200, redactedGrants.body);
+    assert.equal("constraints" in redactedGrants.json().data[0], false);
+    assert.equal(redactedGrants.json().data[0].constraintSummary.pathPrefixes, 1);
+
+    const delegatedAnchor = await app.inject({
+      method: "POST",
+      url: "/internal/openim/callbacks/message/after?token=test-callback-token-long-enough",
+      payload: {
+        sendID: (alice.user as { openimUserId?: string }).openimUserId,
+        groupID: room.json().openimGroupId,
+        serverMsgID: "server-delegated-5",
+        clientMsgID: "client-delegated-5",
+        content: JSON.stringify({ content: "检查父任务以外的目录" }),
+        contentType: 101,
+        seq: 5,
+        sendTime: Date.now(),
+      },
+    });
+    assert.equal(delegatedAnchor.statusCode, 200, delegatedAnchor.body);
+    const delegatedTask = await app.inject({
+      method: "POST",
+      url: "/v1/tasks",
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+      payload: {
+        sourceRoomId: room.json().id,
+        anchorMessageId: "server-delegated-5",
+        title: "父任务约束检查",
+        objective: "验证子 Task 不能扩大目录权限",
+        expectedResult: "越权授权被拒绝",
+        plan: ["检查 other 目录"],
+        acceptanceCriteria: ["不扩大父 Task 权限"],
+        requestedAccess: "write",
+        requestedScopes: ["workspace.read", "workspace.write"],
+        assigneeIds: [agent.id],
+        parentTaskId: permissionTaskId,
+      },
+    });
+    assert.equal(delegatedTask.statusCode, 201, delegatedTask.body);
+    const parentScopeExpansion = await app.inject({
+      method: "POST",
+      url: `/v1/tasks/${delegatedTask.json().id}/permission-grants`,
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+      payload: { scopes: ["workspace.write"], constraints: { pathPrefixes: ["other"] } },
+    });
+    assert.equal(parentScopeExpansion.statusCode, 400, parentScopeExpansion.body);
+    assert.equal(parentScopeExpansion.json().error.code, "PARENT_SCOPE_EXCEEDED");
+
+    const grantedStart = await app.inject({
+      method: "POST",
+      url: `/v1/tasks/${permissionTaskId}/start`,
+      headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "1" },
+    });
+    assert.equal(grantedStart.statusCode, 200, grantedStart.body);
+    const governedRun = await pool.query(
+      `SELECT target_device_id, permission_grant_id, requested_scopes, write_intent
+       FROM task_runs WHERE id = $1`,
+      [grantedStart.json().runIds[0]],
+    );
+    assert.equal(governedRun.rows[0].target_device_id, bobDeviceId);
+    assert.equal(governedRun.rows[0].permission_grant_id, grantId);
+    assert.deepEqual(governedRun.rows[0].requested_scopes, [
+      "workspace.read",
+      "workspace.write",
+      "command.run",
+    ]);
+    assert.equal(governedRun.rows[0].write_intent, true);
+    const revokedGrant = await app.inject({
+      method: "DELETE",
+      url: `/v1/tasks/${permissionTaskId}/permission-grants/${grantId}`,
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+    });
+    assert.equal(revokedGrant.statusCode, 204, revokedGrant.body);
+    const revokedState = await pool.query(
+      `SELECT t.status, tr.status AS run_status FROM tasks t
+       JOIN task_runs tr ON tr.task_id = t.id WHERE t.id = $1`,
+      [permissionTaskId],
+    );
+    assert.equal(revokedState.rows[0].status, "waiting_for_permission");
+    assert.equal(revokedState.rows[0].run_status, "cancelled");
+
+    const memberAnchor = await app.inject({
+      method: "POST",
+      url: "/internal/openim/callbacks/message/after?token=test-callback-token-long-enough",
+      payload: {
+        sendID: (bob.user as { openimUserId?: string }).openimUserId,
+        groupID: room.json().openimGroupId,
+        serverMsgID: "server-member-6",
+        clientMsgID: "client-member-6",
+        content: JSON.stringify({ content: "普通成员请求一个只读分析" }),
+        contentType: 101,
+        seq: 6,
+        sendTime: Date.now(),
+      },
+    });
+    assert.equal(memberAnchor.statusCode, 200, memberAnchor.body);
+    const memberProposal = await app.inject({
+      method: "POST",
+      url: "/v1/tasks",
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+      payload: {
+        sourceRoomId: room.json().id,
+        anchorMessageId: "server-member-6",
+        title: "成员只读分析",
+        objective: "分析当前实现",
+        expectedResult: "分析报告",
+        plan: ["读取代码", "整理结论"],
+        requestedAccess: "read",
+        assigneeIds: [agent.id],
+      },
+    });
+    assert.equal(memberProposal.statusCode, 201, memberProposal.body);
 
     const agentDirect = await app.inject({
       method: "POST",

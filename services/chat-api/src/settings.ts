@@ -162,9 +162,7 @@ export const registerSettingsRoutes = (
 
   app.post("/v1/workspace-bindings", { preHandler: [app.authenticate] }, async (request, reply) => {
     const input = parseBody(workspaceBody, request);
-    const baselineScopes = [...new Set(input.baselineScopes)].filter(
-      (scope) => scope === "workspace.read" || scope === "network.read",
-    );
+    const baselineScopes = [...new Set(input.baselineScopes)];
     if (!baselineScopes.includes("workspace.read")) baselineScopes.unshift("workspace.read");
     const device = await pool.query<{ last_seen_at: Date }>(
       `SELECT last_seen_at FROM devices
