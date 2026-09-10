@@ -23,7 +23,7 @@
 - [x] 4.1 Change TaskRun creation and realtime leasing to target the Task's bound device rather than the Agent owner's arbitrary device; verify a non-bound device cannot lease the Run.
 - [x] 4.2 Implement `waiting_for_host`, bound-device heartbeat recovery, idempotent Run creation, and lease redelivery; verify offline/reconnect and expired-lease tests do not duplicate execution.
 - [x] 4.3 Add a binding-keyed backend write lease while retaining parallel read leases; verify two write Runs serialize across Agents and read-only Runs remain concurrent.
-- [ ] 4.4 Store the opaque binding-to-path mapping on the owning desktop and resolve it before Runtime session creation; verify invalid, removed, or mismatched mappings fail before launching a Runtime.
+- [x] 4.4 Store the opaque binding-to-path mapping on the owning desktop and resolve it before Runtime session creation; verify invalid, removed, or mismatched mappings fail before launching a Runtime.
 
 ## 5. Remote execution approvals
 

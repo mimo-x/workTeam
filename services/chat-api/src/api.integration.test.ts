@@ -752,6 +752,7 @@ test("two users can become friends, create an Agent room, and sync settings", as
                   tr.context_version, t.title AS task_title, t.source_room_id,
                   t.task_room_id, t.anchor_message_id, a.owner_id,
                   tr.target_device_id, t.workspace_binding_id,
+                  t.binding_revision AS workspace_binding_revision,
                   tr.requested_scopes, tr.write_intent
            FROM task_runs tr JOIN tasks t ON t.id = tr.task_id
            JOIN agents a ON a.id = tr.agent_id WHERE tr.id = $1`,

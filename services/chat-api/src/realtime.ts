@@ -75,6 +75,7 @@ type AssignmentRow = {
   owner_id: string;
   target_device_id: string;
   workspace_binding_id: string;
+  workspace_binding_revision: number;
   requested_scopes: string[];
   write_intent: boolean;
 };
@@ -169,6 +170,7 @@ export class RealtimeHub implements EventPublisher {
         `SELECT tr.id AS run_id, tr.task_id, tr.agent_id, tr.agent_snapshot, tr.context_version,
                 t.title AS task_title, t.source_room_id, t.task_room_id, t.anchor_message_id,
                 a.owner_id, tr.target_device_id, t.workspace_binding_id,
+                t.binding_revision AS workspace_binding_revision,
                 tr.requested_scopes, tr.write_intent
          FROM task_runs tr
          JOIN tasks t ON t.id = tr.task_id JOIN agents a ON a.id = tr.agent_id
@@ -263,6 +265,8 @@ export class RealtimeHub implements EventPublisher {
         anchorMessageId: candidate.anchor_message_id,
         contextVersion: candidate.context_version,
         workspaceBindingId: candidate.workspace_binding_id,
+        workspaceBindingRevision: candidate.workspace_binding_revision,
+        targetDeviceId: candidate.target_device_id,
         requestedScopes: candidate.requested_scopes,
         agent: snapshot,
         context,

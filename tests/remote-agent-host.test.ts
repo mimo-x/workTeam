@@ -57,6 +57,10 @@ const assignment = (id: string) => ({
   sourceRoomId: "source_room",
   taskRoomId: "task_room",
   contextVersion: 1,
+  workspaceBindingId: "binding_1",
+  workspaceBindingRevision: 1,
+  targetDeviceId: "device_1",
+  requestedScopes: ["workspace.read", "workspace.write"],
   leaseToken: "lease",
   agent: {
     name: "程序员",
@@ -70,7 +74,14 @@ const assignment = (id: string) => ({
 
 test("RemoteAgentHost reuses one Runtime session for one Task and Agent", async () => {
   const runtime = new FakeRuntime();
-  const host = new RemoteAgentHost(undefined as never, runtime);
+  const resolved: Array<Record<string, unknown>> = [];
+  const host = new RemoteAgentHost(undefined as never, runtime, {
+    async resolve(input) {
+      resolved.push(input);
+      return "/tmp/project";
+    },
+  });
+  (host as unknown as { deviceId: string }).deviceId = "device_1";
   const execute = (
     host as unknown as { execute(value: ReturnType<typeof assignment>): Promise<void> }
   ).execute;
@@ -82,5 +93,24 @@ test("RemoteAgentHost reuses one Runtime session for one Task and Agent", async 
 
   assert.equal(runtime.sessionStarts, 1);
   assert.equal(runtime.turnStarts, 2);
+  assert.equal(resolved.length, 2);
+  host.stop();
+});
+
+test("RemoteAgentHost resolves the governed binding before launching a Runtime", async () => {
+  const runtime = new FakeRuntime();
+  const host = new RemoteAgentHost(undefined as never, runtime, {
+    async resolve() {
+      throw new Error("binding mismatch");
+    },
+  });
+  (host as unknown as { deviceId: string }).deviceId = "device_1";
+
+  await (
+    host as unknown as { execute(value: ReturnType<typeof assignment>): Promise<void> }
+  ).execute(assignment("run_rejected"));
+
+  assert.equal(runtime.sessionStarts, 0);
+  assert.equal(runtime.turnStarts, 0);
   host.stop();
 });

@@ -21,6 +21,10 @@ type AssignedRun = {
   sourceRoomId: string;
   taskRoomId: string;
   contextVersion: number;
+  workspaceBindingId: string;
+  workspaceBindingRevision: number;
+  targetDeviceId: string;
+  requestedScopes: string[];
   leaseToken: string;
   agent: {
     name: string;
@@ -45,6 +49,14 @@ type AssignedRun = {
     content: string;
     seq: number;
   }>;
+};
+
+export type WorkspaceBindingResolver = {
+  resolve(input: {
+    bindingId: string;
+    bindingRevision: number;
+    hostDeviceId: string;
+  }): Promise<string>;
 };
 
 type ActiveRun = {
@@ -83,6 +95,7 @@ export class RemoteAgentHost {
   constructor(
     private readonly backend: BackendClient,
     private readonly runtimeSource: AgentRuntime | AgentRuntimeRegistry,
+    private readonly workspaceBindings?: WorkspaceBindingResolver,
   ) {
     this.runtimeSource.onEvent((event) => void this.onRuntimeEvent(event));
   }
@@ -211,15 +224,27 @@ export class RemoteAgentHost {
     if (this.runs.has(assignment.id) || this.startingRuns.has(assignment.id)) return;
     this.startingRuns.add(assignment.id);
     try {
+      if (!this.deviceId || assignment.targetDeviceId !== this.deviceId) {
+        throw new Error("运行目标与当前项目主机不匹配，已拒绝启动 Runtime。");
+      }
+      if (!this.workspaceBindings) {
+        throw new Error("本机项目绑定存储未初始化，已拒绝启动 Runtime。");
+      }
+      const workspace = await this.workspaceBindings.resolve({
+        bindingId: assignment.workspaceBindingId,
+        bindingRevision: assignment.workspaceBindingRevision,
+        hostDeviceId: this.deviceId,
+      });
       const runtime = this.runtimeFor(assignment);
+      const canWrite = assignment.requestedScopes.includes("workspace.write");
       if ("assertCapabilities" in this.runtimeSource) {
         this.runtimeSource.assertCapabilities(runtime, [
           "chat",
-          ...(assignment.agent.workspaceAccess === "write" ? ["write_workspace"] : []),
+          ...(canWrite ? ["write_workspace"] : []),
         ]);
       }
       this.send({ type: "run.accept", runId: assignment.id, leaseToken: assignment.leaseToken });
-      const threadKey = `${assignment.taskId}\u0000${assignment.agentId}`;
+      const threadKey = `${assignment.workspaceBindingId}@${assignment.workspaceBindingRevision}\u0000${assignment.taskId}\u0000${assignment.agentId}`;
       let session = this.sessions.get(threadKey);
       const providerSessionId = session?.providerSessionId;
       if (
@@ -228,14 +253,14 @@ export class RemoteAgentHost {
         (providerSessionId !== undefined && runtime.hasSession?.(providerSessionId) === false)
       ) {
         session = await runtime.startSession({
-          workspace: this.workspace,
-          access: assignment.agent.workspaceAccess === "write" ? "workspace-write" : "read-only",
+          workspace,
+          access: canWrite ? "workspace-write" : "read-only",
           providerSessionId,
         });
         this.sessions.set(threadKey, session);
         this.sessionProviders.set(threadKey, runtime.provider);
       }
-      const availableSkills = await runtime.listSkills(this.workspace).catch(() => []);
+      const availableSkills = await runtime.listSkills(workspace).catch(() => []);
       const requested =
         assignment.agent.skillPolicy === "all"
           ? availableSkills
@@ -258,7 +283,7 @@ export class RemoteAgentHost {
       const prompt = this.buildPrompt(assignment);
       const turn = await runtime.startTurn(
         session.sessionId,
-        this.workspace,
+        workspace,
         prompt,
         assignment.agent.model ?? undefined,
         skills,
