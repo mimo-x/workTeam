@@ -297,6 +297,7 @@ export const tasks = pgTable(
     plan: jsonb("plan").$type<string[]>().notNull().default([]),
     acceptanceCriteria: jsonb("acceptance_criteria").$type<string[]>().notNull().default([]),
     requestedAccess: text("requested_access").notNull().default("read"),
+    requestedScopes: jsonb("requested_scopes").$type<string[]>().notNull().default([]),
     requestedByUserId: uuid("requested_by_user_id").references(() => users.id, {
       onDelete: "set null",
     }),
@@ -311,6 +312,29 @@ export const tasks = pgTable(
       onDelete: "set null",
     }),
     startedAt: timestamp("started_at", { withTimezone: true }),
+    workspaceBindingId: uuid("workspace_binding_id"),
+    bindingRevision: integer("binding_revision"),
+    parentTaskId: uuid("parent_task_id"),
+    rootTaskId: uuid("root_task_id"),
+    delegatedByAgentId: uuid("delegated_by_agent_id").references(() => agents.id, {
+      onDelete: "set null",
+    }),
+    depth: integer("depth").notNull().default(0),
+    budget: jsonb("budget")
+      .$type<{
+        maxDepth: number;
+        maxDescendants: number;
+        maxRuns: number;
+        maxWallTimeMs: number;
+      }>()
+      .notNull()
+      .default({ maxDepth: 3, maxDescendants: 12, maxRuns: 24, maxWallTimeMs: 1_800_000 }),
+    budgetUsage: jsonb("budget_usage")
+      .$type<{ descendants: number; runs: number; startedAt?: number }>()
+      .notNull()
+      .default({ descendants: 0, runs: 0 }),
+    waitReason: text("wait_reason"),
+    artifactRefs: jsonb("artifact_refs").$type<string[]>().notNull().default([]),
     contextVersion: integer("context_version").notNull().default(1),
     latestSourceSeq: bigint("latest_source_seq", { mode: "number" }).notNull().default(0),
     ...timestamps,
@@ -318,6 +342,8 @@ export const tasks = pgTable(
   (table) => [
     uniqueIndex("tasks_anchor_message_uq").on(table.anchorMessageId),
     index("tasks_source_status_idx").on(table.sourceRoomId, table.status),
+    index("tasks_root_parent_idx").on(table.rootTaskId, table.parentTaskId),
+    index("tasks_binding_status_idx").on(table.workspaceBindingId, table.status),
   ],
 );
 
@@ -380,6 +406,14 @@ export const taskRuns = pgTable(
       .notNull()
       .references(() => agents.id),
     deviceId: uuid("device_id").references(() => devices.id, { onDelete: "set null" }),
+    targetDeviceId: uuid("target_device_id").references(() => devices.id, {
+      onDelete: "set null",
+    }),
+    permissionGrantId: uuid("permission_grant_id"),
+    parentRunId: uuid("parent_run_id"),
+    idempotencyKey: text("idempotency_key"),
+    requestedScopes: jsonb("requested_scopes").$type<string[]>().notNull().default([]),
+    writeIntent: boolean("write_intent").notNull().default(false),
     status: text("status").notNull().default("queued"),
     executionTarget: text("execution_target").notNull().default("local"),
     contextVersion: integer("context_version").notNull(),
@@ -397,7 +431,15 @@ export const taskRuns = pgTable(
     completedAt: timestamp("completed_at", { withTimezone: true }),
     ...timestamps,
   },
-  (table) => [index("task_runs_dispatch_idx").on(table.status, table.executionTarget)],
+  (table) => [
+    index("task_runs_dispatch_idx").on(table.status, table.executionTarget),
+    uniqueIndex("task_runs_idempotency_uq").on(table.idempotencyKey),
+    index("task_runs_target_dispatch_idx").on(
+      table.targetDeviceId,
+      table.status,
+      table.leaseExpiresAt,
+    ),
+  ],
 );
 
 export const userSettings = pgTable("user_settings", {
@@ -420,11 +462,179 @@ export const workspaceBindings = pgTable(
       .notNull()
       .references(() => devices.id, { onDelete: "cascade" }),
     label: text("label").notNull(),
-    pathConfig: jsonb("path_config").$type<EncryptedEnvelope>().notNull(),
+    pathConfig: jsonb("path_config").$type<EncryptedEnvelope>(),
     repositoryUrl: text("repository_url"),
+    revision: integer("revision").notNull().default(1),
+    baselineScopes: jsonb("baseline_scopes")
+      .$type<string[]>()
+      .notNull()
+      .default(["workspace.read"]),
+    status: text("status").notNull().default("unknown"),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
     ...timestamps,
   },
   (table) => [uniqueIndex("workspace_bindings_device_label_uq").on(table.deviceId, table.label)],
+);
+
+export const roomWorkspaceBindings = pgTable(
+  "room_workspace_bindings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    roomId: uuid("room_id")
+      .notNull()
+      .references(() => rooms.id, { onDelete: "cascade" }),
+    workspaceBindingId: uuid("workspace_binding_id")
+      .notNull()
+      .references(() => workspaceBindings.id, { onDelete: "cascade" }),
+    bindingRevision: integer("binding_revision").notNull(),
+    sharedByUserId: uuid("shared_by_user_id")
+      .notNull()
+      .references(() => users.id),
+    activatedByUserId: uuid("activated_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    status: text("status").notNull().default("shared"),
+    revision: integer("revision").notNull().default(1),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    activatedAt: timestamp("activated_at", { withTimezone: true }),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("room_workspace_bindings_room_binding_uq").on(
+      table.roomId,
+      table.workspaceBindingId,
+    ),
+    index("room_workspace_bindings_binding_idx").on(table.workspaceBindingId, table.status),
+  ],
+);
+
+export const taskPermissionGrants = pgTable(
+  "task_permission_grants",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    taskRevision: integer("task_revision").notNull(),
+    workspaceBindingId: uuid("workspace_binding_id")
+      .notNull()
+      .references(() => workspaceBindings.id, { onDelete: "cascade" }),
+    bindingRevision: integer("binding_revision").notNull(),
+    hostUserId: uuid("host_user_id")
+      .notNull()
+      .references(() => users.id),
+    hostDeviceId: uuid("host_device_id")
+      .notNull()
+      .references(() => devices.id),
+    scopes: jsonb("scopes").$type<string[]>().notNull(),
+    constraints: jsonb("constraints").$type<Record<string, unknown>>().notNull().default({}),
+    approvedByUserId: uuid("approved_by_user_id")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("task_permission_grants_current_idx").on(
+      table.taskId,
+      table.taskRevision,
+      table.workspaceBindingId,
+      table.bindingRevision,
+      table.expiresAt,
+    ),
+  ],
+);
+
+export const executionApprovalRequests = pgTable(
+  "execution_approval_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    taskRevision: integer("task_revision").notNull(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => taskRuns.id, { onDelete: "cascade" }),
+    sessionId: text("session_id").notNull(),
+    turnId: text("turn_id").notNull(),
+    agentId: uuid("agent_id")
+      .notNull()
+      .references(() => agents.id),
+    workspaceBindingId: uuid("workspace_binding_id")
+      .notNull()
+      .references(() => workspaceBindings.id, { onDelete: "cascade" }),
+    hostDeviceId: uuid("host_device_id")
+      .notNull()
+      .references(() => devices.id),
+    providerRequestId: text("provider_request_id").notNull(),
+    requestedScope: text("requested_scope").notNull(),
+    requestedConstraints: jsonb("requested_constraints")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    redactedSummary: text("redacted_summary").notNull(),
+    encryptedDetails: jsonb("encrypted_details").$type<EncryptedEnvelope>().notNull(),
+    status: text("status").notNull().default("pending"),
+    decision: text("decision"),
+    decidedByUserId: uuid("decided_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("execution_approval_requests_idempotency_uq").on(table.idempotencyKey),
+    index("execution_approval_requests_host_status_idx").on(
+      table.hostDeviceId,
+      table.status,
+      table.expiresAt,
+    ),
+  ],
+);
+
+export const workspaceWriteLeases = pgTable("workspace_write_leases", {
+  workspaceBindingId: uuid("workspace_binding_id")
+    .primaryKey()
+    .references(() => workspaceBindings.id, { onDelete: "cascade" }),
+  runId: uuid("run_id")
+    .notNull()
+    .references(() => taskRuns.id, { onDelete: "cascade" }),
+  leaseTokenHash: text("lease_token_hash").notNull(),
+  acquiredAt: timestamp("acquired_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+});
+
+export const collaborationAuditEvents = pgTable(
+  "collaboration_audit_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    actorUserId: uuid("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+    actorAgentId: uuid("actor_agent_id").references(() => agents.id, { onDelete: "set null" }),
+    roomId: uuid("room_id")
+      .notNull()
+      .references(() => rooms.id, { onDelete: "cascade" }),
+    taskId: uuid("task_id").references(() => tasks.id, { onDelete: "set null" }),
+    taskRevision: integer("task_revision"),
+    runId: uuid("run_id").references(() => taskRuns.id, { onDelete: "set null" }),
+    hostDeviceId: uuid("host_device_id").references(() => devices.id, {
+      onDelete: "set null",
+    }),
+    eventType: text("event_type").notNull(),
+    audience: text("audience").notNull().default("room"),
+    redactedSummary: text("redacted_summary").notNull(),
+    outcome: text("outcome").notNull(),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("collaboration_audit_room_created_idx").on(table.roomId, table.createdAt),
+    index("collaboration_audit_task_created_idx").on(table.taskId, table.createdAt),
+  ],
 );
 
 export const encryptedConfigs = pgTable(

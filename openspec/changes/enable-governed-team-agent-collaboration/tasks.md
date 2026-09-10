@@ -6,7 +6,7 @@
 
 ## 2. Backend persistence and room binding
 
-- [ ] 2.1 Add a backward-compatible migration for opaque workspace bindings, room bindings, Task binding snapshots and hierarchy, budgets, grants, approvals, write leases, audit events, and new wait statuses; verify migration from the existing schema and a fresh database both succeed.
+- [x] 2.1 Add a backward-compatible migration for opaque workspace bindings, room bindings, Task binding snapshots and hierarchy, budgets, grants, approvals, write leases, audit events, and new wait statuses; verify migration from the existing schema and a fresh database both succeed.
 - [ ] 2.2 Add host-owner APIs to register a private local workspace mapping as an opaque binding and share a redacted binding summary with a room; verify API tests never return absolute paths or private config to another member.
 - [ ] 2.3 Add owner/admin APIs to activate or replace a room workspace binding with optimistic revision checks; verify unauthorized role, stale revision, unshared binding, and rebinding-active-Task scenarios.
 - [ ] 2.4 Snapshot the room binding into new Tasks and mark existing Tasks as requiring reconfirmation after a rebind; verify Task creation, child inheritance, and rebind tests.

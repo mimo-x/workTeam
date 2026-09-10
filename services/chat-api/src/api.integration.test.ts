@@ -33,6 +33,7 @@ test("two users can become friends, create an Agent room, and sync settings", as
   await pool.query(await readFile(join(migrationsDir, "0002_task_review.sql"), "utf8"));
   await pool.query(await readFile(join(migrationsDir, "0003_agent_registry.sql"), "utf8"));
   await pool.query(await readFile(join(migrationsDir, "0004_agent_runtime_config.sql"), "utf8"));
+  await pool.query(await readFile(join(migrationsDir, "0005_governed_collaboration.sql"), "utf8"));
   const config = loadConfig({
     NODE_ENV: "test",
     JWT_SECRET: "test-jwt-secret-with-at-least-32-characters",
