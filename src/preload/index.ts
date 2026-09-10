@@ -9,6 +9,7 @@ const api: CodexDesktopApi = {
   connect: () => ipcRenderer.invoke("codex:connect"),
   getStatus: () => ipcRenderer.invoke("codex:status"),
   chooseWorkspace: () => ipcRenderer.invoke("codex:choose-workspace"),
+  validateWorkspace: (options) => ipcRenderer.invoke("codex:validate-workspace", options),
   login: () => ipcRenderer.invoke("codex:login"),
   startThread: (options) => ipcRenderer.invoke("codex:start-thread", options),
   startTurn: (options) => ipcRenderer.invoke("codex:start-turn", options),

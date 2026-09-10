@@ -144,6 +144,17 @@ const registerIpc = () => {
       : await dialog.showOpenDialog(options);
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });
+  ipcMain.handle("codex:validate-workspace", async (_event, options: { cwd?: unknown }) => {
+    try {
+      await requireDirectory(options?.cwd);
+      return { valid: true };
+    } catch (error) {
+      return {
+        valid: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
   ipcMain.handle("codex:login", async () => {
     const result = await codex.login();
     if (result.authUrl) await shell.openExternal(result.authUrl);

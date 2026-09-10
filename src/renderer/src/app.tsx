@@ -51,6 +51,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { cn } from "@/lib/utils";
 import type {
   ApprovalDecision,
   ApprovalRequest,
@@ -63,6 +64,7 @@ import { formatErrorMessage } from "../../shared/error";
 import { useCodexRuntime } from "./codex-runtime";
 import { CodexAttachmentProvider } from "./codex-attachments";
 import { TeamChat, type TeamView } from "./team-chat";
+import { normalizeWorkspaceHistory, rememberWorkspace } from "./workspace-history";
 
 const emptyStatus: CodexStatus = {
   connected: false,
@@ -1419,13 +1421,13 @@ const AuthenticatedApp = () => {
   const [projects, setProjects] = useState<string[]>(() => {
     try {
       const stored = JSON.parse(localStorage.getItem("codex.projects") ?? "[]");
-      return Array.isArray(stored)
-        ? stored.filter((item): item is string => typeof item === "string")
-        : [];
+      return normalizeWorkspaceHistory(localStorage.getItem("codex.workspace") ?? "", stored);
     } catch {
-      return [];
+      return normalizeWorkspaceHistory(localStorage.getItem("codex.workspace") ?? "", []);
     }
   });
+  const [workspaceValid, setWorkspaceValid] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1445,10 +1447,13 @@ const AuthenticatedApp = () => {
   const rememberProject = (path: string) => {
     localStorage.setItem("codex.workspace", path);
     setProjects((current) => {
-      const next = [path, ...current.filter((item) => item !== path)].slice(0, 12);
+      const next = rememberWorkspace(current, path);
       localStorage.setItem("codex.projects", JSON.stringify(next));
       return next;
     });
+    if (path === workspace) return;
+    setWorkspaceValid(false);
+    setWorkspaceError("");
     setWorkspace(path);
     setApprovals([]);
   };
@@ -1477,6 +1482,34 @@ const AuthenticatedApp = () => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
 
+  useEffect(() => {
+    if (!workspace) {
+      setWorkspaceValid(false);
+      setWorkspaceError("");
+      return;
+    }
+
+    let cancelled = false;
+    setWorkspaceValid(false);
+    setWorkspaceError("");
+    void window.codex
+      .validateWorkspace({ cwd: workspace })
+      .then((result) => {
+        if (cancelled) return;
+        setWorkspaceValid(result.valid);
+        setWorkspaceError(result.valid ? "" : result.error || "这个 Workspace 无法访问。");
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setWorkspaceValid(false);
+        setWorkspaceError(error instanceof Error ? error.message : String(error));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [workspace]);
+
   const connect = useCallback(async () => {
     setStatus((current) => ({ ...current, connecting: true, error: null }));
     try {
@@ -1486,10 +1519,7 @@ const AuthenticatedApp = () => {
         if (current || !next.defaultWorkspace) return current;
         localStorage.setItem("codex.workspace", next.defaultWorkspace);
         setProjects((projects) => {
-          const updated = [
-            next.defaultWorkspace,
-            ...projects.filter((project) => project !== next.defaultWorkspace),
-          ].slice(0, 12);
+          const updated = rememberWorkspace(projects, next.defaultWorkspace);
           localStorage.setItem("codex.projects", JSON.stringify(updated));
           return updated;
         });
@@ -1531,7 +1561,7 @@ const AuthenticatedApp = () => {
   }, [connect]);
 
   useEffect(() => {
-    if (!workspace) return;
+    if (!workspace || !workspaceValid) return;
     void (async () => {
       const backend = await window.backend.getState();
       if (!backend.authenticated && backend.hasRefreshToken) {
@@ -1550,7 +1580,7 @@ const AuthenticatedApp = () => {
         await window.backend.startHost({ workspace });
       }
     })().catch(() => undefined);
-  }, [workspace]);
+  }, [workspace, workspaceValid]);
 
   const chooseWorkspace = async () => {
     const selected = await window.codex.chooseWorkspace();
@@ -1564,7 +1594,7 @@ const AuthenticatedApp = () => {
   };
 
   const needsLogin = status.connected && status.requiresOpenaiAuth && !status.account;
-  const ready = status.connected && !needsLogin && Boolean(workspace);
+  const ready = status.connected && !needsLogin && Boolean(workspace) && workspaceValid;
   const accountLabel =
     status.account?.type === "chatgpt"
       ? status.account.email || "ChatGPT"
@@ -1638,41 +1668,63 @@ const AuthenticatedApp = () => {
           </section>
 
           <section>
-            <div className="mb-1.5 px-2 text-[10px] font-semibold tracking-wider text-muted-foreground/80 uppercase">
-              Workspace
+            <div className="mb-1.5 flex items-center justify-between px-2">
+              <span className="text-[10px] font-semibold tracking-wider text-muted-foreground/80 uppercase">
+                Workspaces
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => void chooseWorkspace()}
+                aria-label="添加 Workspace"
+                title="打开文件夹"
+              >
+                <PlusIcon />
+              </Button>
             </div>
-            <button
-              type="button"
-              onClick={() => void chooseWorkspace()}
-              className="flex w-full items-center gap-2.5 rounded-lg border border-border bg-card p-2 text-left transition hover:border-primary/40 hover:bg-accent"
-            >
-              <FolderIcon className="size-4 shrink-0 text-muted-foreground" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-xs font-medium text-foreground">
-                  {workspace ? shortPath(workspace) : "选择工作区目录"}
-                </div>
-                <div className="mt-0.5 truncate font-mono text-[9px] text-muted-foreground">
-                  {workspace || "尚未指定目录"}
-                </div>
-              </div>
-            </button>
-            {!!projects.filter((project) => project !== workspace).length && (
-              <div className="mt-1.5 flex flex-col gap-0.5">
-                {projects
-                  .filter((project) => project !== workspace)
-                  .slice(0, 4)
-                  .map((project) => (
-                    <button
+            <div className="flex flex-col gap-1">
+              {projects.length > 0 ? (
+                projects.map((project) => {
+                  const active = project === workspace;
+                  return (
+                    <Button
                       key={project}
                       type="button"
+                      variant="ghost"
                       onClick={() => rememberProject(project)}
-                      className="flex min-w-0 items-center gap-2 rounded px-2 py-1 text-left text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
+                      aria-current={active ? "page" : undefined}
+                      className={cn(
+                        "h-auto min-w-0 justify-start gap-2.5 whitespace-normal px-2 py-2 text-left",
+                        active && "border-border bg-card shadow-[var(--shadow-down-1)]",
+                      )}
                     >
-                      <FolderIcon className="size-3 shrink-0" />
-                      <span className="truncate">{shortPath(project)}</span>
-                    </button>
-                  ))}
-              </div>
+                      <FolderIcon className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-xs font-medium text-foreground">
+                          {shortPath(project)}
+                        </span>
+                        <span className="mt-0.5 block truncate font-mono text-[9px] font-normal text-muted-foreground">
+                          {project}
+                        </span>
+                      </span>
+                    </Button>
+                  );
+                })
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full justify-start"
+                  onClick={() => void chooseWorkspace()}
+                >
+                  <FolderIcon data-icon="inline-start" />
+                  打开文件夹
+                </Button>
+              )}
+            </div>
+            {workspaceError && (
+              <p className="mt-1.5 px-2 text-[10px] leading-4 text-destructive">{workspaceError}</p>
             )}
           </section>
 
@@ -1817,10 +1869,14 @@ const AuthenticatedApp = () => {
                       ? "需要登录 Codex"
                       : !workspace
                         ? "请选择项目目录"
-                        : "Codex 暂不可用"}
+                        : workspaceError
+                          ? "无法打开 Workspace"
+                          : "Codex 暂不可用"}
                 </h2>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                  {status.error || "连接完成后，就可以让 Codex 读取、修改并运行这个项目。"}
+                  {workspaceError ||
+                    status.error ||
+                    "连接完成后，就可以让 Codex 读取、修改并运行这个项目。"}
                 </p>
               </div>
             </div>
