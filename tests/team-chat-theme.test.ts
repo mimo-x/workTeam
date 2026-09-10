@@ -4,7 +4,7 @@ import test from "node:test";
 
 const sourcePath = new URL("../src/renderer/src/team-chat.tsx", import.meta.url);
 
-const fixedDarkColors = /(?:bg-\[#|bg-(?:black|white)\/|border-white\/|text-zinc-)/;
+const fixedDarkColors = /(?:bg-\[#|bg-(?:black|white)\/|border-white\/|text-(?:white|zinc-))/;
 
 const extractView = (source: string, startMarker: string, endMarker: string) => {
   const start = source.indexOf(startMarker);
@@ -54,4 +54,19 @@ test("BDD: task board uses semantic surfaces in light and dark themes", async ()
   assert.match(taskBoard, /bg-(?:background|card|secondary|muted)/);
   assert.match(taskBoard, /border-border/);
   assert.match(taskBoard, /text-(?:foreground|muted-foreground)/);
+});
+
+test("BDD: Agent settings dialog uses semantic surfaces in light and dark themes", async () => {
+  const source = await readFile(sourcePath, "utf8");
+  const agentSettings = extractView(source, "const AgentSettings =", "const ContactSettings =");
+
+  assert.doesNotMatch(
+    agentSettings,
+    fixedDarkColors,
+    "Agent settings must not bypass theme tokens with fixed dark colors",
+  );
+  assert.match(agentSettings, /<Dialog/);
+  assert.match(agentSettings, /<DialogTitle/);
+  assert.match(agentSettings, /<(?:Input|Textarea|Select)/);
+  assert.match(agentSettings, /text-(?:foreground|muted-foreground)/);
 });
