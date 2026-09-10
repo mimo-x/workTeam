@@ -3228,7 +3228,7 @@ export const TeamChat = ({
                         )}
                       >
                         <span
-                          className={`grid size-7 shrink-0 place-items-center rounded-lg border text-[9px] ${theme?.avatar ?? "border-white/9 bg-white/5 text-zinc-300"}`}
+                          className={`grid size-7 shrink-0 place-items-center rounded-lg border text-[9px] ${theme?.avatar ?? "border-border bg-muted text-muted-foreground"}`}
                         >
                           {candidate.initials}
                         </span>
