@@ -30,7 +30,7 @@ function ContextMenuItem({ className, ...props }: ContextMenuPrimitive.Item.Prop
     <ContextMenuPrimitive.Item
       data-slot="context-menu-item"
       className={cn(
-        "flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-xs outline-none transition-colors focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-xs outline-none transition-colors focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg:not([class*='size-'])]:size-4 [&_svg]:shrink-0",
         className,
       )}
       {...props}

@@ -13,6 +13,8 @@ import {
   MessageSquareMoreIcon,
   PauseIcon,
   PencilIcon,
+  PinIcon,
+  PinOffIcon,
   PlayIcon,
   PlusIcon,
   Repeat2Icon,
@@ -25,7 +27,7 @@ import {
   UsersIcon,
   XIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -40,6 +42,21 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
@@ -61,6 +78,16 @@ import type {
   TeamWorkspaceSnapshot,
 } from "../../shared/agent-team";
 import { formatErrorMessage } from "../../shared/error";
+import {
+  conversationListStorageKey,
+  hideConversation,
+  orderVisibleConversations,
+  parseConversationListPreferences,
+  restoreConversation,
+  setConversationPinned,
+  type ConversationListPreferences,
+} from "./conversation-list";
+import { teamMessageAlignment } from "./team-message-layout";
 import { openImTransport, type OpenImConnectionState } from "./openim-transport";
 import {
   buildMentionCandidates,
@@ -338,12 +365,14 @@ const StatusPill = ({ status }: { status: TaskStatus }) => (
 const MessageRow = ({
   message,
   agent,
+  human,
   task,
   onStop,
   onOpenTask,
 }: {
   message: TeamMessage;
   agent?: AgentDefinition;
+  human?: HumanContact;
   task?: AgentTask;
   onStop: (runId: string) => void;
   onOpenTask: (task: AgentTask) => void;
@@ -357,11 +386,10 @@ const MessageRow = ({
       </div>
     );
   }
-  const isUser = message.senderType === "user";
+  const alignment = teamMessageAlignment(message);
   const running = message.status === "pending" || message.status === "streaming";
-  const theme = agent ? themeClasses[agent.theme] : themeClasses.cyan;
 
-  if (isUser) {
+  if (alignment === "end") {
     return (
       <article className="flex justify-end gap-2.5 py-3">
         <div className="max-w-[min(40rem,76%)]">
@@ -401,9 +429,14 @@ const MessageRow = ({
   return (
     <article className="group flex gap-3 py-4">
       <div
-        className={`mt-1 grid size-8 shrink-0 place-items-center rounded-xl border font-mono text-[10px] font-semibold ${theme.avatar}`}
+        className={cn(
+          "mt-1 grid size-8 shrink-0 place-items-center rounded-xl border font-mono text-[10px] font-semibold",
+          agent
+            ? themeClasses[agent.theme].avatar
+            : "border-border bg-muted/60 text-muted-foreground",
+        )}
       >
-        {agent?.initials ?? "AI"}
+        {agent?.initials ?? human?.initials ?? message.senderName.slice(0, 2)}
       </div>
       <div className="min-w-0 max-w-[min(48rem,82%)] flex-1">
         <div className="mb-1.5 flex items-center gap-2 text-[10px]">
@@ -790,84 +823,86 @@ const AgentSettings = ({
       setSaving(false);
     }
   };
+  const nativeSelectClass =
+    "h-8 w-full rounded-lg border border-input bg-background px-2.5 text-sm text-foreground outline-none transition-colors focus:border-ring focus:ring-3 focus:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50";
   return (
-    <Modal>
-      <div className="flex h-[min(700px,90vh)] w-full max-w-4xl overflow-hidden rounded-2xl border border-white/10 bg-[#11151e] shadow-2xl">
-        <aside className="flex w-56 shrink-0 flex-col border-r border-white/7 bg-black/10 p-3">
-          <div className="px-2 py-2 text-[10px] tracking-wider text-zinc-600 uppercase">
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent
+        className="flex h-[min(700px,90vh)] w-full max-w-4xl gap-0 overflow-hidden p-0 sm:max-w-4xl"
+        showCloseButton
+      >
+        <aside className="flex w-56 shrink-0 flex-col border-r border-border bg-secondary/60 p-3">
+          <div className="px-2 py-2 text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
             我的 Agent
           </div>
-          <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
+          <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
             {drafts.map((agent) => (
               <button
                 key={agent.id}
                 type="button"
                 onClick={() => setActiveId(agent.id)}
-                className={`flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left ${active?.id === agent.id ? "bg-white/8 text-white" : "text-zinc-500 hover:bg-white/4"}`}
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors",
+                  active?.id === agent.id
+                    ? "bg-primary/10 text-foreground ring-1 ring-primary/20"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                )}
               >
                 <span
                   className={`grid size-7 place-items-center rounded-lg border text-[10px] ${themeClasses[agent.theme].avatar}`}
                 >
                   {agent.initials}
                 </span>
-                <span className="min-w-0 flex-1 truncate text-xs">{agent.name}</span>
+                <span className="min-w-0 flex-1 truncate text-xs font-medium">{agent.name}</span>
                 {agent.visibility === "public" ? (
-                  <Globe2Icon className="size-3" />
+                  <Globe2Icon className="size-3 text-muted-foreground" />
                 ) : (
-                  <LockIcon className="size-3" />
+                  <LockIcon className="size-3 text-muted-foreground" />
                 )}
               </button>
             ))}
           </div>
-          <button
-            type="button"
-            onClick={addAgent}
-            className="mt-2 flex items-center justify-center gap-2 rounded-xl border border-dashed border-white/10 py-2 text-[10px] text-zinc-500 hover:text-zinc-300"
-          >
-            <PlusIcon className="size-3" />
+          <Button type="button" variant="outline" size="sm" onClick={addAgent} className="mt-2">
+            <PlusIcon data-icon="inline-start" />
             创建 Agent
-          </button>
+          </Button>
         </aside>
-        <section className="flex min-w-0 flex-1 flex-col">
-          <header className="flex items-start justify-between border-b border-white/7 px-5 py-4">
-            <div>
-              <h2 className="text-sm font-semibold">定义 Agent 工作者</h2>
-              <p className="mt-1 text-xs text-zinc-500">
-                {canEditActive
-                  ? "这是你的 Agent，可以编辑角色、权限和公开范围。"
-                  : "这是其他用户的公开 Agent，只能查看和邀请。"}
-              </p>
-            </div>
-            <button type="button" onClick={onClose}>
-              <XIcon className="size-4 text-zinc-600" />
-            </button>
-          </header>
+        <section className="flex min-w-0 flex-1 flex-col bg-background">
+          <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12">
+            <DialogTitle>定义 Agent 工作者</DialogTitle>
+            <DialogDescription>
+              {canEditActive
+                ? "这是你的 Agent，可以编辑角色、权限和公开范围。"
+                : "这是其他用户的公开 Agent，只能查看和邀请。"}
+            </DialogDescription>
+          </DialogHeader>
           {active && (
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
+            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5">
               {invitations
                 .filter((invitation) => invitation.status === "pending")
                 .map((invitation) => (
                   <div
                     key={invitation.id}
-                    className="flex items-center gap-3 rounded-xl border border-amber-300/10 bg-amber-300/5 p-3"
+                    className="flex items-center gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3"
                   >
-                    <span className="min-w-0 flex-1 text-xs text-zinc-400">
+                    <span className="min-w-0 flex-1 text-xs text-foreground">
                       「{invitation.roomName}」申请邀请 {invitation.agentName}
                     </span>
-                    <button
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="xs"
                       onClick={() => void respondInvitation(invitation.id, "reject")}
-                      className="px-2 py-1 text-[10px] text-zinc-500"
                     >
                       拒绝
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
+                      size="xs"
                       onClick={() => void respondInvitation(invitation.id, "accept")}
-                      className="rounded-lg bg-emerald-300/10 px-2.5 py-1.5 text-[10px] text-emerald-200"
                     >
                       同意加入
-                    </button>
+                    </Button>
                   </div>
                 ))}
               <div className="grid gap-4 sm:grid-cols-2">
@@ -880,58 +915,58 @@ const AgentSettings = ({
                   ] as const
                 ).map(([key, label]) => (
                   <label key={key}>
-                    <span className="mb-1.5 block text-[10px] tracking-wider text-zinc-500 uppercase">
+                    <span className="mb-1.5 block text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
                       {label}
                     </span>
-                    <input
+                    <Input
                       disabled={!canEditActive || key === "id"}
                       value={active[key]}
                       onChange={(event) => update(key, event.target.value)}
-                      className="w-full rounded-xl border border-white/8 bg-black/20 px-3 py-2.5 text-xs outline-none focus:border-cyan-300/30 disabled:cursor-not-allowed disabled:opacity-45"
                     />
                   </label>
                 ))}
               </div>
               <label className="block">
-                <span className="mb-1.5 block text-[10px] tracking-wider text-zinc-500 uppercase">
+                <span className="mb-1.5 block text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
                   简介
                 </span>
-                <input
+                <Input
                   disabled={!canEditActive}
                   value={active.description}
                   onChange={(event) => update("description", event.target.value)}
-                  className="w-full rounded-xl border border-white/8 bg-black/20 px-3 py-2.5 text-xs outline-none"
                 />
               </label>
               <label className="block">
-                <span className="mb-1.5 block text-[10px] tracking-wider text-zinc-500 uppercase">
+                <span className="mb-1.5 block text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
                   角色指令
                 </span>
-                <textarea
+                <Textarea
                   disabled={!canEditActive}
                   value={active.instructions}
                   onChange={(event) => update("instructions", event.target.value)}
                   rows={7}
-                  className="w-full resize-none rounded-xl border border-white/8 bg-black/20 px-3 py-2.5 text-xs leading-5 outline-none"
+                  className="min-h-40 resize-none"
                 />
               </label>
               <div className="grid gap-4 sm:grid-cols-3">
                 <label>
-                  <span className="mb-1.5 block text-[10px] text-zinc-500 uppercase">可见性</span>
+                  <span className="mb-1.5 block text-[10px] font-medium text-muted-foreground uppercase">
+                    可见性
+                  </span>
                   <select
                     disabled={!canEditActive}
                     value={active.visibility}
                     onChange={(event) =>
                       update("visibility", event.target.value as AgentDefinition["visibility"])
                     }
-                    className="w-full rounded-xl border border-white/8 bg-[#11151e] px-3 py-2.5 text-xs"
+                    className={nativeSelectClass}
                   >
                     <option value="private">私有</option>
                     <option value="public">公开</option>
                   </select>
                 </label>
                 <label>
-                  <span className="mb-1.5 block text-[10px] text-zinc-500 uppercase">
+                  <span className="mb-1.5 block text-[10px] font-medium text-muted-foreground uppercase">
                     工作区权限
                   </span>
                   <select
@@ -943,14 +978,16 @@ const AgentSettings = ({
                         event.target.value as AgentDefinition["workspaceAccess"],
                       )
                     }
-                    className="w-full rounded-xl border border-white/8 bg-[#11151e] px-3 py-2.5 text-xs"
+                    className={nativeSelectClass}
                   >
                     <option value="read">只读</option>
                     <option value="write">允许写入</option>
                   </select>
                 </label>
                 <label>
-                  <span className="mb-1.5 block text-[10px] text-zinc-500 uppercase">运行位置</span>
+                  <span className="mb-1.5 block text-[10px] font-medium text-muted-foreground uppercase">
+                    运行位置
+                  </span>
                   <select
                     disabled={!canEditActive}
                     value={active.executionLocation}
@@ -962,7 +999,7 @@ const AgentSettings = ({
                         target,
                       });
                     }}
-                    className="w-full rounded-xl border border-white/8 bg-[#11151e] px-3 py-2.5 text-xs"
+                    className={nativeSelectClass}
                   >
                     <option value="local">本机</option>
                     <option value="hosted">托管</option>
@@ -971,7 +1008,7 @@ const AgentSettings = ({
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <label>
-                  <span className="mb-1.5 block text-[10px] text-zinc-500 uppercase">
+                  <span className="mb-1.5 block text-[10px] font-medium text-muted-foreground uppercase">
                     执行 Runtime
                   </span>
                   <select
@@ -987,7 +1024,7 @@ const AgentSettings = ({
                         target: active.executionLocation,
                       });
                     }}
-                    className="w-full rounded-xl border border-white/8 bg-[#11151e] px-3 py-2.5 text-xs"
+                    className={nativeSelectClass}
                   >
                     <option value="codex">Codex（内置）</option>
                     <option value="claude">Claude（内置）</option>
@@ -998,10 +1035,10 @@ const AgentSettings = ({
                   </select>
                 </label>
                 <label>
-                  <span className="mb-1.5 block text-[10px] text-zinc-500 uppercase">
+                  <span className="mb-1.5 block text-[10px] font-medium text-muted-foreground uppercase">
                     Runtime 模型（可选）
                   </span>
-                  <input
+                  <Input
                     disabled={!canEditActive}
                     value={activeRuntime.model ?? ""}
                     onChange={(event) =>
@@ -1011,7 +1048,6 @@ const AgentSettings = ({
                       })
                     }
                     placeholder="留空使用 Runtime 默认模型"
-                    className="w-full rounded-xl border border-white/8 bg-black/20 px-3 py-2.5 text-xs disabled:opacity-45"
                   />
                 </label>
               </div>
@@ -1019,10 +1055,10 @@ const AgentSettings = ({
                 activeRuntime.provider === "custom-cli") && (
                 <>
                   <label>
-                    <span className="mb-1.5 block text-[10px] text-zinc-500 uppercase">
+                    <span className="mb-1.5 block text-[10px] font-medium text-muted-foreground uppercase">
                       {activeRuntime.provider === "custom-http" ? "Agent Endpoint" : "Agent 命令"}
                     </span>
-                    <input
+                    <Input
                       disabled={!canEditActive}
                       value={
                         activeRuntime.provider === "custom-http"
@@ -1042,13 +1078,12 @@ const AgentSettings = ({
                           ? "https://agent.example.com"
                           : "例如：my-agent --protocol jsonl"
                       }
-                      className="w-full rounded-xl border border-white/8 bg-black/20 px-3 py-2.5 text-xs disabled:opacity-45"
                     />
                   </label>
                   {activeRuntime.provider === "custom-http" && (
                     <div className="grid gap-3 sm:grid-cols-[10rem_1fr]">
                       <label>
-                        <span className="mb-1.5 block text-[10px] text-zinc-500 uppercase">
+                        <span className="mb-1.5 block text-[10px] font-medium text-muted-foreground uppercase">
                           认证方式
                         </span>
                         <select
@@ -1060,7 +1095,7 @@ const AgentSettings = ({
                               auth: event.target.value === "bearer" ? "bearer" : "none",
                             })
                           }
-                          className="w-full rounded-xl border border-white/8 bg-[#11151e] px-3 py-2.5 text-xs"
+                          className={nativeSelectClass}
                         >
                           <option value="none">无需认证</option>
                           <option value="bearer">Bearer Token</option>
@@ -1068,11 +1103,11 @@ const AgentSettings = ({
                       </label>
                       {activeRuntime.auth === "bearer" && (
                         <label>
-                          <span className="mb-1.5 block text-[10px] text-zinc-500 uppercase">
+                          <span className="mb-1.5 block text-[10px] font-medium text-muted-foreground uppercase">
                             Bearer Token
                           </span>
                           <div className="flex gap-2">
-                            <input
+                            <Input
                               disabled={!canEditActive}
                               type="password"
                               autoComplete="off"
@@ -1086,11 +1121,13 @@ const AgentSettings = ({
                               placeholder={
                                 runtimeTokenConfigured ? "已配置，留空保持不变" : "输入 Token"
                               }
-                              className="min-w-0 flex-1 rounded-xl border border-white/8 bg-black/20 px-3 py-2.5 text-xs disabled:opacity-45"
+                              className="min-w-0 flex-1"
                             />
                             {runtimeTokenConfigured && (
-                              <button
+                              <Button
                                 type="button"
+                                variant="destructive"
+                                size="xs"
                                 disabled={!canEditActive}
                                 onClick={() => {
                                   runtimeTokens.current.set(activeId, "");
@@ -1098,10 +1135,10 @@ const AgentSettings = ({
                                   setRuntimeToken("");
                                   setRuntimeTokenConfigured(false);
                                 }}
-                                className="shrink-0 px-2 text-[10px] text-red-300/70 hover:text-red-300 disabled:opacity-40"
+                                className="shrink-0"
                               >
                                 清除
-                              </button>
+                              </Button>
                             )}
                           </div>
                         </label>
@@ -1112,7 +1149,7 @@ const AgentSettings = ({
               )}
               <div className="grid gap-4 sm:grid-cols-[12rem_1fr]">
                 <label>
-                  <span className="mb-1.5 block text-[10px] text-zinc-500 uppercase">
+                  <span className="mb-1.5 block text-[10px] font-medium text-muted-foreground uppercase">
                     Skills 权限
                   </span>
                   <select
@@ -1124,7 +1161,7 @@ const AgentSettings = ({
                         event.target.value as NonNullable<AgentDefinition["skillPolicy"]>,
                       )
                     }
-                    className="w-full rounded-xl border border-white/8 bg-[#11151e] px-3 py-2.5 text-xs"
+                    className={nativeSelectClass}
                   >
                     <option value="none">不允许 Skill</option>
                     <option value="allowlist">仅允许列表</option>
@@ -1132,10 +1169,10 @@ const AgentSettings = ({
                   </select>
                 </label>
                 <label>
-                  <span className="mb-1.5 block text-[10px] text-zinc-500 uppercase">
+                  <span className="mb-1.5 block text-[10px] font-medium text-muted-foreground uppercase">
                     Skill 名称白名单
                   </span>
-                  <input
+                  <Input
                     disabled={!canEditActive || active.skillPolicy !== "allowlist"}
                     value={(active.skillRefs ?? []).map((skill) => skill.name).join(", ")}
                     onChange={(event) =>
@@ -1149,29 +1186,31 @@ const AgentSettings = ({
                       )
                     }
                     placeholder="例如：openai-docs, pdf"
-                    className="w-full rounded-xl border border-white/8 bg-black/20 px-3 py-2.5 text-xs disabled:opacity-45"
                   />
                 </label>
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <label>
-                  <span className="mb-1.5 block text-[10px] text-zinc-500 uppercase">头像文字</span>
-                  <input
+                  <span className="mb-1.5 block text-[10px] font-medium text-muted-foreground uppercase">
+                    头像文字
+                  </span>
+                  <Input
                     disabled={!canEditActive}
                     value={active.initials}
                     onChange={(event) => update("initials", event.target.value)}
-                    className="w-full rounded-xl border border-white/8 bg-black/20 px-3 py-2.5 text-xs"
                   />
                 </label>
                 <label>
-                  <span className="mb-1.5 block text-[10px] text-zinc-500 uppercase">颜色</span>
+                  <span className="mb-1.5 block text-[10px] font-medium text-muted-foreground uppercase">
+                    颜色
+                  </span>
                   <select
                     disabled={!canEditActive}
                     value={active.theme}
                     onChange={(event) =>
                       update("theme", event.target.value as AgentDefinition["theme"])
                     }
-                    className="w-full rounded-xl border border-white/8 bg-[#11151e] px-3 py-2.5 text-xs"
+                    className={nativeSelectClass}
                   >
                     <option value="cyan">青色</option>
                     <option value="violet">紫色</option>
@@ -1180,39 +1219,36 @@ const AgentSettings = ({
                   </select>
                 </label>
               </div>
-              <button
+              <Button
                 type="button"
+                variant="destructive"
+                size="sm"
                 disabled={drafts.length <= 1 || !canEditActive}
                 onClick={removeAgent}
-                className="flex items-center gap-2 text-[10px] text-red-300/60 hover:text-red-300 disabled:opacity-30"
+                className="self-start"
               >
-                <Trash2Icon className="size-3" />
+                <Trash2Icon data-icon="inline-start" />
                 删除这个 Agent
-              </button>
-              {error && <p className="text-xs text-red-300">{error}</p>}
+              </Button>
+              {error && <p className="text-xs text-destructive">{error}</p>}
             </div>
           )}
-          <footer className="flex justify-end gap-2 border-t border-white/7 px-5 py-4">
-            <button type="button" onClick={onClose} className="px-3 py-2 text-xs text-zinc-500">
+          <DialogFooter className="shrink-0 border-t border-border px-5 py-4">
+            <Button type="button" variant="outline" onClick={onClose}>
               取消
-            </button>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => void save()}
-              className="flex items-center gap-2 rounded-lg bg-cyan-300 px-4 py-2 text-xs font-semibold text-cyan-950 disabled:opacity-50"
-            >
+            </Button>
+            <Button type="button" disabled={saving} onClick={() => void save()}>
               {saving ? (
-                <LoaderCircleIcon className="size-3.5 animate-spin" />
+                <LoaderCircleIcon data-icon="inline-start" className="animate-spin" />
               ) : (
-                <CheckIcon className="size-3.5" />
+                <CheckIcon data-icon="inline-start" />
               )}
               保存 Agent
-            </button>
-          </footer>
+            </Button>
+          </DialogFooter>
         </section>
-      </div>
-    </Modal>
+      </DialogContent>
+    </Dialog>
   );
 };
 
@@ -2149,12 +2185,30 @@ export const TeamChat = ({
   const [contactSettingsOpen, setContactSettingsOpen] = useState(false);
   const [roomDialogOpen, setRoomDialogOpen] = useState(false);
   const [editingRoom, setEditingRoom] = useState<TeamRoomSnapshot | undefined>();
+  const [pendingDeleteRoom, setPendingDeleteRoom] = useState<TeamRoomSnapshot | null>(null);
+  const [conversationPreferencesRevision, setConversationPreferencesRevision] = useState(0);
   const [imConfig, setImConfig] = useState<ImPublicConfig>(emptyImConfig);
   const [cloudMode, setCloudMode] = useState(false);
   const [connection, setConnection] = useState<OpenImConnectionState>(openImTransport.getStatus());
   const [configRevision, setConfigRevision] = useState(0);
   const endRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+
+  const conversationPreferences = useMemo(
+    () =>
+      parseConversationListPreferences(localStorage.getItem(conversationListStorageKey(workspace))),
+    [conversationPreferencesRevision, workspace],
+  );
+  const updateConversationPreferences = useCallback(
+    (update: (preferences: ConversationListPreferences) => ConversationListPreferences) => {
+      const key = conversationListStorageKey(workspace);
+      const next = update(parseConversationListPreferences(localStorage.getItem(key)));
+      localStorage.setItem(key, JSON.stringify(next));
+      setConversationPreferencesRevision((revision) => revision + 1);
+      return next;
+    },
+    [workspace],
+  );
 
   useEffect(() => openImTransport.onStatus(setConnection), []);
   useEffect(() => {
@@ -2344,9 +2398,14 @@ export const TeamChat = ({
     [imConfig.groupId, imConfig.hostRemoteMessages, model, state, workspace],
   );
 
+  const conversations = useMemo(
+    () => orderVisibleConversations(state?.rooms ?? [], conversationPreferences),
+    [conversationPreferences, state?.rooms],
+  );
   const room =
-    state?.rooms.find((candidate) => candidate.roomId === selectedRoomId) ??
-    state?.rooms.find((candidate) => candidate.type === "group");
+    conversations.find((candidate) => candidate.roomId === selectedRoomId) ??
+    conversations.find((candidate) => candidate.type === "group") ??
+    conversations[0];
   const task = room?.taskId
     ? state?.tasks.find((candidate) => candidate.id === room.taskId)
     : undefined;
@@ -2435,6 +2494,9 @@ export const TeamChat = ({
   }, [connection.state, room?.externalId, room?.roomId, workspace]);
 
   const openTask = (nextTask: AgentTask) => {
+    updateConversationPreferences((preferences) =>
+      restoreConversation(preferences, nextTask.taskRoomId),
+    );
     setSelectedRoomId(nextTask.taskRoomId);
     onViewChange("messages");
   };
@@ -2488,6 +2550,9 @@ export const TeamChat = ({
       }
       setState((current) =>
         current ? { ...current, rooms: upsertRoom(current.rooms, nextRoom) } : current,
+      );
+      updateConversationPreferences((preferences) =>
+        restoreConversation(preferences, nextRoom.roomId),
       );
       setSelectedRoomId(nextRoom.roomId);
       onViewChange("messages");
@@ -2682,6 +2747,32 @@ export const TeamChat = ({
       setError(formatErrorMessage(nextError));
     }
   };
+  const toggleConversationPinned = (nextRoom: TeamRoomSnapshot) => {
+    try {
+      setError("");
+      updateConversationPreferences((preferences) =>
+        setConversationPinned(preferences, nextRoom.roomId, !preferences.pinnedAt[nextRoom.roomId]),
+      );
+    } catch (nextError) {
+      setError(formatErrorMessage(nextError));
+    }
+  };
+  const confirmDeleteConversation = () => {
+    if (!pendingDeleteRoom || !state) return;
+    try {
+      setError("");
+      const nextPreferences = updateConversationPreferences((preferences) =>
+        hideConversation(preferences, pendingDeleteRoom),
+      );
+      if (selectedRoomId === pendingDeleteRoom.roomId) {
+        const nextRoom = orderVisibleConversations(state.rooms, nextPreferences)[0];
+        setSelectedRoomId(nextRoom?.roomId ?? LOCAL_ROOM_ID);
+      }
+      setPendingDeleteRoom(null);
+    } catch (nextError) {
+      setError(formatErrorMessage(nextError));
+    }
+  };
 
   if (!state)
     return (
@@ -2735,11 +2826,6 @@ export const TeamChat = ({
       />
     );
 
-  const conversations = [...state.rooms].sort((a, b) => {
-    const activityA = a.messages.at(-1)?.updatedAt ?? a.createdAt;
-    const activityB = b.messages.at(-1)?.updatedAt ?? b.createdAt;
-    return activityB - activityA;
-  });
   return (
     <div className="relative flex h-full min-h-0">
       <aside className="flex w-56 shrink-0 flex-col border-r border-border bg-secondary/60">
@@ -2775,6 +2861,7 @@ export const TeamChat = ({
                 (candidate) => candidate.id === item.directPrincipalId,
               );
               const isSelected = room?.roomId === item.roomId;
+              const isPinned = Boolean(conversationPreferences.pinnedAt[item.roomId]);
               const kind =
                 item.type === "task"
                   ? {
@@ -2800,59 +2887,81 @@ export const TeamChat = ({
                           tone: "border-border bg-card text-muted-foreground",
                         };
               return (
-                <button
-                  key={item.roomId}
-                  type="button"
-                  onClick={() => setSelectedRoomId(item.roomId)}
-                  className={cn(
-                    "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-left transition",
-                    isSelected
-                      ? "bg-primary/10 text-foreground ring-1 ring-primary/20"
-                      : "text-muted-foreground hover:bg-accent hover:text-foreground",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "grid size-8 shrink-0 place-items-center rounded-lg border",
-                      kind.tone,
-                    )}
+                <ContextMenu key={item.roomId}>
+                  <ContextMenuTrigger
+                    render={
+                      <button
+                        type="button"
+                        onClick={() => setSelectedRoomId(item.roomId)}
+                        className={cn(
+                          "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-left transition [&_[data-pin-indicator]]:size-3",
+                          isSelected
+                            ? "bg-primary/10 text-foreground ring-1 ring-primary/20"
+                            : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                        )}
+                      />
+                    }
                   >
-                    {kind.icon}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs font-medium text-foreground">
-                      {item.name}
-                    </span>
-                    <span className="mt-1 block truncate font-mono text-[10px] text-muted-foreground">
-                      {item.type === "task" && itemTask ? (
-                        <StatusPill status={itemTask.status} />
-                      ) : item.type === "direct" ? (
-                        itemAgent ? (
-                          "Agent 私聊"
-                        ) : (
-                          "好友私聊"
-                        )
-                      ) : (
-                        `${item.agentIds.length + item.humanIds.length} 位成员`
-                      )}
-                    </span>
-                  </span>
-                  <span className="flex w-11 shrink-0 flex-col items-end gap-1">
                     <span
                       className={cn(
-                        "rounded border px-1.5 py-0.5 text-[9px] font-medium",
+                        "grid size-8 shrink-0 place-items-center rounded-lg border",
                         kind.tone,
                       )}
                     >
-                      {kind.label}
+                      {kind.icon}
                     </span>
-                    <span className="h-3 font-mono text-[9px] text-muted-foreground/70">
-                      {item.messages.length > 0
-                        ? timeLabel(item.messages.at(-1)?.updatedAt ?? item.createdAt)
-                        : null}
+                    <span className="min-w-0 flex-1">
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <span className="block min-w-0 flex-1 truncate text-xs font-medium text-foreground">
+                          {item.name}
+                        </span>
+                        {isPinned && <PinIcon data-pin-indicator aria-label="已置顶" />}
+                      </span>
+                      <span className="mt-1 block truncate font-mono text-[10px] text-muted-foreground">
+                        {item.type === "task" && itemTask ? (
+                          <StatusPill status={itemTask.status} />
+                        ) : item.type === "direct" ? (
+                          itemAgent ? (
+                            "Agent 私聊"
+                          ) : (
+                            "好友私聊"
+                          )
+                        ) : (
+                          `${item.agentIds.length + item.humanIds.length} 位成员`
+                        )}
+                      </span>
                     </span>
-                  </span>
-                </button>
+                    <span className="flex w-11 shrink-0 flex-col items-end gap-1">
+                      <span
+                        className={cn(
+                          "rounded border px-1.5 py-0.5 text-[9px] font-medium",
+                          kind.tone,
+                        )}
+                      >
+                        {kind.label}
+                      </span>
+                      <span className="h-3 font-mono text-[9px] text-muted-foreground/70">
+                        {item.messages.length > 0
+                          ? timeLabel(item.messages.at(-1)?.updatedAt ?? item.createdAt)
+                          : null}
+                      </span>
+                    </span>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent>
+                    <ContextMenuItem onClick={() => toggleConversationPinned(item)}>
+                      {isPinned ? <PinOffIcon /> : <PinIcon />}
+                      {isPinned ? "取消置顶" : "置顶会话"}
+                    </ContextMenuItem>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem
+                      className="text-destructive focus:bg-destructive/10 focus:text-destructive"
+                      onClick={() => setPendingDeleteRoom(item)}
+                    >
+                      <Trash2Icon />
+                      删除会话
+                    </ContextMenuItem>
+                  </ContextMenuContent>
+                </ContextMenu>
               );
             })}
           </div>
@@ -3149,6 +3258,7 @@ export const TeamChat = ({
                 key={message.id}
                 message={message}
                 agent={state.agents.find((agent) => agent.id === message.senderId)}
+                human={state.humans.find((human) => human.id === message.senderId)}
                 task={
                   message.taskId
                     ? state.tasks.find((candidate) => candidate.id === message.taskId)
@@ -3560,6 +3670,31 @@ export const TeamChat = ({
           </div>
         )}
       </aside>
+
+      <Dialog
+        open={Boolean(pendingDeleteRoom)}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteRoom(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>删除会话</DialogTitle>
+            <DialogDescription>
+              “{pendingDeleteRoom?.name}”将从当前工作区的消息列表移除。群组、Task
+              和历史消息不会被删除；收到新消息后，该会话会自动恢复。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingDeleteRoom(null)}>
+              取消
+            </Button>
+            <Button variant="destructive" onClick={confirmDeleteConversation}>
+              确认删除
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {settingsOpen && (
         <ImSettings
