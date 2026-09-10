@@ -16,6 +16,11 @@ const taskStatuses = [
   "queued",
   "running",
   "waiting",
+  "waiting_for_host",
+  "waiting_for_permission",
+  "waiting_for_approval",
+  "waiting_for_assignee",
+  "waiting_for_budget",
   "review",
   "blocked",
   "done",
@@ -42,8 +47,13 @@ const proposalBody = z.object({
   plan: z.array(z.string().trim().min(1).max(1_000)).min(1).max(20),
   acceptanceCriteria: z.array(z.string().trim().min(1).max(1_000)).max(20).default([]),
   requestedAccess: z.enum(["read", "write"]).default("read"),
+  requestedScopes: z
+    .array(z.enum(["workspace.read", "workspace.write", "command.run", "network.read"]))
+    .max(4)
+    .optional(),
   assigneeIds: z.array(z.string().uuid()).min(1).max(16),
   proposedByAgentId: z.string().uuid().optional(),
+  parentTaskId: z.string().uuid().optional(),
 });
 const proposalUpdateBody = proposalBody.pick({
   title: true,
@@ -52,8 +62,19 @@ const proposalUpdateBody = proposalBody.pick({
   plan: true,
   acceptanceCriteria: true,
   requestedAccess: true,
+  requestedScopes: true,
   proposedByAgentId: true,
 });
+
+const governedScopes = (input: {
+  requestedAccess: "read" | "write";
+  requestedScopes?: string[];
+}) => {
+  const scopes = new Set(input.requestedScopes ?? []);
+  scopes.add("workspace.read");
+  if (input.requestedAccess === "write") scopes.add("workspace.write");
+  return [...scopes];
+};
 
 type AgentForRun = {
   id: string;
@@ -104,7 +125,8 @@ const snapshotAgent = (agent: AgentForRun) => ({
 const taskSelect = `
   SELECT DISTINCT t.id, t.title, t.objective, t.expected_result AS "expectedResult",
          t.plan, t.acceptance_criteria AS "acceptanceCriteria",
-         t.requested_access AS "requestedAccess", t.creator_id AS "creatorId",
+         t.requested_access AS "requestedAccess", t.requested_scopes AS "requestedScopes",
+         t.creator_id AS "creatorId",
          t.requested_by_user_id AS "requestedByUserId",
          t.proposed_by_agent_id AS "proposedByAgentId",
          t.source_room_id AS "sourceRoomId", t.task_room_id AS "taskRoomId",
@@ -112,6 +134,12 @@ const taskSelect = `
          t.approval_required AS "approvalRequired",
          t.approved_review_id AS "approvedReviewId",
          t.started_by_user_id AS "startedByUserId", t.started_at AS "startedAt",
+         t.workspace_binding_id AS "workspaceBindingId",
+         t.binding_revision AS "workspaceBindingRevision",
+         t.parent_task_id AS "parentTaskId", t.root_task_id AS "rootTaskId",
+         t.delegated_by_agent_id AS "delegatedByAgentId", t.depth,
+         t.budget, t.budget_usage AS "budgetUsage", t.wait_reason AS "waitReason",
+         t.artifact_refs AS "artifactRefs",
          t.context_version AS "contextVersion", t.latest_source_seq AS "latestSourceSeq",
          t.created_at AS "createdAt", t.updated_at AS "updatedAt"
   FROM tasks t`;
@@ -197,8 +225,10 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
       if (!source.rows[0]) throw new ApiError(404, "ROOM_NOT_FOUND", "来源群不存在。");
       const agents = await client.query<AgentForRun>(
         `SELECT a.* FROM agents a JOIN room_agents ra ON ra.agent_id = a.id
-         WHERE ra.room_id = $1 AND a.id = ANY($2::uuid[]) AND a.archived_at IS NULL`,
-        [input.sourceRoomId, input.assigneeIds],
+         WHERE ra.room_id = $1
+           AND a.id IN (${input.assigneeIds.map((_, index) => `$${index + 2}`).join(",")})
+           AND a.archived_at IS NULL`,
+        [input.sourceRoomId, ...input.assigneeIds],
       );
       if (agents.rows.length !== new Set(input.assigneeIds).size) {
         throw new ApiError(400, "INVALID_ASSIGNEES", "执行 Agent 不在来源群中。");
@@ -218,6 +248,37 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
         throw new ApiError(400, "INVALID_ANCHOR", "Task 必须关联来源群中的一条消息。");
       }
       const anchorSeq = Number(anchor.rows[0].seq);
+      const bindingSnapshot = input.parentTaskId
+        ? await client.query<{
+            workspace_binding_id: string | null;
+            binding_revision: number | null;
+            root_task_id: string;
+            depth: number;
+          }>(
+            `SELECT workspace_binding_id, binding_revision, root_task_id, depth
+             FROM tasks WHERE id = $1 AND source_room_id = $2`,
+            [input.parentTaskId, input.sourceRoomId],
+          )
+        : await client.query<{
+            workspace_binding_id: string | null;
+            binding_revision: number | null;
+            root_task_id: string;
+            depth: number;
+          }>(
+            `SELECT rwb.workspace_binding_id, rwb.binding_revision,
+                    NULL::uuid AS root_task_id, -1 AS depth
+             FROM room_workspace_bindings rwb
+             WHERE rwb.room_id = $1 AND rwb.status = 'active'`,
+            [input.sourceRoomId],
+          );
+      if (input.parentTaskId && !bindingSnapshot.rows[0]) {
+        throw new ApiError(400, "INVALID_PARENT_TASK", "父 Task 不属于当前来源群。");
+      }
+      const inherited = bindingSnapshot.rows[0];
+      const requestedScopes = governedScopes(input);
+      const rootTaskId = input.parentTaskId
+        ? (inherited?.root_task_id ?? input.parentTaskId)
+        : null;
       await client.query(
         `INSERT INTO rooms(id, owner_id, openim_group_id, type, name, source_room_id)
          VALUES ($1, $2, $3, 'task', $4, $5)`,
@@ -237,9 +298,13 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
         `INSERT INTO tasks(
            id, creator_id, requested_by_user_id, proposed_by_agent_id, source_room_id,
            task_room_id, anchor_message_id, title, objective, expected_result, plan,
-           acceptance_criteria, requested_access, status, revision, context_version,
-           latest_source_seq, approval_required
-         ) VALUES ($1,$2,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,'pending_review',1,1,$13,true)`,
+           acceptance_criteria, requested_access, requested_scopes, status, revision,
+           context_version, latest_source_seq, approval_required, workspace_binding_id,
+           binding_revision, parent_task_id, root_task_id, depth
+         ) VALUES (
+           $1,$2,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13::jsonb,
+           'pending_review',1,1,$14,true,$15,$16,$17,$18,$19
+         )`,
         [
           taskId,
           request.user.sub,
@@ -253,9 +318,18 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
           JSON.stringify(input.plan),
           JSON.stringify(input.acceptanceCriteria),
           input.requestedAccess,
+          JSON.stringify(requestedScopes),
           anchorSeq,
+          inherited?.workspace_binding_id ?? null,
+          inherited?.binding_revision ?? null,
+          input.parentTaskId ?? null,
+          rootTaskId,
+          (inherited?.depth ?? -1) + 1,
         ],
       );
+      if (!rootTaskId) {
+        await client.query("UPDATE tasks SET root_task_id = id WHERE id = $1", [taskId]);
+      }
       await client.query(
         `INSERT INTO task_context_events(task_id, message_id, context_version, source_seq)
          VALUES ($1, $2, 1, $3)`,
@@ -326,11 +400,11 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
       await client.query(
         `UPDATE tasks SET title = $1, objective = $2, expected_result = $3,
                 plan = $4::jsonb, acceptance_criteria = $5::jsonb,
-                requested_access = $6,
-                proposed_by_agent_id = COALESCE($7, proposed_by_agent_id),
+                requested_access = $6, requested_scopes = $7::jsonb,
+                proposed_by_agent_id = COALESCE($8, proposed_by_agent_id),
                 revision = revision + 1, status = 'pending_review',
                 approved_review_id = NULL, updated_at = now()
-         WHERE id = $8`,
+         WHERE id = $9`,
         [
           input.title,
           input.objective,
@@ -338,6 +412,7 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
           JSON.stringify(input.plan),
           JSON.stringify(input.acceptanceCriteria),
           input.requestedAccess,
+          JSON.stringify(governedScopes(input)),
           input.proposedByAgentId ?? null,
           id,
         ],

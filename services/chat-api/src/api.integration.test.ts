@@ -182,6 +182,92 @@ test("two users can become friends, create an Agent room, and sync settings", as
     assert.equal(room.statusCode, 201, room.body);
     assert.equal(room.json().pendingAgentIds.length, 0);
 
+    const bobDeviceId = randomUUID();
+    await pool.query(
+      `INSERT INTO devices(id, user_id, name, platform, is_agent_host)
+       VALUES ($1, $2, 'Bob host', 'test', true)`,
+      [bobDeviceId, bob.user.id],
+    );
+    const registeredBinding = await app.inject({
+      method: "POST",
+      url: "/v1/workspace-bindings",
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+      payload: {
+        deviceId: bobDeviceId,
+        label: "Project Alpha",
+        repositoryUrl: "https://example.test/project-alpha.git",
+        baselineScopes: ["workspace.read"],
+        path: "/Users/bob/private/project-alpha",
+      },
+    });
+    assert.equal(registeredBinding.statusCode, 201, registeredBinding.body);
+    const bindingId = registeredBinding.json().id as string;
+    assert.equal("path" in registeredBinding.json(), false);
+    const storedBinding = await pool.query(
+      "SELECT path_config FROM workspace_bindings WHERE id = $1",
+      [bindingId],
+    );
+    assert.equal(storedBinding.rows[0].path_config, null);
+    const ownedBindings = await app.inject({
+      method: "GET",
+      url: "/v1/workspace-bindings",
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+    });
+    assert.equal(ownedBindings.statusCode, 200, ownedBindings.body);
+    assert.equal("path" in ownedBindings.json().data[0], false);
+    assert.equal("pathConfig" in ownedBindings.json().data[0], false);
+
+    const sharedBinding = await app.inject({
+      method: "POST",
+      url: `/v1/workspace-bindings/${bindingId}/share`,
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+      payload: { roomId: room.json().id },
+    });
+    assert.equal(sharedBinding.statusCode, 201, sharedBinding.body);
+    assert.equal("path" in sharedBinding.json(), false);
+
+    const visibleBindings = await app.inject({
+      method: "GET",
+      url: `/v1/rooms/${room.json().id}/workspace-bindings`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    });
+    assert.equal(visibleBindings.statusCode, 200, visibleBindings.body);
+    assert.equal(visibleBindings.json().data[0].hostUserId, bob.user.id);
+    assert.equal("pathConfig" in visibleBindings.json().data[0], false);
+
+    const memberCannotActivate = await app.inject({
+      method: "PUT",
+      url: `/v1/rooms/${room.json().id}/workspace-binding`,
+      headers: { authorization: `Bearer ${bob.accessToken}`, "if-match": "1" },
+      payload: { bindingId },
+    });
+    assert.equal(memberCannotActivate.statusCode, 403, memberCannotActivate.body);
+
+    const staleActivation = await app.inject({
+      method: "PUT",
+      url: `/v1/rooms/${room.json().id}/workspace-binding`,
+      headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "99" },
+      payload: { bindingId },
+    });
+    assert.equal(staleActivation.statusCode, 409, staleActivation.body);
+
+    const unsharedActivation = await app.inject({
+      method: "PUT",
+      url: `/v1/rooms/${room.json().id}/workspace-binding`,
+      headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "1" },
+      payload: { bindingId: randomUUID() },
+    });
+    assert.equal(unsharedActivation.statusCode, 409, unsharedActivation.body);
+
+    const activatedBinding = await app.inject({
+      method: "PUT",
+      url: `/v1/rooms/${room.json().id}/workspace-binding`,
+      headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "1" },
+      payload: { bindingId },
+    });
+    assert.equal(activatedBinding.statusCode, 200, activatedBinding.body);
+    assert.equal(activatedBinding.json().roomRevision, 2);
+
     const chatMention = await app.inject({
       method: "POST",
       url: "/internal/openim/callbacks/message/after?token=test-callback-token-long-enough",
@@ -236,7 +322,36 @@ test("two users can become friends, create an Agent room, and sync settings", as
     assert.equal(tasks.statusCode, 200, tasks.body);
     assert.equal(tasks.json().data.length, 1);
     assert.equal(tasks.json().data[0].status, "pending_review");
+    assert.equal(tasks.json().data[0].workspaceBindingId, bindingId);
     const taskId = tasks.json().data[0].id as string;
+
+    const secondBinding = await app.inject({
+      method: "POST",
+      url: "/v1/workspace-bindings",
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+      payload: {
+        deviceId: bobDeviceId,
+        label: "Project Alpha checkout 2",
+        repositoryUrl: "https://example.test/project-alpha.git",
+      },
+    });
+    assert.equal(secondBinding.statusCode, 201, secondBinding.body);
+    const secondBindingId = secondBinding.json().id as string;
+    const sharedSecondBinding = await app.inject({
+      method: "POST",
+      url: `/v1/workspace-bindings/${secondBindingId}/share`,
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+      payload: { roomId: room.json().id },
+    });
+    assert.equal(sharedSecondBinding.statusCode, 201, sharedSecondBinding.body);
+    const rebound = await app.inject({
+      method: "PUT",
+      url: `/v1/rooms/${room.json().id}/workspace-binding`,
+      headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "2" },
+      payload: { bindingId: secondBindingId },
+    });
+    assert.equal(rebound.statusCode, 200, rebound.body);
+    assert.deepEqual(rebound.json().tasksRequiringReconfirmation, [taskId]);
 
     const contextMessage = {
       sendID: (bob.user as { openimUserId?: string }).openimUserId,
@@ -256,12 +371,43 @@ test("two users can become friends, create an Agent room, and sync settings", as
       });
       assert.equal(mirrored.statusCode, 200, mirrored.body);
     }
+    const childTask = await app.inject({
+      method: "POST",
+      url: "/v1/tasks",
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+      payload: {
+        sourceRoomId: room.json().id,
+        anchorMessageId: "server-context-3",
+        title: "验证登录流程",
+        objective: "验证父 Task 的登录流程",
+        expectedResult: "测试报告",
+        plan: ["运行只读检查"],
+        acceptanceCriteria: ["给出测试结论"],
+        requestedAccess: "read",
+        assigneeIds: [agent.id],
+        parentTaskId: taskId,
+      },
+    });
+    assert.equal(childTask.statusCode, 201, childTask.body);
+    const childTaskDetail = await app.inject({
+      method: "GET",
+      url: `/v1/tasks/${childTask.json().id}`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    });
+    assert.equal(childTaskDetail.statusCode, 200, childTaskDetail.body);
+    assert.equal(childTaskDetail.json().parentTaskId, taskId);
+    assert.equal(childTaskDetail.json().rootTaskId, taskId);
+    assert.equal(childTaskDetail.json().depth, 1);
+    assert.equal(childTaskDetail.json().workspaceBindingId, secondBindingId);
     const taskDetail = await app.inject({
       method: "GET",
       url: `/v1/tasks/${taskId}`,
       headers: { authorization: `Bearer ${alice.accessToken}` },
     });
     assert.equal(taskDetail.statusCode, 200, taskDetail.body);
+    assert.equal(taskDetail.json().workspaceBindingId, secondBindingId);
+    assert.equal(taskDetail.json().revision, 2);
+    assert.match(taskDetail.json().waitReason, /重新审核/);
     assert.equal(
       taskDetail.json().contextVersion,
       2,
@@ -272,7 +418,7 @@ test("two users can become friends, create an Agent room, and sync settings", as
     const reviewed = await app.inject({
       method: "POST",
       url: `/v1/tasks/${taskId}/reviews`,
-      headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "1" },
+      headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "2" },
       payload: { decision: "changes_requested", comment: "请补充测试计划" },
     });
     assert.equal(reviewed.statusCode, 200, reviewed.body);
@@ -282,7 +428,7 @@ test("two users can become friends, create an Agent room, and sync settings", as
     const revised = await app.inject({
       method: "PATCH",
       url: `/v1/tasks/${taskId}/proposal`,
-      headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "1" },
+      headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "2" },
       payload: {
         title: "实现并测试登录页面",
         objective: "实现登录页面并覆盖主要状态",
@@ -294,21 +440,21 @@ test("two users can become friends, create an Agent room, and sync settings", as
       },
     });
     assert.equal(revised.statusCode, 200, revised.body);
-    assert.equal(revised.json().revision, 2);
+    assert.equal(revised.json().revision, 3);
 
     const approved = await app.inject({
       method: "POST",
       url: `/v1/tasks/${taskId}/reviews`,
-      headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "2" },
+      headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "3" },
       payload: { decision: "approved", comment: "补充后方案可执行" },
     });
     assert.equal(approved.statusCode, 200, approved.body);
-    assert.equal(approved.json().taskRevision, 2);
+    assert.equal(approved.json().taskRevision, 3);
 
     const started = await app.inject({
       method: "POST",
       url: `/v1/tasks/${taskId}/start`,
-      headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "2" },
+      headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "3" },
     });
     assert.equal(started.statusCode, 200, started.body);
     assert.equal(started.json().runIds.length, 1);
@@ -338,11 +484,11 @@ test("two users can become friends, create an Agent room, and sync settings", as
     const replacedMembers = await app.inject({
       method: "PUT",
       url: `/v1/rooms/${room.json().id}/members`,
-      headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "1" },
+      headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "3" },
       payload: { userIds: [], agentIds: [agent.id] },
     });
     assert.equal(replacedMembers.statusCode, 200, replacedMembers.body);
-    assert.equal(replacedMembers.json().revision, 2);
+    assert.equal(replacedMembers.json().revision, 4);
 
     const rooms = await app.inject({
       method: "GET",
