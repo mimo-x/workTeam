@@ -22,6 +22,7 @@ test("stale host device IDs are replaced without rejecting the WebSocket handler
       if (sql.includes("UPDATE workspace_bindings") || sql.includes("UPDATE tasks")) {
         return { rows: [] };
       }
+      if (sql.includes("execution_approval_requests")) return { rows: [] };
       if (sql.includes("SELECT tr.id AS run_id")) return { rows: [] };
       throw new Error(`unexpected query: ${sql}`);
     },

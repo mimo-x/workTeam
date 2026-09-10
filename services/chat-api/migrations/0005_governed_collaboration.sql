@@ -111,6 +111,13 @@ ALTER TABLE task_runs
   ADD COLUMN IF NOT EXISTS idempotency_key text,
   ADD COLUMN IF NOT EXISTS requested_scopes jsonb NOT NULL DEFAULT '[]'::jsonb,
   ADD COLUMN IF NOT EXISTS write_intent boolean NOT NULL DEFAULT false;
+ALTER TABLE task_runs DROP CONSTRAINT IF EXISTS task_runs_status_check;
+ALTER TABLE task_runs ADD CONSTRAINT task_runs_status_check CHECK (
+  status IN (
+    'queued', 'leased', 'running', 'waiting', 'waiting_for_approval',
+    'review', 'blocked', 'complete', 'failed', 'cancelled'
+  )
+);
 CREATE UNIQUE INDEX IF NOT EXISTS task_runs_idempotency_uq
   ON task_runs(idempotency_key) WHERE idempotency_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS task_runs_target_dispatch_idx
@@ -135,7 +142,9 @@ CREATE TABLE IF NOT EXISTS execution_approval_requests (
   encrypted_details jsonb NOT NULL,
   status text NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending', 'approved', 'denied', 'expired')),
-  decision text CHECK (decision IN ('deny', 'allow_once', 'allow_for_task')),
+  decision text CHECK (
+    decision IS NULL OR decision IN ('deny', 'allow_once', 'allow_for_task')
+  ),
   decided_by_user_id uuid REFERENCES users(id) ON DELETE SET NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   expires_at timestamptz NOT NULL,

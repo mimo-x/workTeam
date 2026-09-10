@@ -3,6 +3,7 @@ import type { Redis } from "ioredis";
 import type pg from "pg";
 import { z } from "zod";
 
+import { appendCollaborationAudit, redactAuditText } from "./collaboration-audit.js";
 import type { AppConfig } from "./config.js";
 import type { EventPublisher } from "./events.js";
 import { ApiError, parseBody } from "./http.js";
@@ -27,6 +28,17 @@ type Connection = {
 };
 
 const ticketBody = z.object({ deviceName: z.string().trim().min(1).max(80).default("Desktop") });
+const permissionScope = z.enum([
+  "workspace.read",
+  "workspace.write",
+  "command.run",
+  "network.read",
+]);
+const approvalConstraints = z.object({
+  pathPrefixes: z.array(z.string().trim().min(1).max(1_024)).max(64).optional(),
+  commandExecutables: z.array(z.string().trim().min(1).max(128)).max(64).optional(),
+  networkDomains: z.array(z.string().trim().min(1).max(253)).max(64).optional(),
+});
 const incomingSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("host.register"),
@@ -34,8 +46,12 @@ const incomingSchema = z.discriminatedUnion("type", [
     name: z.string().trim().min(1).max(80),
     platform: z.string().trim().min(1).max(32),
     agentIds: z.array(z.string().uuid()).max(64),
+    pendingApprovalIds: z.array(z.string().uuid()).max(64).default([]),
   }),
-  z.object({ type: z.literal("host.heartbeat") }),
+  z.object({
+    type: z.literal("host.heartbeat"),
+    pendingApprovalIds: z.array(z.string().uuid()).max(64).default([]),
+  }),
   z.object({
     type: z.literal("run.accept"),
     runId: z.string().uuid(),
@@ -60,6 +76,24 @@ const incomingSchema = z.discriminatedUnion("type", [
     leaseToken: z.string().min(16),
     error: z.string().trim().min(1).max(4_000),
   }),
+  z.object({
+    type: z.literal("approval.requested"),
+    approvalId: z.string().uuid(),
+    idempotencyKey: z.string().trim().min(1).max(512),
+    runId: z.string().uuid(),
+    leaseToken: z.string().min(16),
+    taskId: z.string().uuid(),
+    taskRevision: z.number().int().positive(),
+    sessionId: z.string().trim().min(1).max(512),
+    turnId: z.string().trim().min(1).max(512),
+    agentId: z.string().uuid(),
+    workspaceBindingId: z.string().uuid(),
+    providerRequestId: z.string().trim().min(1).max(512),
+    requestedScope: permissionScope,
+    requestedConstraints: approvalConstraints.default({}),
+    summary: z.string().trim().min(1).max(500),
+    details: z.unknown(),
+  }),
 ]);
 
 type AssignmentRow = {
@@ -76,6 +110,7 @@ type AssignmentRow = {
   target_device_id: string;
   workspace_binding_id: string;
   workspace_binding_revision: number;
+  task_revision: number;
   requested_scopes: string[];
   write_intent: boolean;
 };
@@ -154,6 +189,17 @@ export class RealtimeHub implements EventPublisher {
     }
   }
 
+  publishToDevice(userId: string, deviceId: string, event: Record<string, unknown>) {
+    let delivered = false;
+    for (const connection of this.connections) {
+      if (connection.userId === userId && connection.deviceId === deviceId) {
+        this.send(connection, event);
+        delivered = true;
+      }
+    }
+    return delivered;
+  }
+
   async publishToRoom(roomId: string, event: Record<string, unknown>) {
     const users = await this.pool.query<{ user_id: string }>(
       `SELECT user_id FROM room_members WHERE room_id = $1
@@ -170,7 +216,7 @@ export class RealtimeHub implements EventPublisher {
         `SELECT tr.id AS run_id, tr.task_id, tr.agent_id, tr.agent_snapshot, tr.context_version,
                 t.title AS task_title, t.source_room_id, t.task_room_id, t.anchor_message_id,
                 a.owner_id, tr.target_device_id, t.workspace_binding_id,
-                t.binding_revision AS workspace_binding_revision,
+                t.binding_revision AS workspace_binding_revision, t.revision AS task_revision,
                 tr.requested_scopes, tr.write_intent
          FROM task_runs tr
          JOIN tasks t ON t.id = tr.task_id JOIN agents a ON a.id = tr.agent_id
@@ -258,6 +304,7 @@ export class RealtimeHub implements EventPublisher {
       run: {
         id: candidate.run_id,
         taskId: candidate.task_id,
+        taskRevision: candidate.task_revision,
         agentId: candidate.agent_id,
         title: candidate.task_title,
         sourceRoomId: candidate.source_room_id,
@@ -293,7 +340,9 @@ export class RealtimeHub implements EventPublisher {
       if (message.type === "host.register") return await this.registerHost(connection, message);
       if (!connection.deviceId)
         throw new ApiError(400, "HOST_NOT_REGISTERED", "请先注册 Host 设备。");
-      if (message.type === "host.heartbeat") return await this.heartbeat(connection);
+      if (message.type === "host.heartbeat") {
+        return await this.heartbeat(connection, message.pendingApprovalIds);
+      }
       if (message.type === "run.accept")
         return await this.acceptRun(connection, message.runId, message.leaseToken);
       if (message.type === "run.progress") return await this.progressRun(connection, message);
@@ -306,6 +355,9 @@ export class RealtimeHub implements EventPublisher {
         );
       if (message.type === "run.fail")
         return await this.failRun(connection, message.runId, message.leaseToken, message.error);
+      if (message.type === "approval.requested") {
+        return await this.requestApproval(connection, message);
+      }
     } catch (error) {
       this.send(connection, {
         type: "error",
@@ -368,6 +420,7 @@ export class RealtimeHub implements EventPublisher {
        WHERE device_id = $1 AND user_id = $2 AND revoked_at IS NULL`,
       [connection.deviceId, connection.userId],
     );
+    await this.reconcileApprovals(connection, message.pendingApprovalIds);
     await this.pool.query(
       `UPDATE tasks SET status = 'approved', wait_reason = NULL, updated_at = now()
        WHERE status = 'waiting_for_host' AND approved_review_id IS NOT NULL
@@ -384,7 +437,7 @@ export class RealtimeHub implements EventPublisher {
     await this.dispatchQueued(connection.userId);
   }
 
-  private async heartbeat(connection: Connection) {
+  private async heartbeat(connection: Connection, pendingApprovalIds: string[]) {
     const leaseExpiresAt = new Date(Date.now() + this.config.HOST_LEASE_SECONDS * 1_000);
     await this.pool.query(
       "UPDATE devices SET last_seen_at = now(), updated_at = now() WHERE id = $1 AND user_id = $2",
@@ -397,7 +450,8 @@ export class RealtimeHub implements EventPublisher {
     );
     await this.pool.query(
       `UPDATE task_runs SET lease_expires_at = $1, updated_at = now()
-       WHERE device_id = $2 AND status IN ('leased', 'running') AND lease_expires_at > now()`,
+       WHERE device_id = $2 AND status IN ('leased', 'running', 'waiting_for_approval')
+         AND lease_expires_at > now()`,
       [leaseExpiresAt, connection.deviceId],
     );
     await this.pool.query(
@@ -405,7 +459,7 @@ export class RealtimeHub implements EventPublisher {
        SET expires_at = $1
        FROM task_runs tr
        WHERE wl.run_id = tr.id AND tr.device_id = $2
-         AND tr.status IN ('leased', 'running')`,
+         AND tr.status IN ('leased', 'running', 'waiting_for_approval')`,
       [leaseExpiresAt, connection.deviceId],
     );
     if (connection.agentIds.size) {
@@ -415,6 +469,7 @@ export class RealtimeHub implements EventPublisher {
         [connection.userId, [...connection.agentIds]],
       );
     }
+    await this.reconcileApprovals(connection, pendingApprovalIds);
     this.send(connection, { type: "host.heartbeat.ack", at: new Date().toISOString() });
   }
 
@@ -436,7 +491,7 @@ export class RealtimeHub implements EventPublisher {
                 wait_reason = '项目主机连接已断开。', updated_at = now()
          WHERE workspace_binding_id IN (
            SELECT id FROM workspace_bindings WHERE device_id = $1 AND user_id = $2
-         ) AND status IN ('approved', 'queued', 'running', 'waiting')`,
+         ) AND status IN ('approved', 'queued', 'running', 'waiting', 'waiting_for_approval')`,
         [connection.deviceId, connection.userId],
       );
     }
@@ -458,6 +513,252 @@ export class RealtimeHub implements EventPublisher {
       agentIds: offline,
       status: "offline",
     });
+  }
+
+  private async requestApproval(
+    connection: Connection,
+    message: Extract<z.infer<typeof incomingSchema>, { type: "approval.requested" }>,
+  ) {
+    const client = await this.pool.connect();
+    let roomId = "";
+    let created = false;
+    const expiresAt = new Date(Date.now() + 5 * 60_000);
+    try {
+      await client.query("BEGIN");
+      const run = await client.query<{
+        task_id: string;
+        task_revision: number;
+        agent_id: string;
+        workspace_binding_id: string;
+        binding_revision: number;
+        requested_scopes: string[];
+        source_room_id: string;
+        host_user_id: string;
+      }>(
+        `SELECT tr.task_id, t.revision AS task_revision, tr.agent_id,
+                t.workspace_binding_id, t.binding_revision, t.requested_scopes,
+                t.source_room_id, d.user_id AS host_user_id
+         FROM task_runs tr
+         JOIN tasks t ON t.id = tr.task_id
+         JOIN devices d ON d.id = tr.target_device_id
+         JOIN workspace_bindings wb ON wb.id = t.workspace_binding_id
+         WHERE tr.id = $1 AND tr.target_device_id = $2 AND tr.device_id = $2
+           AND tr.lease_token_hash = $3 AND tr.lease_expires_at > now()
+           AND tr.status IN ('leased', 'running', 'waiting_for_approval')
+           AND wb.device_id = $2 AND wb.user_id = $4 AND wb.revision = t.binding_revision
+           AND wb.revoked_at IS NULL
+         FOR UPDATE`,
+        [message.runId, connection.deviceId, tokenHash(message.leaseToken), connection.userId],
+      );
+      const current = run.rows[0];
+      if (!current) throw new ApiError(409, "LEASE_INVALID", "审批请求的运行租约无效或已过期。");
+      if (
+        current.task_id !== message.taskId ||
+        current.task_revision !== message.taskRevision ||
+        current.agent_id !== message.agentId ||
+        current.workspace_binding_id !== message.workspaceBindingId
+      ) {
+        throw new ApiError(409, "APPROVAL_CORRELATION_MISMATCH", "审批请求与当前运行不匹配。");
+      }
+      if (!current.requested_scopes.includes(message.requestedScope)) {
+        throw new ApiError(
+          403,
+          "APPROVAL_SCOPE_NOT_REQUESTED",
+          "Runtime 请求了 Task 范围外的权限。",
+        );
+      }
+      roomId = current.source_room_id;
+      const existing = await client.query<{
+        id: string;
+        run_id: string;
+        session_id: string;
+        turn_id: string;
+        provider_request_id: string;
+      }>(
+        `SELECT id, run_id, session_id, turn_id, provider_request_id
+         FROM execution_approval_requests
+         WHERE id = $1 OR idempotency_key = $2`,
+        [message.approvalId, message.idempotencyKey],
+      );
+      if (existing.rows[0]) {
+        const approval = existing.rows[0];
+        if (
+          approval.id !== message.approvalId ||
+          approval.run_id !== message.runId ||
+          approval.session_id !== message.sessionId ||
+          approval.turn_id !== message.turnId ||
+          approval.provider_request_id !== message.providerRequestId
+        ) {
+          throw new ApiError(409, "APPROVAL_IDEMPOTENCY_CONFLICT", "审批幂等键关联了其他请求。");
+        }
+      } else {
+        const encryptedDetails = await this.cipher.encrypt(message.details);
+        await client.query(
+          `INSERT INTO execution_approval_requests(
+             id, idempotency_key, task_id, task_revision, run_id, session_id, turn_id,
+             agent_id, workspace_binding_id, host_device_id, provider_request_id,
+             requested_scope, requested_constraints, redacted_summary, encrypted_details,
+             expires_at
+           ) VALUES (
+             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15::jsonb,
+             now() + interval '5 minutes'
+           )`,
+          [
+            message.approvalId,
+            message.idempotencyKey,
+            message.taskId,
+            message.taskRevision,
+            message.runId,
+            message.sessionId,
+            message.turnId,
+            message.agentId,
+            message.workspaceBindingId,
+            connection.deviceId,
+            message.providerRequestId,
+            message.requestedScope,
+            JSON.stringify(message.requestedConstraints),
+            redactAuditText(message.summary),
+            JSON.stringify(encryptedDetails),
+          ],
+        );
+        created = true;
+        await appendCollaborationAudit(client, {
+          actorAgentId: message.agentId,
+          roomId,
+          taskId: message.taskId,
+          taskRevision: message.taskRevision,
+          runId: message.runId,
+          hostDeviceId: connection.deviceId!,
+          eventType: "runtime.approval_requested",
+          summary: message.summary,
+          outcome: "pending",
+          metadata: { approvalId: message.approvalId, requestedScope: message.requestedScope },
+        });
+      }
+      await client.query(
+        `UPDATE task_runs SET status = 'waiting_for_approval', updated_at = now()
+         WHERE id = $1 AND status IN ('leased', 'running')`,
+        [message.runId],
+      );
+      await client.query(
+        `UPDATE tasks SET status = 'waiting_for_approval',
+                wait_reason = '等待项目主机所有者确认 Runtime 操作。', updated_at = now()
+         WHERE id = $1 AND status NOT IN ('done', 'failed', 'cancelled')`,
+        [message.taskId],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+    this.send(connection, {
+      type: "approval.registered",
+      approvalId: message.approvalId,
+      runId: message.runId,
+      expiresAt,
+      reused: !created,
+    });
+    if (created) {
+      this.publishToUser(connection.userId, {
+        type: "runtime.approval-requested",
+        approvalId: message.approvalId,
+        taskId: message.taskId,
+        taskRevision: message.taskRevision,
+        runId: message.runId,
+        agentId: message.agentId,
+        requestedScope: message.requestedScope,
+        requestedConstraints: message.requestedConstraints,
+        summary: redactAuditText(message.summary),
+        expiresAt,
+      });
+      await this.publishToRoom(roomId, {
+        type: "runtime.approval-waiting",
+        approvalId: message.approvalId,
+        taskId: message.taskId,
+        runId: message.runId,
+        requestedScope: message.requestedScope,
+        summary: redactAuditText(message.summary),
+      });
+    }
+  }
+
+  private async reconcileApprovals(connection: Connection, pendingApprovalIds: string[]) {
+    if (!connection.deviceId) return;
+    const known = await this.pool.query<{
+      id: string;
+      run_id: string;
+      session_id: string;
+      turn_id: string;
+      provider_request_id: string;
+      status: string;
+      decision: string | null;
+      expires_at: Date;
+    }>(
+      `SELECT id, run_id, session_id, turn_id, provider_request_id, status, decision, expires_at
+       FROM execution_approval_requests
+       WHERE host_device_id = $1 AND id = ANY($2::uuid[])`,
+      [connection.deviceId, pendingApprovalIds],
+    );
+    for (const approval of known.rows) {
+      if (approval.status === "pending" && approval.expires_at.getTime() > Date.now()) {
+        await this.pool.query(
+          `UPDATE tasks SET status = 'waiting_for_approval',
+                  wait_reason = '等待项目主机所有者确认 Runtime 操作。', updated_at = now()
+           WHERE id = (SELECT task_id FROM execution_approval_requests WHERE id = $1)
+             AND status NOT IN ('done', 'failed', 'cancelled')`,
+          [approval.id],
+        );
+        this.send(connection, {
+          type: "approval.registered",
+          approvalId: approval.id,
+          runId: approval.run_id,
+          expiresAt: approval.expires_at,
+          reused: true,
+        });
+      } else {
+        this.send(connection, {
+          type: "approval.resolved",
+          approvalId: approval.id,
+          runId: approval.run_id,
+          sessionId: approval.session_id,
+          turnId: approval.turn_id,
+          providerRequestId: approval.provider_request_id,
+          decision: approval.decision ?? "deny",
+        });
+      }
+    }
+    const abandoned = await this.pool.query<{
+      id: string;
+      run_id: string;
+      task_id: string;
+    }>(
+      `UPDATE execution_approval_requests
+       SET status = 'expired', decision = 'deny', decided_at = now()
+       WHERE host_device_id = $1 AND status = 'pending'
+         AND NOT (id = ANY($2::uuid[]))
+       RETURNING id, run_id, task_id`,
+      [connection.deviceId, pendingApprovalIds],
+    );
+    for (const approval of abandoned.rows) {
+      await this.pool.query(
+        `UPDATE task_runs SET status = 'failed', completed_at = now(),
+                error = 'APPROVAL_NON_RESUMABLE: Host 重启后无法恢复 Runtime 审批。',
+                lease_token_hash = NULL, lease_expires_at = NULL, updated_at = now()
+         WHERE id = $1 AND status = 'waiting_for_approval'`,
+        [approval.run_id],
+      );
+      await this.pool.query("DELETE FROM workspace_write_leases WHERE run_id = $1", [
+        approval.run_id,
+      ]);
+      await this.pool.query(
+        `UPDATE tasks SET status = 'blocked',
+                wait_reason = '项目主机重启后无法恢复待审批操作。', updated_at = now()
+         WHERE id = $1 AND status = 'waiting_for_approval'`,
+        [approval.task_id],
+      );
+    }
   }
 
   private async verifyLease(
@@ -590,6 +891,7 @@ export class RealtimeHub implements EventPublisher {
   }
 
   private async sweepExpiredLeases() {
+    await this.sweepExpiredApprovals();
     await this.pool.query("DELETE FROM workspace_write_leases WHERE expires_at <= now()");
     const expired = await this.pool.query<{ user_id: string; task_id: string }>(
       `WITH changed AS (
@@ -604,6 +906,71 @@ export class RealtimeHub implements EventPublisher {
     );
     const owners = new Set(expired.rows.map((row) => row.user_id));
     for (const owner of owners) await this.dispatchQueued(owner);
+  }
+
+  private async sweepExpiredApprovals() {
+    const expired = await this.pool.query<{
+      id: string;
+      run_id: string;
+      task_id: string;
+      session_id: string;
+      turn_id: string;
+      provider_request_id: string;
+      host_device_id: string;
+      host_user_id: string;
+      source_room_id: string;
+    }>(
+      `SELECT ear.id, ear.run_id, ear.task_id, ear.session_id, ear.turn_id,
+              ear.provider_request_id, ear.host_device_id, d.user_id AS host_user_id,
+              t.source_room_id
+       FROM execution_approval_requests ear
+       JOIN task_runs tr ON tr.id = ear.run_id
+       JOIN tasks t ON t.id = ear.task_id
+       JOIN devices d ON d.id = ear.host_device_id
+       WHERE ear.status = 'pending'
+         AND (ear.expires_at <= now() OR tr.lease_expires_at <= now())`,
+    );
+    for (const approval of expired.rows) {
+      const changed = await this.pool.query(
+        `UPDATE execution_approval_requests
+         SET status = 'expired', decision = 'deny', decided_at = now()
+         WHERE id = $1 AND status = 'pending' RETURNING id`,
+        [approval.id],
+      );
+      if (!changed.rowCount) continue;
+      await this.pool.query(
+        `UPDATE task_runs SET status = 'failed', completed_at = now(),
+                error = 'APPROVAL_EXPIRED: Runtime 审批已超时。',
+                lease_token_hash = NULL, lease_expires_at = NULL, updated_at = now()
+         WHERE id = $1 AND status = 'waiting_for_approval'`,
+        [approval.run_id],
+      );
+      await this.pool.query("DELETE FROM workspace_write_leases WHERE run_id = $1", [
+        approval.run_id,
+      ]);
+      await this.pool.query(
+        `UPDATE tasks SET status = 'blocked',
+                wait_reason = 'Runtime 审批已超时，操作未执行。', updated_at = now()
+         WHERE id = $1 AND status IN ('waiting_for_approval', 'waiting_for_host')`,
+        [approval.task_id],
+      );
+      this.publishToDevice(approval.host_user_id, approval.host_device_id, {
+        type: "approval.resolved",
+        approvalId: approval.id,
+        runId: approval.run_id,
+        sessionId: approval.session_id,
+        turnId: approval.turn_id,
+        providerRequestId: approval.provider_request_id,
+        decision: "deny",
+        reason: "expired",
+      });
+      await this.publishToRoom(approval.source_room_id, {
+        type: "runtime.approval-expired",
+        approvalId: approval.id,
+        taskId: approval.task_id,
+        runId: approval.run_id,
+      });
+    }
   }
 
   private send(connection: Connection, event: Record<string, unknown>) {

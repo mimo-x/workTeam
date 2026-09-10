@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
-import { isAbsolute } from "node:path";
+import { basename, isAbsolute, relative } from "node:path";
 
 import type { BackendClient } from "./backend-client";
 import type { AgentRuntime, AgentRuntimeEvent, RuntimeSession } from "./agent-runtime";
@@ -7,6 +8,7 @@ import type { AgentCapability } from "../shared/agent-team";
 import type { AgentRuntimeRegistry } from "./runtime-registry";
 import { formatErrorMessage } from "../shared/error";
 import type { RemoteAgentHostState } from "../shared/backend";
+import type { ApprovalDecision, RpcRequestId } from "../shared/codex";
 
 type RemoteAgent = {
   id: string;
@@ -21,6 +23,7 @@ type AssignedRun = {
   sourceRoomId: string;
   taskRoomId: string;
   contextVersion: number;
+  taskRevision: number;
   workspaceBindingId: string;
   workspaceBindingRevision: number;
   targetDeviceId: string;
@@ -66,6 +69,16 @@ type ActiveRun = {
   turnId: string;
   content: string;
   lastProgressAt: number;
+  workspace: string;
+};
+
+type PendingRemoteApproval = {
+  approvalId: string;
+  runId: string;
+  sessionId: string;
+  turnId: string;
+  providerRequestId: RpcRequestId;
+  runtime: AgentRuntime;
 };
 
 export class RemoteAgentHost {
@@ -81,6 +94,7 @@ export class RemoteAgentHost {
   private readonly runs = new Map<string, ActiveRun>();
   private readonly startingRuns = new Set<string>();
   private readonly turnToRun = new Map<string, string>();
+  private readonly pendingApprovals = new Map<string, PendingRemoteApproval>();
   private readonly listeners = new Set<(state: RemoteAgentHostState) => void>();
   private readonly eventListeners = new Set<(event: Record<string, unknown>) => void>();
   private state: RemoteAgentHostState = {
@@ -142,6 +156,7 @@ export class RemoteAgentHost {
     this.sessions.clear();
     this.sessionProviders.clear();
     this.startingRuns.clear();
+    this.pendingApprovals.clear();
     this.update({ status: "stopped", activeRunCount: this.runs.size, error: null });
     return this.getState();
   }
@@ -166,9 +181,17 @@ export class RemoteAgentHost {
           name: hostname(),
           platform: process.platform,
           agentIds: localAgentIds,
+          pendingApprovalIds: [...this.pendingApprovals.keys()],
         });
         if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
-        this.heartbeatTimer = setInterval(() => this.send({ type: "host.heartbeat" }), 10_000);
+        this.heartbeatTimer = setInterval(
+          () =>
+            this.send({
+              type: "host.heartbeat",
+              pendingApprovalIds: [...this.pendingApprovals.keys()],
+            }),
+          10_000,
+        );
         this.heartbeatTimer.unref();
         this.update({ status: "connected", agentCount: localAgentIds.length, error: null });
       });
@@ -207,6 +230,10 @@ export class RemoteAgentHost {
     }
     if (event.type === "agent.run.assigned") {
       await this.execute(event.run as AssignedRun);
+      return;
+    }
+    if (event.type === "approval.resolved") {
+      await this.resolveRemoteApproval(event);
       return;
     }
     if (event.type === "task.context.appended") {
@@ -295,6 +322,7 @@ export class RemoteAgentHost {
         turnId: turn.turnId,
         content: "",
         lastProgressAt: 0,
+        workspace,
       });
       this.turnToRun.set(turn.turnId, assignment.id);
       this.update({ activeRunCount: this.runs.size });
@@ -334,6 +362,23 @@ export class RemoteAgentHost {
     if (!runId) return;
     const run = this.runs.get(runId);
     if (!run) return;
+    if (event.method === "approval/requested") {
+      try {
+        await this.relayRuntimeApproval(run, event);
+      } catch (error) {
+        this.send({
+          type: "run.fail",
+          runId,
+          leaseToken: run.assignment.leaseToken,
+          error: `APPROVAL_INVALID: ${formatErrorMessage(error)}`,
+        });
+        await run.runtime.interruptTurn(run.threadId, run.turnId).catch(() => undefined);
+        this.runs.delete(runId);
+        this.turnToRun.delete(run.turnId);
+        this.update({ activeRunCount: this.runs.size });
+      }
+      return;
+    }
     if (event.method === "message/delta") {
       run.content += String(event.params.delta ?? "");
       if (Date.now() - run.lastProgressAt > 500) {
@@ -375,7 +420,120 @@ export class RemoteAgentHost {
       }
       this.runs.delete(runId);
       this.turnToRun.delete(turnId);
+      for (const [approvalId, approval] of this.pendingApprovals) {
+        if (approval.runId === runId) this.pendingApprovals.delete(approvalId);
+      }
       this.update({ activeRunCount: this.runs.size });
+    }
+  }
+
+  private async relayRuntimeApproval(run: ActiveRun, event: AgentRuntimeEvent) {
+    const providerRequestId = event.params.requestId as RpcRequestId | undefined;
+    const turnId = String(event.params.turnId ?? run.turnId);
+    const sessionId = String(event.sessionId ?? run.threadId);
+    if (providerRequestId === undefined || !turnId || !sessionId) {
+      throw new Error("Runtime 审批事件缺少 request、Session 或 Turn 标识。");
+    }
+    if (turnId !== run.turnId || sessionId !== run.threadId) {
+      throw new Error("Runtime 审批事件与当前 Run 不匹配。");
+    }
+    const approvalId = randomUUID();
+    const method = String(event.params.method ?? "");
+    const command = typeof event.params.command === "string" ? event.params.command.trim() : "";
+    const commandExecutable =
+      command && !/[;&|`$<>\n]/.test(command)
+        ? basename(command.split(/\s+/)[0].replaceAll('"', "").replaceAll("'", ""))
+        : "";
+    const requestedScope = method.includes("fileChange") ? "workspace.write" : "command.run";
+    const requestedConstraints =
+      requestedScope === "command.run" && /^[a-zA-Z0-9._+-]{1,128}$/.test(commandExecutable)
+        ? { commandExecutables: [commandExecutable] }
+        : requestedScope === "workspace.write"
+          ? this.relativePathConstraint(run.workspace, event.params)
+          : {};
+    const summary =
+      requestedScope === "command.run"
+        ? commandExecutable
+          ? `Runtime 请求运行 ${commandExecutable}`
+          : "Runtime 请求运行一条需人工确认的命令"
+        : "Runtime 请求修改受保护的工作区文件";
+    const pending: PendingRemoteApproval = {
+      approvalId,
+      runId: run.assignment.id,
+      sessionId,
+      turnId,
+      providerRequestId,
+      runtime: run.runtime,
+    };
+    this.pendingApprovals.set(approvalId, pending);
+    this.send({
+      type: "approval.requested",
+      approvalId,
+      idempotencyKey: `${run.assignment.id}:${sessionId}:${turnId}:${String(providerRequestId)}`,
+      runId: run.assignment.id,
+      leaseToken: run.assignment.leaseToken,
+      taskId: run.assignment.taskId,
+      taskRevision: run.assignment.taskRevision,
+      sessionId,
+      turnId,
+      agentId: run.assignment.agentId,
+      workspaceBindingId: run.assignment.workspaceBindingId,
+      providerRequestId: String(providerRequestId),
+      requestedScope,
+      requestedConstraints,
+      summary,
+      details: event.params,
+    });
+  }
+
+  private relativePathConstraint(workspace: string, params: Record<string, unknown>) {
+    const candidate = [params.path, params.filePath, params.cwd].find(
+      (value): value is string => typeof value === "string" && isAbsolute(value),
+    );
+    if (!candidate) return {};
+    const path = relative(workspace, candidate).replaceAll("\\", "/");
+    if (!path || path === ".") return {};
+    if (path.startsWith("../") || path === ".." || isAbsolute(path)) return {};
+    return { pathPrefixes: [path] };
+  }
+
+  private async resolveRemoteApproval(event: Record<string, unknown>) {
+    const approvalId = String(event.approvalId ?? "");
+    const pending = this.pendingApprovals.get(approvalId);
+    if (!pending) return;
+    if (
+      pending.runId !== String(event.runId ?? "") ||
+      pending.sessionId !== String(event.sessionId ?? "") ||
+      pending.turnId !== String(event.turnId ?? "") ||
+      String(pending.providerRequestId) !== String(event.providerRequestId ?? "")
+    ) {
+      return;
+    }
+    const decision = String(event.decision ?? "deny");
+    const runtimeDecision: ApprovalDecision =
+      decision === "allow_for_task"
+        ? "acceptForSession"
+        : decision === "allow_once"
+          ? "accept"
+          : "decline";
+    try {
+      await pending.runtime.resolveApproval(pending.providerRequestId, runtimeDecision);
+      this.pendingApprovals.delete(approvalId);
+    } catch (error) {
+      this.pendingApprovals.delete(approvalId);
+      this.send({
+        type: "run.fail",
+        runId: pending.runId,
+        leaseToken: this.runs.get(pending.runId)?.assignment.leaseToken ?? "",
+        error: `APPROVAL_NON_RESUMABLE: ${formatErrorMessage(error)}`,
+      });
+      const run = this.runs.get(pending.runId);
+      if (run) {
+        await run.runtime.interruptTurn(run.threadId, run.turnId).catch(() => undefined);
+        this.runs.delete(pending.runId);
+        this.turnToRun.delete(run.turnId);
+        this.update({ activeRunCount: this.runs.size });
+      }
     }
   }
 

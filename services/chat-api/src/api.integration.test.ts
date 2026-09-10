@@ -752,7 +752,7 @@ test("two users can become friends, create an Agent room, and sync settings", as
                   tr.context_version, t.title AS task_title, t.source_room_id,
                   t.task_room_id, t.anchor_message_id, a.owner_id,
                   tr.target_device_id, t.workspace_binding_id,
-                  t.binding_revision AS workspace_binding_revision,
+                  t.binding_revision AS workspace_binding_revision, t.revision AS task_revision,
                   tr.requested_scopes, tr.write_intent
            FROM task_runs tr JOIN tasks t ON t.id = tr.task_id
            JOIN agents a ON a.id = tr.agent_id WHERE tr.id = $1`,
@@ -964,19 +964,289 @@ test("two users can become friends, create an Agent room, and sync settings", as
     assert.equal(redeliveredRun.rows[0].status, "leased");
     assert.equal(redeliveredRun.rows[0].attempts, 2);
 
+    const assignedEvents = sentToBoundDevice
+      .map((value) => JSON.parse(value) as { type?: string; run?: { leaseToken?: string } })
+      .filter((event) => event.type === "agent.run.assigned");
+    const currentLeaseToken = assignedEvents.at(-1)?.run?.leaseToken;
+    assert.ok(currentLeaseToken);
+    const approvalId = randomUUID();
+    const runtimeApproval = {
+      type: "approval.requested" as const,
+      approvalId,
+      idempotencyKey: `${grantedStart.json().runIds[0]}:session_1:turn_1:provider_1`,
+      runId: grantedStart.json().runIds[0] as string,
+      leaseToken: currentLeaseToken,
+      taskId: permissionTaskId,
+      taskRevision: 1,
+      sessionId: "session_1",
+      turnId: "turn_1",
+      agentId: agent.id,
+      workspaceBindingId: secondBindingId,
+      providerRequestId: "provider_1",
+      requestedScope: "command.run" as const,
+      requestedConstraints: { commandExecutables: ["npm"] },
+      summary: "Runtime 请求运行 npm",
+      details: { command: "npm test --token=private-value", cwd: "/private/project" },
+    };
+    const requestApproval = (connection: typeof boundConnection, message: typeof runtimeApproval) =>
+      (
+        realtimeHub as unknown as {
+          requestApproval(
+            connection: typeof boundConnection,
+            message: typeof runtimeApproval,
+          ): Promise<void>;
+        }
+      ).requestApproval(connection, message);
+    await assert.rejects(
+      requestApproval(wrongConnection as typeof boundConnection, {
+        ...runtimeApproval,
+        approvalId: randomUUID(),
+        idempotencyKey: "wrong-device-approval",
+      }),
+      /租约无效/,
+    );
+    await requestApproval(boundConnection, runtimeApproval);
+    await requestApproval(boundConnection, runtimeApproval);
+    assert.equal(
+      Number(
+        (
+          await pool.query(
+            "SELECT count(*) FROM execution_approval_requests WHERE idempotency_key = $1",
+            [runtimeApproval.idempotencyKey],
+          )
+        ).rows[0].count,
+      ),
+      1,
+    );
+    await assert.rejects(
+      requestApproval(boundConnection, {
+        ...runtimeApproval,
+        providerRequestId: "provider_mismatch",
+      }),
+      /幂等键关联了其他请求/,
+    );
+    assert.equal(
+      (
+        await pool.query("SELECT status FROM task_runs WHERE id = $1", [
+          grantedStart.json().runIds[0],
+        ])
+      ).rows[0].status,
+      "waiting_for_approval",
+    );
+
+    const aliceApprovalInbox = await app.inject({
+      method: "GET",
+      url: "/v1/execution-approvals?status=pending",
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    });
+    assert.equal(aliceApprovalInbox.statusCode, 200, aliceApprovalInbox.body);
+    assert.equal(aliceApprovalInbox.json().data.length, 0);
+    const ownerApprovalInbox = await app.inject({
+      method: "GET",
+      url: "/v1/execution-approvals?status=pending",
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+    });
+    assert.equal(ownerApprovalInbox.statusCode, 200, ownerApprovalInbox.body);
+    assert.equal(ownerApprovalInbox.json().data[0].details.command.includes("private-value"), true);
+    assert.equal(
+      JSON.stringify(
+        (
+          await pool.query(
+            "SELECT encrypted_details FROM execution_approval_requests WHERE id = $1",
+            [approvalId],
+          )
+        ).rows[0].encrypted_details,
+      ).includes("private-value"),
+      false,
+    );
+    const redactedTaskApprovals = await app.inject({
+      method: "GET",
+      url: `/v1/tasks/${permissionTaskId}/execution-approvals`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    });
+    assert.equal(redactedTaskApprovals.statusCode, 200, redactedTaskApprovals.body);
+    assert.equal("details" in redactedTaskApprovals.json().data[0], false);
+    assert.equal("providerRequestId" in redactedTaskApprovals.json().data[0], false);
+
+    const unauthorizedDecision = await app.inject({
+      method: "POST",
+      url: `/v1/execution-approvals/${approvalId}/decision`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+      payload: { decision: "allow_once" },
+    });
+    assert.equal(unauthorizedDecision.statusCode, 403, unauthorizedDecision.body);
+    const allowedOnce = await app.inject({
+      method: "POST",
+      url: `/v1/execution-approvals/${approvalId}/decision`,
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+      payload: { decision: "allow_once" },
+    });
+    assert.equal(allowedOnce.statusCode, 200, allowedOnce.body);
+    const duplicateDecision = await app.inject({
+      method: "POST",
+      url: `/v1/execution-approvals/${approvalId}/decision`,
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+      payload: { decision: "deny" },
+    });
+    assert.equal(duplicateDecision.statusCode, 409, duplicateDecision.body);
+
+    const taskApprovalId = randomUUID();
+    const taskRuntimeApproval = {
+      ...runtimeApproval,
+      approvalId: taskApprovalId,
+      idempotencyKey: `${grantedStart.json().runIds[0]}:session_1:turn_1:provider_2`,
+      providerRequestId: "provider_2",
+    };
+    await requestApproval(boundConnection, taskRuntimeApproval);
+    const excessiveApproval = await app.inject({
+      method: "POST",
+      url: `/v1/execution-approvals/${taskApprovalId}/decision`,
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+      payload: {
+        decision: "allow_for_task",
+        constraints: { commandExecutables: ["bash"] },
+      },
+    });
+    assert.equal(excessiveApproval.statusCode, 400, excessiveApproval.body);
+    const allowedForTask = await app.inject({
+      method: "POST",
+      url: `/v1/execution-approvals/${taskApprovalId}/decision`,
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+      payload: {
+        decision: "allow_for_task",
+        constraints: { commandExecutables: ["npm"] },
+      },
+    });
+    assert.equal(allowedForTask.statusCode, 200, allowedForTask.body);
+    const effectiveGrantId = (
+      await pool.query("SELECT permission_grant_id FROM task_runs WHERE id = $1", [
+        grantedStart.json().runIds[0],
+      ])
+    ).rows[0].permission_grant_id as string;
+    assert.notEqual(effectiveGrantId, grantId);
+
     const revokedGrant = await app.inject({
       method: "DELETE",
-      url: `/v1/tasks/${permissionTaskId}/permission-grants/${grantId}`,
+      url: `/v1/tasks/${permissionTaskId}/permission-grants/${effectiveGrantId}`,
       headers: { authorization: `Bearer ${bob.accessToken}` },
     });
     assert.equal(revokedGrant.statusCode, 204, revokedGrant.body);
     const revokedState = await pool.query(
       `SELECT t.status, tr.status AS run_status FROM tasks t
-       JOIN task_runs tr ON tr.task_id = t.id WHERE t.id = $1`,
-      [permissionTaskId],
+       JOIN task_runs tr ON tr.task_id = t.id
+       WHERE t.id = $1 AND tr.permission_grant_id = $2`,
+      [permissionTaskId, effectiveGrantId],
     );
     assert.equal(revokedState.rows[0].status, "waiting_for_permission");
     assert.equal(revokedState.rows[0].run_status, "cancelled");
+
+    const leaseQueuedWriteRun = async (runId: string) => {
+      await (
+        realtimeHub as unknown as {
+          leaseAndSend(connection: typeof boundConnection, candidate: unknown): Promise<void>;
+        }
+      ).leaseAndSend(boundConnection, await assignment(runId));
+      const event = sentToBoundDevice
+        .map(
+          (value) =>
+            JSON.parse(value) as { type?: string; run?: { id?: string; leaseToken?: string } },
+        )
+        .reverse()
+        .find((item) => item.type === "agent.run.assigned" && item.run?.id === runId);
+      assert.ok(event?.run?.leaseToken);
+      return event.run.leaseToken;
+    };
+    const reconnectLeaseToken = await leaseQueuedWriteRun(secondWriteRunId);
+    const reconnectApprovalId = randomUUID();
+    await requestApproval(boundConnection, {
+      ...runtimeApproval,
+      approvalId: reconnectApprovalId,
+      idempotencyKey: `${secondWriteRunId}:session_reconnect:turn_reconnect:provider_reconnect`,
+      runId: secondWriteRunId,
+      leaseToken: reconnectLeaseToken,
+      sessionId: "session_reconnect",
+      turnId: "turn_reconnect",
+      providerRequestId: "provider_reconnect",
+    });
+    await (
+      realtimeHub as unknown as {
+        reconcileApprovals(connection: typeof boundConnection, ids: string[]): Promise<void>;
+      }
+    ).reconcileApprovals(boundConnection, [reconnectApprovalId]);
+    assert.equal(
+      (
+        await pool.query("SELECT status FROM execution_approval_requests WHERE id = $1", [
+          reconnectApprovalId,
+        ])
+      ).rows[0].status,
+      "pending",
+    );
+    await (
+      realtimeHub as unknown as {
+        reconcileApprovals(connection: typeof boundConnection, ids: string[]): Promise<void>;
+      }
+    ).reconcileApprovals(boundConnection, []);
+    assert.equal(
+      (
+        await pool.query("SELECT status FROM execution_approval_requests WHERE id = $1", [
+          reconnectApprovalId,
+        ])
+      ).rows[0].status,
+      "expired",
+    );
+    assert.equal(
+      (await pool.query("SELECT status FROM task_runs WHERE id = $1", [secondWriteRunId])).rows[0]
+        .status,
+      "failed",
+    );
+
+    const timeoutRunId = randomUUID();
+    await pool.query(
+      `INSERT INTO task_runs(
+         id, task_id, agent_id, status, execution_target, context_version, agent_snapshot,
+         approval_id, started_by_user_id, target_device_id, permission_grant_id,
+         idempotency_key, requested_scopes, write_intent
+       ) SELECT $1, task_id, agent_id, 'queued', execution_target, context_version,
+                agent_snapshot, approval_id, started_by_user_id, target_device_id,
+                permission_grant_id, $2, requested_scopes, write_intent
+         FROM task_runs WHERE id = $3`,
+      [timeoutRunId, `test:approval-timeout:${timeoutRunId}`, secondWriteRunId],
+    );
+    const timeoutLeaseToken = await leaseQueuedWriteRun(timeoutRunId);
+    const timeoutApprovalId = randomUUID();
+    await requestApproval(boundConnection, {
+      ...runtimeApproval,
+      approvalId: timeoutApprovalId,
+      idempotencyKey: `${timeoutRunId}:session_timeout:turn_timeout:provider_timeout`,
+      runId: timeoutRunId,
+      leaseToken: timeoutLeaseToken,
+      sessionId: "session_timeout",
+      turnId: "turn_timeout",
+      providerRequestId: "provider_timeout",
+    });
+    await pool.query(
+      `UPDATE execution_approval_requests
+       SET created_at = now() - interval '2 minutes',
+           expires_at = now() - interval '1 minute'
+       WHERE id = $1`,
+      [timeoutApprovalId],
+    );
+    await (
+      realtimeHub as unknown as { sweepExpiredApprovals(): Promise<void> }
+    ).sweepExpiredApprovals();
+    assert.equal(
+      (
+        await pool.query("SELECT status FROM execution_approval_requests WHERE id = $1", [
+          timeoutApprovalId,
+        ])
+      ).rows[0].status,
+      "expired",
+    );
+    assert.equal(
+      (await pool.query("SELECT status FROM task_runs WHERE id = $1", [timeoutRunId])).rows[0]
+        .status,
+      "failed",
+    );
 
     const memberAnchor = await app.inject({
       method: "POST",
@@ -1029,13 +1299,12 @@ test("two users can become friends, create an Agent room, and sync settings", as
         .data.some((item: { eventType: string }) => item.eventType === "task.reviewed"),
       true,
     );
-    assert.equal(
+    assert.ok(
       memberAudit
         .json()
-        .data.some(
+        .data.filter(
           (item: { eventType: string }) => item.eventType === "runtime.approval_requested",
-        ),
-      false,
+        ).length >= 4,
     );
     assert.equal(JSON.stringify(memberAudit.json()).includes("/Users/bob"), false);
     const hostAudit = await app.inject({

@@ -27,10 +27,10 @@
 
 ## 5. Remote execution approvals
 
-- [ ] 5.1 Extend normalized Runtime approval events with Task, revision, Run, Session, Turn, Agent, device, and provider-request correlation; verify Codex and supported custom Runtime adapters preserve identifiers.
-- [ ] 5.2 Extend the Agent Host realtime protocol with approval request, pending-ID heartbeat, and approval resolution events; verify schema validation rejects stale lease, wrong device, wrong request ID, and duplicate decisions.
-- [ ] 5.3 Persist encrypted approval details, redacted summaries, expiry, and decisions in the backend and notify only the host owner; verify room admins who do not own the host cannot access details or resolve requests.
-- [ ] 5.4 Suspend and resume the exact Runtime request for `deny`, `allow_once`, and `allow_for_task`; verify denial, timeout, reconnect, Host restart, and non-resumable provider behavior all fail closed.
+- [x] 5.1 Extend normalized Runtime approval events with Task, revision, Run, Session, Turn, Agent, device, and provider-request correlation; verify Codex and supported custom Runtime adapters preserve identifiers.
+- [x] 5.2 Extend the Agent Host realtime protocol with approval request, pending-ID heartbeat, and approval resolution events; verify schema validation rejects stale lease, wrong device, wrong request ID, and duplicate decisions.
+- [x] 5.3 Persist encrypted approval details, redacted summaries, expiry, and decisions in the backend and notify only the host owner; verify room admins who do not own the host cannot access details or resolve requests.
+- [x] 5.4 Suspend and resume the exact Runtime request for `deny`, `allow_once`, and `allow_for_task`; verify denial, timeout, reconnect, Host restart, and non-resumable provider behavior all fail closed.
 
 ## 6. Structured Agent delegation
 

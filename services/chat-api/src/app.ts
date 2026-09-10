@@ -12,6 +12,7 @@ import { registerCollaborationAuditRoutes } from "./collaboration-audit.js";
 import { createDatabase } from "./db.js";
 import type { EventPublisher } from "./events.js";
 import { NullEventPublisher } from "./events.js";
+import { registerExecutionApprovalRoutes } from "./execution-approvals.js";
 import { registerFriendRoutes } from "./friends.js";
 import { ApiError, errorHandler, parseBody } from "./http.js";
 import { registerImportRoutes } from "./imports.js";
@@ -89,6 +90,7 @@ export const createApp = async (config: AppConfig, overrides: AppOverrides = {})
   registerRoomRoutes(app, pool, realtime);
   registerTaskRoutes(app, pool, realtime);
   registerTaskPermissionRoutes(app, pool, realtime);
+  registerExecutionApprovalRoutes(app, pool, cipher, realtime);
   registerCollaborationAuditRoutes(app, pool);
   registerSettingsRoutes(app, pool, cipher, realtime);
   registerImportRoutes(app, pool, cipher);

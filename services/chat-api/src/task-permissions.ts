@@ -386,6 +386,41 @@ export const registerTaskPermissionRoutes = (
            AND status IN ('queued', 'leased', 'running', 'waiting')`,
         [id, grantId],
       );
+      await pool.query(
+        `DELETE FROM workspace_write_leases
+         WHERE run_id IN (
+           SELECT id FROM task_runs WHERE task_id = $1 AND permission_grant_id = $2
+         )`,
+        [id, grantId],
+      );
+      const deniedApprovals = await pool.query<{
+        id: string;
+        run_id: string;
+        session_id: string;
+        turn_id: string;
+        provider_request_id: string;
+        host_device_id: string;
+      }>(
+        `UPDATE execution_approval_requests
+         SET status = 'denied', decision = 'deny', decided_by_user_id = $3, decided_at = now()
+         WHERE run_id IN (
+           SELECT id FROM task_runs WHERE task_id = $1 AND permission_grant_id = $2
+         ) AND status = 'pending'
+         RETURNING id, run_id, session_id, turn_id, provider_request_id, host_device_id`,
+        [id, grantId, request.user.sub],
+      );
+      for (const approval of deniedApprovals.rows) {
+        events.publishToDevice(request.user.sub, approval.host_device_id, {
+          type: "approval.resolved",
+          approvalId: approval.id,
+          runId: approval.run_id,
+          sessionId: approval.session_id,
+          turnId: approval.turn_id,
+          providerRequestId: approval.provider_request_id,
+          decision: "deny",
+          reason: "grant_revoked",
+        });
+      }
       await appendCollaborationAudit(pool, {
         actorUserId: request.user.sub,
         roomId: context.source_room_id,
