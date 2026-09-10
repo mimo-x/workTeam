@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type pg from "pg";
 import { z } from "zod";
 
+import { appendCollaborationAudit } from "./collaboration-audit.js";
 import type { EventPublisher } from "./events.js";
 import { ApiError, parseBody, parseParams, requireRevision } from "./http.js";
 import type { EnvelopeCipher } from "./security.js";
@@ -246,6 +247,15 @@ export const registerSettingsRoutes = (
            ended_at = NULL`,
         [roomId, id, binding.rows[0].revision, request.user.sub],
       );
+      await appendCollaborationAudit(pool, {
+        actorUserId: request.user.sub,
+        roomId,
+        hostDeviceId: binding.rows[0].device_id,
+        eventType: "workspace_binding.shared",
+        summary: `项目主机“${binding.rows[0].label}”已分享到群组。`,
+        outcome: "shared",
+        metadata: { bindingId: id, bindingRevision: binding.rows[0].revision },
+      });
       await events.publishToRoom(roomId, {
         type: "workspace-binding.shared",
         binding: workspaceBindingDto(binding.rows[0]),
@@ -390,6 +400,20 @@ export const registerSettingsRoutes = (
           [roomId],
         );
         nextRoomRevision = updatedRoom.rows[0].revision;
+        await appendCollaborationAudit(client, {
+          actorUserId: request.user.sub,
+          roomId,
+          hostDeviceId: binding.device_id,
+          eventType: active.rows[0] ? "workspace_binding.replaced" : "workspace_binding.activated",
+          summary: `群组项目主机已切换为“${binding.label}”，未完成 Task 需要重新确认。`,
+          outcome: "activated",
+          metadata: {
+            bindingId,
+            bindingRevision: binding.revision,
+            roomRevision: nextRoomRevision,
+            affectedTaskIds: reconfirmedTaskIds,
+          },
+        });
         await client.query("COMMIT");
       } catch (error) {
         await client.query("ROLLBACK");

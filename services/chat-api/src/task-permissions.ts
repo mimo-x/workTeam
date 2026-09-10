@@ -4,6 +4,7 @@ import type { FastifyInstance } from "fastify";
 import type pg from "pg";
 import { z } from "zod";
 
+import { appendCollaborationAudit } from "./collaboration-audit.js";
 import type { EventPublisher } from "./events.js";
 import { ApiError, parseBody, parseParams } from "./http.js";
 
@@ -329,6 +330,17 @@ export const registerTaskPermissionRoutes = (
            WHERE id = $1`,
           [id],
         );
+        await appendCollaborationAudit(client, {
+          actorUserId: request.user.sub,
+          roomId,
+          taskId: id,
+          taskRevision: context.task_revision,
+          hostDeviceId: context.host_device_id,
+          eventType: "task_permission.granted",
+          summary: `项目主机所有者已为 Task v${context.task_revision} 授权。`,
+          outcome: "approved",
+          metadata: { grantId: created.id, scopes: created.scopes },
+        });
         await client.query("COMMIT");
       } catch (error) {
         await client.query("ROLLBACK");
@@ -374,6 +386,17 @@ export const registerTaskPermissionRoutes = (
            AND status IN ('queued', 'leased', 'running', 'waiting')`,
         [id, grantId],
       );
+      await appendCollaborationAudit(pool, {
+        actorUserId: request.user.sub,
+        roomId: context.source_room_id,
+        taskId: id,
+        taskRevision: context.task_revision,
+        hostDeviceId: context.host_device_id ?? undefined,
+        eventType: "task_permission.revoked",
+        summary: "项目主机所有者已撤销 Task 权限，未完成执行已停止。",
+        outcome: "revoked",
+        metadata: { grantId },
+      });
       await events.publishToRoom(context.source_room_id, {
         type: "task.permission-revoked",
         taskId: id,

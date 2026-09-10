@@ -781,6 +781,49 @@ test("two users can become friends, create an Agent room, and sync settings", as
     });
     assert.equal(memberProposal.statusCode, 201, memberProposal.body);
 
+    await pool.query(
+      `INSERT INTO collaboration_audit_events(
+         room_id, host_device_id, event_type, audience, redacted_summary, outcome
+       ) VALUES ($1, $2, 'runtime.approval_requested', 'host_owner',
+                 '需要确认一项 Runtime 操作。', 'pending')`,
+      [room.json().id, bobDeviceId],
+    );
+    const memberAudit = await app.inject({
+      method: "GET",
+      url: `/v1/rooms/${room.json().id}/audit`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    });
+    assert.equal(memberAudit.statusCode, 200, memberAudit.body);
+    assert.equal(
+      memberAudit
+        .json()
+        .data.some((item: { eventType: string }) => item.eventType === "task.reviewed"),
+      true,
+    );
+    assert.equal(
+      memberAudit
+        .json()
+        .data.some(
+          (item: { eventType: string }) => item.eventType === "runtime.approval_requested",
+        ),
+      false,
+    );
+    assert.equal(JSON.stringify(memberAudit.json()).includes("/Users/bob"), false);
+    const hostAudit = await app.inject({
+      method: "GET",
+      url: `/v1/rooms/${room.json().id}/audit`,
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+    });
+    assert.equal(hostAudit.statusCode, 200, hostAudit.body);
+    assert.equal(
+      hostAudit
+        .json()
+        .data.some(
+          (item: { eventType: string }) => item.eventType === "runtime.approval_requested",
+        ),
+      true,
+    );
+
     const agentDirect = await app.inject({
       method: "POST",
       url: "/v1/rooms/agent-direct",

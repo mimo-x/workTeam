@@ -8,6 +8,7 @@ import type pg from "pg";
 import { registerAgentRoutes } from "./agents.js";
 import { registerAuth } from "./auth.js";
 import type { AppConfig } from "./config.js";
+import { registerCollaborationAuditRoutes } from "./collaboration-audit.js";
 import { createDatabase } from "./db.js";
 import type { EventPublisher } from "./events.js";
 import { NullEventPublisher } from "./events.js";
@@ -88,6 +89,7 @@ export const createApp = async (config: AppConfig, overrides: AppOverrides = {})
   registerRoomRoutes(app, pool, realtime);
   registerTaskRoutes(app, pool, realtime);
   registerTaskPermissionRoutes(app, pool, realtime);
+  registerCollaborationAuditRoutes(app, pool);
   registerSettingsRoutes(app, pool, cipher, realtime);
   registerImportRoutes(app, pool, cipher);
 

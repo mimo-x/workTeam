@@ -4,6 +4,7 @@ import type { FastifyInstance } from "fastify";
 import type pg from "pg";
 import { z } from "zod";
 
+import { appendCollaborationAudit } from "./collaboration-audit.js";
 import type { EventPublisher } from "./events.js";
 import { ApiError, parseBody, parseParams, parseQuery, requireRevision } from "./http.js";
 import { enqueueOutbox } from "./outbox.js";
@@ -354,6 +355,23 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
           agent.id,
         ]);
       }
+      await appendCollaborationAudit(client, {
+        actorUserId: request.user.sub,
+        actorAgentId: input.proposedByAgentId,
+        roomId: input.sourceRoomId,
+        taskId,
+        taskRevision: 1,
+        eventType: input.parentTaskId ? "task.delegated" : "task.proposed",
+        summary: input.parentTaskId
+          ? `已创建子 Task“${input.title}”，等待审核。`
+          : `已提出 Task“${input.title}”，等待审核。`,
+        outcome: "pending_review",
+        metadata: {
+          parentTaskId: input.parentTaskId ?? null,
+          assigneeIds: input.assigneeIds,
+          scopes: requestedScopes,
+        },
+      });
       await enqueueOutbox(client, "openim.group.create", "room", taskRoomId, {
         groupID: taskGroupId,
         name: input.title,
@@ -389,10 +407,11 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
       await client.query("BEGIN");
       const task = await client.query<{
         task_room_id: string;
+        source_room_id: string;
         revision: number;
         status: string;
       }>(
-        `SELECT t.task_room_id, t.revision, t.status
+        `SELECT t.task_room_id, t.source_room_id, t.revision, t.status
          FROM tasks t JOIN room_members rm ON rm.room_id = t.source_room_id
          WHERE t.id = $1 AND rm.user_id = $2 FOR UPDATE`,
         [id, request.user.sub],
@@ -439,6 +458,15 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
          WHERE task_id = $1 AND revoked_at IS NULL`,
         [id],
       );
+      await appendCollaborationAudit(client, {
+        actorUserId: request.user.sub,
+        roomId: task.rows[0].source_room_id,
+        taskId: id,
+        taskRevision: revision + 1,
+        eventType: "task.proposal_updated",
+        summary: `Task 方案已更新为 v${revision + 1}，旧审核与权限已失效。`,
+        outcome: "pending_review",
+      });
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -465,9 +493,10 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
       const task = await client.query<{
         revision: number;
         task_room_id: string;
+        source_room_id: string;
         member_role: string;
       }>(
-        `SELECT t.revision, t.task_room_id, rm.role AS member_role FROM tasks t
+        `SELECT t.revision, t.task_room_id, t.source_room_id, rm.role AS member_role FROM tasks t
          JOIN room_members rm ON rm.room_id = t.source_room_id
          WHERE t.id = $1 AND rm.user_id = $2 FOR UPDATE`,
         [id, request.user.sub],
@@ -489,6 +518,16 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
         "UPDATE task_permission_grants SET revoked_at = now() WHERE task_id = $1 AND revoked_at IS NULL",
         [id],
       );
+      await appendCollaborationAudit(client, {
+        actorUserId: request.user.sub,
+        roomId: task.rows[0].source_room_id,
+        taskId: id,
+        taskRevision: revision + 1,
+        eventType: "task.budget_updated",
+        summary: `Task 预算已更新，方案升至 v${revision + 1} 并等待重新审核。`,
+        outcome: "pending_review",
+        metadata: { budget },
+      });
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -516,6 +555,7 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
       await client.query("BEGIN");
       const task = await client.query<{
         task_room_id: string;
+        source_room_id: string;
         revision: number;
         title: string;
         objective: string;
@@ -588,6 +628,16 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
           id,
         ],
       );
+      await appendCollaborationAudit(client, {
+        actorUserId: request.user.sub,
+        roomId: task.rows[0].source_room_id,
+        taskId: id,
+        taskRevision: revision,
+        eventType: "task.reviewed",
+        summary: `Task v${revision} 审核结果：${input.decision}。`,
+        outcome: input.decision,
+        metadata: { reviewerRole: task.rows[0].member_role },
+      });
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -610,6 +660,7 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
       await client.query("BEGIN");
       const task = await client.query<{
         task_room_id: string;
+        source_room_id: string;
         revision: number;
         status: string;
         approved_review_id: string | null;
@@ -627,7 +678,8 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
         baseline_scopes: string[] | null;
         member_role: string;
       }>(
-        `SELECT t.task_room_id, t.revision, t.status, t.approved_review_id, t.context_version,
+        `SELECT t.task_room_id, t.source_room_id, t.revision, t.status,
+                t.approved_review_id, t.context_version,
                 t.requested_access, t.requested_scopes, t.workspace_binding_id,
                 t.binding_revision, wb.device_id AS host_device_id,
                 wb.status AS binding_status, wb.revoked_at AS binding_revoked_at,
@@ -668,6 +720,17 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
           "UPDATE tasks SET status = $1, wait_reason = $2, updated_at = now() WHERE id = $3",
           [status, message, id],
         );
+        await appendCollaborationAudit(client, {
+          actorUserId: request.user.sub,
+          roomId: task.rows[0].source_room_id,
+          taskId: id,
+          taskRevision: revision,
+          hostDeviceId: task.rows[0].host_device_id ?? undefined,
+          eventType: "task.execution_denied",
+          summary: message,
+          outcome: status,
+          metadata: { code },
+        });
         await client.query("COMMIT");
         await events.publishToRoom(taskRoomId, {
           type: "task.waiting",
@@ -777,6 +840,17 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
                 started_at = now(), wait_reason = NULL, updated_at = now() WHERE id = $2`,
         [request.user.sub, id],
       );
+      await appendCollaborationAudit(client, {
+        actorUserId: request.user.sub,
+        roomId: task.rows[0].source_room_id,
+        taskId: id,
+        taskRevision: revision,
+        hostDeviceId: task.rows[0].host_device_id,
+        eventType: "task.execution_started",
+        summary: `Task v${revision} 已通过双重授权并创建 ${runIds.length} 个 Run。`,
+        outcome: "queued",
+        metadata: { runIds, scopes: task.rows[0].requested_scopes },
+      });
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -797,8 +871,12 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
   app.patch("/v1/tasks/:id/status", { preHandler: [app.authenticate] }, async (request) => {
     const { id } = parseParams(idParams, request);
     const { status } = parseBody(statusBody, request);
-    const task = await pool.query<{ task_room_id: string; member_role: string }>(
-      `SELECT t.task_room_id, rm.role AS member_role FROM tasks t
+    const task = await pool.query<{
+      task_room_id: string;
+      source_room_id: string;
+      member_role: string;
+    }>(
+      `SELECT t.task_room_id, t.source_room_id, rm.role AS member_role FROM tasks t
        JOIN room_members rm ON rm.room_id = t.source_room_id
        WHERE t.id = $1 AND rm.user_id = $2`,
       [id, request.user.sub],
@@ -809,6 +887,14 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
       status,
       id,
     ]);
+    await appendCollaborationAudit(pool, {
+      actorUserId: request.user.sub,
+      roomId: task.rows[0].source_room_id,
+      taskId: id,
+      eventType: status === "failed" ? "task.execution_failed" : "task.status_changed",
+      summary: `Task 状态已更新为 ${status}。`,
+      outcome: status,
+    });
     await events.publishToRoom(task.rows[0].task_room_id, {
       type: "task.updated",
       taskId: id,
