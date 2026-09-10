@@ -13,6 +13,7 @@ import { formatErrorMessage } from "../../shared/error";
 type RuntimeConfig = {
   workspace: string;
   model?: string;
+  threadId?: string | null;
 };
 
 type CodexItem = {
