@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
 
-import { WorkTeamDesignSystem } from "./_components/workteam-design-system";
+import { CodexDesktopDesignSystem } from "./_components/workteam-design-system";
 
 export const metadata: Metadata = {
-  title: "WorkTeam Design System · Feishu × shadcn",
-  description: "基于飞书设计语言、使用 shadcn 实现的 WorkTeam 产品设计系统。",
+  title: "Codex Desktop Design System · Calm Collaboration",
+  description: "Codex Desktop 面向 Agent 协作场景的产品设计系统与 shadcn 工程规范。",
 };
 
 export default function DesignSystemPage() {
-  return <WorkTeamDesignSystem />;
+  return <CodexDesktopDesignSystem />;
 }

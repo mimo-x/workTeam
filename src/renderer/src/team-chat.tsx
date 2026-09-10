@@ -393,13 +393,13 @@ const MessageRow = ({
 
   if (alignment === "end") {
     return (
-      <article className="flex justify-end gap-2.5 py-3">
-        <div className="max-w-[min(40rem,76%)]">
+      <article className="flex justify-end gap-2 py-2.5">
+        <div className="max-w-[min(32rem,68%)]">
           <div className="mb-1 flex items-center justify-end gap-2 font-mono text-[10px] text-muted-foreground">
             <span>{timeLabel(message.createdAt)}</span>
             <span className="font-semibold text-foreground">{message.senderName}</span>
           </div>
-          <div className="rounded-2xl rounded-tr-md border border-primary/20 bg-primary/10 px-4 py-3 text-[13px] leading-6 whitespace-pre-wrap text-foreground shadow-[var(--shadow-down-1)]">
+          <div className="rounded-xl rounded-tr-sm bg-primary/10 px-3 py-2 text-[13px] leading-5 whitespace-pre-wrap text-foreground">
             {message.content}
           </div>
           {task && (
@@ -421,7 +421,7 @@ const MessageRow = ({
             </button>
           )}
         </div>
-        <div className="mt-4 grid size-7 shrink-0 place-items-center rounded-lg border border-primary/20 bg-primary/10 font-mono text-[10px] font-semibold text-primary">
+        <div className="mt-4 grid size-7 shrink-0 place-items-center rounded-lg bg-primary/10 font-mono text-[10px] font-semibold text-primary">
           我
         </div>
       </article>

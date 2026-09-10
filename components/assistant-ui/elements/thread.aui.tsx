@@ -449,7 +449,7 @@ const UserMessage: FC = () => {
       data-role="user"
     >
       <div className="aui-user-message-content-wrapper relative col-start-2 flex min-w-0 justify-end">
-        <div className="aui-user-message-content peer max-w-full rounded-2xl rounded-br-md bg-muted px-4 py-2.5 text-foreground wrap-break-word empty:hidden">
+        <div className="aui-user-message-content peer w-fit max-w-[80%] rounded-xl rounded-br-sm bg-muted px-3 py-2 text-sm leading-5 text-foreground wrap-break-word empty:hidden">
           <MessagePrimitive.Parts />
         </div>
         <div className="aui-user-action-bar-wrapper absolute start-0 top-1/2 -translate-x-full -translate-y-1/2 pe-2 peer-empty:hidden rtl:translate-x-full">
