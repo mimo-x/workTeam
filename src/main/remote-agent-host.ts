@@ -205,6 +205,7 @@ export class RemoteAgentHost {
           this.workspace,
           undefined,
           assignment.agent.workspaceAccess === "write" ? "workspace-write" : "read-only",
+          "agent-team",
         );
         threadId = thread.threadId;
         this.threads.set(threadKey, threadId);

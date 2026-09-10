@@ -4,14 +4,31 @@ import {
   type ChatModelRunResult,
   type ThreadAssistantMessagePart,
   type ThreadMessage,
+  type ThreadMessageLike,
 } from "@assistant-ui/react";
 import { useEffect, useMemo, useRef } from "react";
 
 import type { CodexEvent } from "../../shared/codex";
+import { useCodexAttachments } from "./codex-attachments";
 
 type RuntimeConfig = {
   workspace: string;
   model?: string;
+  threadId?: string | null;
+  initialMessages?: readonly ThreadMessageLike[];
+  onTimelineEvent?: (event: {
+    id: string;
+    at: number;
+    type: string;
+    title: string;
+    detail?: string;
+    threadId?: string;
+  }) => void;
+  onSlashCommand?: (
+    command: string,
+    argument: string,
+    threadId: string | null,
+  ) => Promise<string | null>;
 };
 
 type CodexItem = {
@@ -87,7 +104,7 @@ const describeTool = (item: CodexItem): ToolSnapshot | null => {
       id: item.id,
       name: "file_change",
       args: { changes: JSON.stringify(item.changes ?? [], null, 2) },
-      output: item.status ?? "",
+      output: JSON.stringify(item.changes ?? [], null, 2),
       complete: item.status !== "inProgress",
       isError: item.status === "failed",
     };
@@ -135,21 +152,44 @@ const turnErrorMessage = (value: unknown) => {
 };
 
 export const useCodexRuntime = (config: RuntimeConfig) => {
+  const { attachments, clear } = useCodexAttachments();
   const configRef = useRef(config);
-  const threadIdRef = useRef<string | null>(null);
+  const attachmentRef = useRef(attachments);
+  const threadIdRef = useRef<string | null>(config.threadId ?? null);
+  const resumedThreadRef = useRef(!config.threadId);
   configRef.current = config;
+  attachmentRef.current = attachments;
 
   useEffect(() => {
-    threadIdRef.current = null;
-  }, [config.workspace]);
+    const nextThreadId = config.threadId ?? null;
+    if (threadIdRef.current === nextThreadId) return;
+    threadIdRef.current = nextThreadId;
+    resumedThreadRef.current = !nextThreadId;
+  }, [config.workspace, config.threadId]);
 
   const adapter = useMemo<ChatModelAdapter>(
     () => ({
       async *run({ messages, abortSignal }): AsyncGenerator<ChatModelRunResult, void> {
         const prompt = lastUserText(messages);
-        const { workspace, model } = configRef.current;
+        const { workspace, model, onTimelineEvent, onSlashCommand } = configRef.current;
         if (!workspace) throw new Error("请先选择 Codex 工作目录。");
         if (!prompt) throw new Error("消息不能为空。");
+
+        const slashMatch = prompt.match(/^\/(\S+)(?:\s+([\s\S]*))?$/u);
+        if (slashMatch && onSlashCommand) {
+          const result = await onSlashCommand(
+            slashMatch[1].toLocaleLowerCase(),
+            slashMatch[2]?.trim() ?? "",
+            threadIdRef.current,
+          );
+          if (result !== null) {
+            yield {
+              content: [{ type: "text", text: result }],
+              status: { type: "complete", reason: "stop" },
+            };
+            return;
+          }
+        }
 
         const queue = new EventQueue();
         const unsubscribe = window.codex.onEvent((event) => queue.push(event));
@@ -159,6 +199,12 @@ export const useCodexRuntime = (config: RuntimeConfig) => {
         let answer = "";
         let finalError: unknown = null;
         const tools = new Map<string, ToolSnapshot>();
+        const trace = (event: { id: string; type: string; title: string; detail?: string }) =>
+          onTimelineEvent?.({
+            ...event,
+            at: Date.now(),
+            threadId: threadIdRef.current ?? undefined,
+          });
 
         const abort = () => {
           aborted = true;
@@ -174,6 +220,10 @@ export const useCodexRuntime = (config: RuntimeConfig) => {
           if (!threadIdRef.current) {
             const thread = await window.codex.startThread({ cwd: workspace, model });
             threadIdRef.current = thread.threadId;
+            resumedThreadRef.current = true;
+          } else if (!resumedThreadRef.current) {
+            await window.codex.resumeThread({ threadId: threadIdRef.current });
+            resumedThreadRef.current = true;
           }
 
           const started = await window.codex.startTurn({
@@ -181,8 +231,13 @@ export const useCodexRuntime = (config: RuntimeConfig) => {
             cwd: workspace,
             text: prompt,
             model,
+            attachments: attachmentRef.current,
           });
+          if (attachmentRef.current.length) {
+            clear();
+          }
           turnId = started.turnId;
+          trace({ id: `turn:${turnId}`, type: "started", title: "Codex 已启动" });
           if (aborted) abort();
 
           while (true) {
@@ -204,6 +259,12 @@ export const useCodexRuntime = (config: RuntimeConfig) => {
               event.method === "item/reasoning/textDelta"
             ) {
               reasoning += String(event.params.delta ?? "");
+              trace({
+                id: `reasoning:${turnId}`,
+                type: "reasoning",
+                title: "思考摘要",
+                detail: reasoning,
+              });
               changed = true;
             } else if (event.method === "item/started" || event.method === "item/completed") {
               const item = (event.params.item ?? {}) as CodexItem;
@@ -211,6 +272,12 @@ export const useCodexRuntime = (config: RuntimeConfig) => {
               if (tool) {
                 tools.set(tool.id, tool);
                 changed = true;
+                trace({
+                  id: `tool:${tool.id}`,
+                  type: tool.name === "terminal" ? "command" : "tool",
+                  title: tool.name,
+                  detail: tool.output,
+                });
               }
               if (event.method === "item/completed" && item.type === "agentMessage" && item.text) {
                 answer = item.text;
@@ -221,8 +288,21 @@ export const useCodexRuntime = (config: RuntimeConfig) => {
               const tool = tools.get(itemId);
               if (tool) {
                 tool.output += String(event.params.delta ?? "");
+                trace({
+                  id: `tool:${tool.id}`,
+                  type: "command",
+                  title: tool.name,
+                  detail: tool.output,
+                });
                 changed = true;
               }
+            } else if (event.method === "desktop/approval/requested") {
+              trace({
+                id: `approval:${String(event.params.requestId ?? turnId)}`,
+                type: "approval",
+                title: String(event.params.title ?? "等待人工审批"),
+                detail: String(event.params.reason ?? event.params.command ?? ""),
+              });
             } else if (event.method === "error" && event.params.willRetry === false) {
               finalError = event.params.error;
             } else if (
@@ -242,6 +322,11 @@ export const useCodexRuntime = (config: RuntimeConfig) => {
             if (event.method === "turn/completed") {
               const turn = (event.params.turn ?? {}) as Record<string, unknown>;
               const status = String(turn.status ?? "completed");
+              trace({
+                id: `turn:${turnId}:complete`,
+                type: status === "failed" ? "error" : "complete",
+                title: status === "failed" ? "Codex 执行失败" : "Codex 执行完成",
+              });
               if (status === "failed") finalError = turn.error ?? finalError;
               yield {
                 content: contentSnapshot(reasoning, answer, tools),
@@ -269,6 +354,7 @@ export const useCodexRuntime = (config: RuntimeConfig) => {
   );
 
   return useLocalRuntime(adapter, {
+    initialMessages: config.initialMessages,
     adapters: {
       suggestion: {
         generate: async ({ messages }) =>

@@ -1,8 +1,9 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import OpenIMSdkMain from "@openim/electron-client-sdk";
 import { existsSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
-import { stat } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { copyFile, mkdir, readFile, rm, stat } from "node:fs/promises";
 
 import { AgentGatewayPublisher } from "./agent-gateway";
 import { AgentTeamService } from "./agent-team";
@@ -10,6 +11,8 @@ import { BackendClient, backendConfigPath } from "./backend-client";
 import { CodexAppServer } from "./codex-app-server";
 import { ImConfigStore, imConfigPath } from "./im-config";
 import { RemoteAgentHost } from "./remote-agent-host";
+import { WorktreeManager } from "./worktree-manager";
+import { isCodexPrivateThread } from "./codex-thread-visibility";
 import type {
   AgentDefinition,
   AgentMessageAction,
@@ -19,7 +22,7 @@ import type {
   TaskStatus,
   TaskReviewDecision,
 } from "../shared/agent-team";
-import type { ApprovalDecision, RpcRequestId } from "../shared/codex";
+import type { ApprovalDecision, CodexAttachment, RpcRequestId } from "../shared/codex";
 import type {
   BackendLoginInput,
   BackendRegisterInput,
@@ -33,6 +36,10 @@ let imConfig: ImConfigStore;
 let agentTeam: AgentTeamService;
 let backend: BackendClient;
 let remoteAgentHost: RemoteAgentHost;
+const worktrees = new WorktreeManager();
+
+const fileToDataUrl = async (path: string, mimeType: string) =>
+  `data:${mimeType};base64,${(await readFile(path)).toString("base64")}`;
 
 const requireDirectory = async (value: unknown) => {
   if (typeof value !== "string" || !isAbsolute(value)) throw new Error("请选择有效的项目目录。");
@@ -149,7 +156,13 @@ const registerIpc = () => {
     "codex:start-turn",
     async (
       _event,
-      options: { threadId?: unknown; cwd?: unknown; text?: unknown; model?: unknown },
+      options: {
+        threadId?: unknown;
+        cwd?: unknown;
+        text?: unknown;
+        model?: unknown;
+        attachments?: unknown;
+      },
     ) => {
       const cwd = await requireDirectory(options.cwd);
       if (typeof options.threadId !== "string" || !options.threadId) {
@@ -159,7 +172,140 @@ const registerIpc = () => {
         throw new Error("消息不能为空。");
       }
       const model = typeof options.model === "string" ? options.model : undefined;
-      return codex.startTurn(options.threadId, cwd, options.text, model);
+      const attachments = Array.isArray(options.attachments)
+        ? (options.attachments.filter(
+            (value): value is CodexAttachment =>
+              Boolean(value) &&
+              typeof value === "object" &&
+              typeof (value as CodexAttachment).id === "string",
+          ) as CodexAttachment[])
+        : [];
+      return codex.startTurn(options.threadId, cwd, options.text, model, [], attachments);
+    },
+  );
+  ipcMain.handle(
+    "codex:list-threads",
+    async (_event, options: { cwd?: unknown; search?: unknown; archived?: unknown }) => {
+      const cwd = await requireDirectory(options.cwd);
+      const projectWorktrees = await worktrees.list(cwd).catch(() => []);
+      const directories = [...new Set([cwd, ...projectWorktrees.map((entry) => entry.path)])];
+      const threads = await codex.listThreads(
+        directories,
+        typeof options.search === "string" ? options.search : undefined,
+        options.archived === true,
+      );
+      return threads.filter(isCodexPrivateThread);
+    },
+  );
+  ipcMain.handle("codex:read-thread", (_event, options: { threadId?: unknown }) =>
+    codex.readThread(requireString(options.threadId, "会话 ID", 256)),
+  );
+  ipcMain.handle("codex:resume-thread", (_event, options: { threadId?: unknown }) =>
+    codex.resumeThread(requireString(options.threadId, "会话 ID", 256)),
+  );
+  ipcMain.handle("codex:rename-thread", (_event, options: { threadId?: unknown; name?: unknown }) =>
+    codex.renameThread(
+      requireString(options.threadId, "会话 ID", 256),
+      requireString(options.name, "会话名称", 120),
+    ),
+  );
+  ipcMain.handle("codex:archive-thread", (_event, options: { threadId?: unknown }) =>
+    codex.archiveThread(requireString(options.threadId, "会话 ID", 256)),
+  );
+  ipcMain.handle("codex:delete-thread", (_event, options: { threadId?: unknown }) =>
+    codex.deleteThread(requireString(options.threadId, "会话 ID", 256)),
+  );
+  ipcMain.handle("codex:fork-thread", (_event, options: { threadId?: unknown }) =>
+    codex.forkThread(requireString(options.threadId, "会话 ID", 256)),
+  );
+  ipcMain.handle("codex:compact-thread", (_event, options: { threadId?: unknown }) =>
+    codex.compactThread(requireString(options.threadId, "会话 ID", 256)),
+  );
+  ipcMain.handle("codex:list-skills", async (_event, options: { cwd?: unknown }) =>
+    codex.listSkills(await requireDirectory(options.cwd)),
+  );
+  ipcMain.handle("codex:list-mcp-servers", (_event, options: { threadId?: unknown }) =>
+    codex.listMcpServers(typeof options.threadId === "string" ? options.threadId : undefined),
+  );
+  ipcMain.handle(
+    "codex:create-worktree",
+    async (_event, options: { cwd?: unknown; key?: unknown }) =>
+      worktrees.create(
+        await requireDirectory(options.cwd),
+        requireString(options.key, "Worktree 标识", 64),
+      ),
+  );
+  ipcMain.handle(
+    "codex:remove-worktree",
+    async (_event, options: { cwd?: unknown; path?: unknown }) => {
+      const cwd = await requireDirectory(options.cwd);
+      const path = requireString(options.path, "Worktree 路径", 4096);
+      await worktrees.remove(cwd, path);
+    },
+  );
+  ipcMain.handle(
+    "codex:pick-attachments",
+    async (_event, options: { cwd?: unknown }): Promise<CodexAttachment[]> => {
+      const cwd = await requireDirectory(options.cwd);
+      const result = mainWindow
+        ? await dialog.showOpenDialog(mainWindow, { properties: ["openFile", "multiSelections"] })
+        : await dialog.showOpenDialog({ properties: ["openFile", "multiSelections"] });
+      if (result.canceled) return [];
+      const sources = await Promise.all(
+        result.filePaths.map(async (sourcePath) => ({ sourcePath, info: await stat(sourcePath) })),
+      );
+      const oversized = sources.find(({ info }) => info.size > 50 * 1024 * 1024);
+      if (oversized) throw new Error(`${basename(oversized.sourcePath)} 超过 50 MiB 限制。`);
+      if (sources.reduce((total, entry) => total + entry.info.size, 0) > 200 * 1024 * 1024) {
+        throw new Error("单条消息附件总大小不能超过 200 MiB。");
+      }
+      await worktrees.ensureLocalExclude(cwd);
+      const copiedTargets: string[] = [];
+      try {
+        const entries: CodexAttachment[] = [];
+        for (const { sourcePath, info } of sources) {
+          const extension = extname(sourcePath).toLowerCase();
+          const image = [".png", ".jpg", ".jpeg", ".gif", ".webp"].includes(extension);
+          const mimeType = image
+            ? extension === ".jpg" || extension === ".jpeg"
+              ? "image/jpeg"
+              : `image/${extension.slice(1)}`
+            : "application/octet-stream";
+          const attachmentDir = join(cwd, ".workteam", "attachments");
+          await mkdir(attachmentDir, { recursive: true });
+          const target = join(attachmentDir, `${randomUUID()}-${basename(sourcePath)}`);
+          await copyFile(sourcePath, target);
+          copiedTargets.push(target);
+          entries.push({
+            id: randomUUID(),
+            name: basename(sourcePath),
+            mimeType,
+            size: info.size,
+            kind: image ? ("image" as const) : ("file" as const),
+            cwd,
+            relativePath: relative(cwd, target),
+            ...(image ? { dataUrl: await fileToDataUrl(sourcePath, mimeType) } : {}),
+          });
+        }
+        return entries;
+      } catch (error) {
+        await Promise.all(copiedTargets.map((target) => rm(target, { force: true })));
+        throw error;
+      }
+    },
+  );
+  ipcMain.handle(
+    "codex:discard-attachment",
+    async (_event, options: { cwd?: unknown; attachment?: unknown }) => {
+      const cwd = await requireDirectory(options.cwd);
+      const attachment = options.attachment as Partial<CodexAttachment> | undefined;
+      if (!attachment || typeof attachment.relativePath !== "string") return;
+      const attachmentRoot = resolve(cwd, ".workteam", "attachments");
+      const target = resolve(cwd, attachment.relativePath);
+      if (!target.startsWith(`${attachmentRoot}${sep}`)) {
+        throw new Error("附件路径不在受控目录中。");
+      }
+      await rm(target, { force: true });
     },
   );
   ipcMain.handle(
@@ -498,6 +644,7 @@ app.whenReady().then(() => {
   agentTeam = new AgentTeamService(
     codex,
     join(userDataPath, "agent-team-rooms"),
+    worktrees,
     (message, agent) => publisher.publish(message, agent),
   );
   registerIpc();

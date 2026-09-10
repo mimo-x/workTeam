@@ -22,22 +22,24 @@ export const Assistant = () => {
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <div className="relative flex h-dvh flex-col overflow-hidden bg-[#080b12]">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_-20%,rgba(53,109,255,0.19),transparent_38%)]" />
-        <header className="relative z-10 flex h-16 shrink-0 items-center justify-between border-b border-white/8 px-5 md:px-8">
+      <div className="relative flex h-dvh flex-col overflow-hidden bg-background">
+        <div className="pointer-events-none absolute -top-36 left-1/2 size-144 -translate-x-1/2 rounded-full bg-primary/10 blur-3xl" />
+        <header className="app-titlebar relative z-10 flex h-16 shrink-0 items-center justify-between border-b px-5 md:px-8">
           <div className="flex items-center gap-3">
-            <div className="grid size-9 place-items-center rounded-xl bg-gradient-to-br from-blue-500 to-cyan-400 text-sm font-semibold text-white shadow-[0_8px_30px_rgba(37,99,235,0.25)]">
+            <div className="grid size-9 place-items-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground shadow-[var(--shadow-primary)]">
               DS
             </div>
             <div>
-              <div className="text-sm font-semibold tracking-tight text-white">DeepSeek Chat</div>
-              <div className="flex items-center gap-1.5 text-[11px] text-zinc-500">
-                <span className="size-1.5 rounded-full bg-emerald-400" />
+              <div className="text-sm font-semibold tracking-tight text-foreground">
+                DeepSeek Chat
+              </div>
+              <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <span className="size-1.5 rounded-full bg-success" />
                 在线
               </div>
             </div>
           </div>
-          <div className="rounded-full border border-white/8 bg-white/4 px-3 py-1.5 font-mono text-[10px] tracking-wide text-zinc-500 uppercase">
+          <div className="rounded-full border border-border bg-secondary px-3 py-1.5 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
             assistant-ui
           </div>
         </header>

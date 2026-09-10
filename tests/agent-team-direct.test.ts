@@ -125,7 +125,14 @@ test("group mentions stay in chat and an approved Task proposal starts explicitl
   const storeDir = await mkdtemp(join(tmpdir(), "agent-team-task-review-"));
   const workspace = "/tmp/task-review-workspace";
   const codex = new FakeCodex();
-  const service = new AgentTeamService(codex as unknown as CodexAppServer, storeDir);
+  const service = new AgentTeamService(codex as unknown as CodexAppServer, storeDir, {
+    create: async () => ({
+      path: workspace,
+      branch: "workteam/test-task",
+      baseRef: "test-head",
+      createdAt: Date.now(),
+    }),
+  });
 
   try {
     const initial = await service.getWorkspace(workspace);
