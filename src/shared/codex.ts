@@ -76,6 +76,7 @@ export type CodexDesktopApi = {
   connect: () => Promise<CodexStatus>;
   getStatus: () => Promise<CodexStatus>;
   chooseWorkspace: () => Promise<string | null>;
+  validateWorkspace: (options: { cwd: string }) => Promise<{ valid: boolean; error?: string }>;
   login: () => Promise<{ started: boolean; authUrl?: string }>;
   startThread: (options: {
     cwd: string;
