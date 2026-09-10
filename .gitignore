@@ -25,6 +25,7 @@
 # misc
 .DS_Store
 *.pem
+/.workteam/
 
 # debug
 npm-debug.log*

@@ -11,6 +11,7 @@ import type {
   AgentTask,
   ExternalTeamMessage,
   HumanContact,
+  RunTimelineEvent,
   TaskRun,
   TaskReviewDecision,
   TaskStatus,
@@ -21,6 +22,7 @@ import type {
 } from "../shared/agent-team";
 import type { CodexEvent } from "../shared/codex";
 import { CodexAppServer } from "./codex-app-server";
+import { WorktreeManager } from "./worktree-manager";
 
 type RuntimeRun = {
   id: string;
@@ -299,6 +301,7 @@ export class AgentTeamService {
   constructor(
     private readonly codex: CodexAppServer,
     private readonly storeDir: string,
+    private readonly worktrees: Pick<WorktreeManager, "create"> = new WorktreeManager(),
     private readonly publishAgentMessage?: AgentMessagePublisher,
   ) {}
 
@@ -909,6 +912,10 @@ export class AgentTeamService {
     const taskRoom = this.requireRoom(state, task.taskRoomId);
     const agents = state.agents.filter((agent) => task.assigneeIds.includes(agent.id));
     if (!agents.length) throw new Error("Task 没有可执行的 Agent。");
+    if (task.requestedAccess === "write" && !task.worktree) {
+      const worktree = await this.worktrees.create(workspace, `task-${task.id.slice(-12)}`);
+      task.worktree = worktree;
+    }
     const reviewer = state.humans.find((human) => human.id === approval.reviewerUserId);
     const instruction = this.createMessage(state, taskRoom, {
       senderId: "local_user",
@@ -1261,7 +1268,7 @@ export class AgentTeamService {
       );
     const executeWithWorkspacePolicy = () =>
       agent.workspaceAccess === "write"
-        ? this.enqueue(this.writerTails, state.workspace, execute)
+        ? this.enqueue(this.writerTails, task?.worktree?.path ?? state.workspace, execute)
         : execute();
     const queueKey = `${state.workspace}\u0000${task?.id ?? room.roomId}\u0000${agent.id}\u0000${model ?? "default"}`;
     void this.enqueue(this.agentTails, queueKey, executeWithWorkspacePolicy);
@@ -1293,15 +1300,40 @@ export class AgentTeamService {
           return;
         }
       }
-      const threadKey = `${state.workspace}\u0000${task?.id ?? room.roomId}\u0000${agent.id}\u0000${model ?? "default"}`;
+      const executionCwd = task?.worktree?.path ?? state.workspace;
+      const threadKey = `${executionCwd}\u0000${task?.id ?? room.roomId}\u0000${agent.id}\u0000${model ?? "default"}`;
       let threadId = this.threads.get(threadKey);
       if (!threadId) {
+        threadId = task
+          ? task.runs
+              .filter(
+                (run) =>
+                  run.id !== taskRun?.id &&
+                  run.agentId === agent.id &&
+                  run.executionCwd === executionCwd &&
+                  run.threadId,
+              )
+              .at(-1)?.threadId
+          : room.messages
+              .filter((message) => message.senderId === agent.id && message.threadId)
+              .at(-1)?.threadId;
+        if (threadId && this.codex.resumeThread) {
+          try {
+            await this.codex.resumeThread(threadId);
+            this.threads.set(threadKey, threadId);
+          } catch {
+            threadId = undefined;
+          }
+        }
+      }
+      if (!threadId) {
         const thread = await this.codex.startThread(
-          state.workspace,
+          executionCwd,
           model,
           task && agent.workspaceAccess === "write" && task.requestedAccess === "write"
             ? "workspace-write"
             : "read-only",
+          "agent-team",
         );
         threadId = thread.threadId;
         this.threads.set(threadKey, threadId);
@@ -1310,11 +1342,15 @@ export class AgentTeamService {
       const runtimeRun = this.runs.get(response.runId!);
       if (!runtimeRun) return;
       runtimeRun.threadId = threadId;
+      response.threadId = threadId;
       response.status = "streaming";
       response.activity = "正在思考…";
       response.updatedAt = Date.now();
       if (task && taskRun) {
         taskRun.status = "streaming";
+        taskRun.threadId = threadId;
+        taskRun.executionCwd = executionCwd;
+        this.appendTimeline(taskRun, "started", "Codex 已启动", `在 ${executionCwd} 执行`);
         taskRun.updatedAt = response.updatedAt;
         task.status = "running";
         task.updatedAt = response.updatedAt;
@@ -1324,7 +1360,7 @@ export class AgentTeamService {
 
       const availableSkills =
         task && this.codex.listSkills
-          ? await this.codex.listSkills(state.workspace).catch(() => [])
+          ? await this.codex.listSkills(executionCwd).catch(() => [])
           : [];
       const requestedSkills =
         agent.skillPolicy === "all" ? availableSkills : (agent.skillRefs ?? []);
@@ -1347,7 +1383,7 @@ export class AgentTeamService {
 
       const turn = await this.codex.startTurn(
         threadId,
-        state.workspace,
+        executionCwd,
         task && taskRun
           ? this.buildPrompt(state, room, userMessage, agent, task, taskRun.contextVersion)
           : this.buildChatPrompt(
@@ -1377,6 +1413,12 @@ export class AgentTeamService {
           response.activity = undefined;
           response.updatedAt = Date.now();
           this.upsertMessage(state, room, response);
+        }
+
+        if (taskRun && this.recordTimelineEvent(taskRun, event) && task) {
+          taskRun.updatedAt = Date.now();
+          task.updatedAt = taskRun.updatedAt;
+          this.emitTask(state, task);
         }
 
         const completedText = completedAgentText(event);
@@ -1477,6 +1519,7 @@ export class AgentTeamService {
           if (task && taskRun) {
             taskRun.status = response.status;
             taskRun.updatedAt = response.updatedAt;
+            this.appendTimeline(taskRun, "complete", "Codex 执行完成");
             task.consumedContextVersionByAgent[agent.id] = Math.max(
               task.consumedContextVersionByAgent[agent.id] ?? 0,
               taskRun.contextVersion,
@@ -1562,6 +1605,7 @@ export class AgentTeamService {
         taskRun.status = "error";
         taskRun.error = response.error;
         taskRun.updatedAt = response.updatedAt;
+        this.appendTimeline(taskRun, "error", "Codex 执行失败", response.error);
         task.status = this.hasActiveRuns(task, taskRun.id) ? "running" : "blocked";
         task.updatedAt = response.updatedAt;
       }
@@ -1581,6 +1625,92 @@ export class AgentTeamService {
       unsubscribe();
       if (response.runId) this.runs.delete(response.runId);
     }
+  }
+
+  private appendTimeline(
+    run: TaskRun,
+    type: RunTimelineEvent["type"],
+    title: string,
+    detail?: string,
+    eventId: string = randomUUID(),
+    appendDetail = false,
+  ) {
+    const events = (run.timeline ??= []);
+    const existing = events.find((event) => event.id === eventId);
+    const nextDetail = appendDetail ? `${existing?.detail ?? ""}${detail ?? ""}` : detail;
+    if (existing) {
+      existing.at = Date.now();
+      existing.type = type;
+      existing.title = title;
+      existing.detail = nextDetail?.slice(-64 * 1024);
+    } else {
+      events.push({
+        id: eventId,
+        at: Date.now(),
+        type,
+        title,
+        detail: nextDetail?.slice(-64 * 1024),
+      });
+      if (events.length > 500) events.splice(0, events.length - 500);
+    }
+  }
+
+  private recordTimelineEvent(run: TaskRun, event: CodexEvent) {
+    const item = (event.params.item ?? {}) as Record<string, unknown>;
+    if (
+      event.method === "item/reasoning/summaryTextDelta" ||
+      event.method === "item/reasoning/textDelta"
+    ) {
+      this.appendTimeline(
+        run,
+        "reasoning",
+        "思考摘要",
+        String(event.params.delta ?? ""),
+        `reasoning:${String(event.params.itemId ?? "summary")}`,
+        true,
+      );
+      return true;
+    }
+    if (event.method === "item/started" || event.method === "item/completed") {
+      const itemId = `item:${String(item.id ?? randomUUID())}`;
+      if (item.type === "commandExecution") {
+        this.appendTimeline(
+          run,
+          "command",
+          String(item.command ?? "运行命令"),
+          String(item.aggregatedOutput ?? ""),
+          itemId,
+        );
+      } else if (item.type === "fileChange") {
+        this.appendTimeline(run, "file", "修改文件", JSON.stringify(item.changes ?? []), itemId);
+      } else if (item.type === "mcpToolCall") {
+        this.appendTimeline(
+          run,
+          "mcp",
+          `调用 MCP：${String(item.server ?? "server")}/${String(item.tool ?? "tool")}`,
+          JSON.stringify(item.result ?? item.error ?? item.arguments ?? ""),
+          itemId,
+        );
+      } else return false;
+      return true;
+    }
+    if (event.method === "item/commandExecution/outputDelta") {
+      const eventId = `item:${String(event.params.itemId ?? "command")}`;
+      const title = run.timeline?.find((entry) => entry.id === eventId)?.title ?? "运行命令";
+      this.appendTimeline(run, "command", title, String(event.params.delta ?? ""), eventId, true);
+      return true;
+    }
+    if (event.method === "desktop/approval/requested" || event.method.includes("requestApproval")) {
+      this.appendTimeline(
+        run,
+        "approval",
+        String(event.params.title ?? "等待人工审批"),
+        String(event.params.reason ?? event.params.command ?? ""),
+        `approval:${String(event.params.requestId ?? event.params.itemId ?? randomUUID())}`,
+      );
+      return true;
+    }
+    return false;
   }
 
   private buildPrompt(

@@ -1,8 +1,10 @@
-import { AssistantRuntimeProvider } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, type ThreadMessageLike } from "@assistant-ui/react";
 import {
+  ArchiveIcon,
   BookUserIcon,
   BotIcon,
   CircleAlertIcon,
+  CommandIcon,
   CloudIcon,
   EyeIcon,
   EyeOffIcon,
@@ -14,12 +16,14 @@ import {
   MoonIcon,
   PaletteIcon,
   ListTodoIcon,
+  PlusIcon,
   RefreshCwIcon,
   Settings2Icon,
   ShieldCheckIcon,
   SunIcon,
   TerminalSquareIcon,
   UsersRoundIcon,
+  WorkflowIcon,
   XIcon,
 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
@@ -28,6 +32,14 @@ import { Thread } from "@/components/assistant-ui/elements/thread.aui";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -44,9 +56,11 @@ import type {
   ApprovalRequest,
   CodexEvent,
   CodexStatus,
+  CodexThreadSummary,
 } from "../../shared/codex";
 import type { BackendState, RemoteAgentHostState } from "../../shared/backend";
 import { useCodexRuntime } from "./codex-runtime";
+import { CodexAttachmentProvider } from "./codex-attachments";
 import { TeamChat, type TeamView } from "./team-chat";
 
 const emptyStatus: CodexStatus = {
@@ -63,12 +77,594 @@ const emptyStatus: CodexStatus = {
 
 const shortPath = (path: string) => path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
 
-const CodexChat = ({ workspace, model }: { workspace: string; model?: string }) => {
-  const runtime = useCodexRuntime({ workspace, model });
+type TimelineItem = {
+  id: string;
+  at: number;
+  type: string;
+  title: string;
+  detail?: string;
+};
+type TimelineEvent = TimelineItem & { threadId?: string };
+
+type ActiveCodexSession = {
+  id: string | null;
+  cwd: string;
+  runtimeKey: string;
+  initialMessages: ThreadMessageLike[];
+};
+
+const emptyCodexSession = (cwd: string): ActiveCodexSession => ({
+  id: null,
+  cwd,
+  runtimeKey: `new:${cwd}:${Date.now()}`,
+  initialMessages: [],
+});
+
+const timelineStorageKey = (threadId: string) => `codex.timeline:${threadId}`;
+
+const readTimeline = (threadId: string) => {
+  try {
+    const value = JSON.parse(localStorage.getItem(timelineStorageKey(threadId)) ?? "[]");
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+      .map((item, index) => ({
+        id: String(item.id ?? `legacy:${index}`),
+        at: typeof item.at === "number" && Number.isFinite(item.at) ? item.at : Date.now(),
+        type: typeof item.type === "string" ? item.type : "event",
+        title: typeof item.title === "string" ? item.title : "运行事件",
+        ...(typeof item.detail === "string" ? { detail: item.detail } : {}),
+      }))
+      .slice(-200);
+  } catch {
+    return [];
+  }
+};
+
+const historyText = (content: unknown) => {
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (!part || typeof part !== "object") return "";
+      const input = part as Record<string, unknown>;
+      if (input.type === "text" && typeof input.text === "string") return input.text;
+      if (
+        input.type === "image" ||
+        input.type === "localImage" ||
+        input.type === "input_image" ||
+        input.type === "local_image"
+      )
+        return "[图片附件]";
+      if (input.type === "skill") return `[Skill: ${String(input.name ?? "unknown")}]`;
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
+};
+
+const threadHistoryMessages = (turns: Array<Record<string, unknown>>): ThreadMessageLike[] => {
+  const messages: ThreadMessageLike[] = [];
+  for (const turn of turns) {
+    const createdAt =
+      typeof turn.startedAt === "number" ? new Date(turn.startedAt * 1000) : new Date();
+    const items = Array.isArray(turn.items) ? turn.items : [];
+    let reasoning = "";
+    for (const value of items) {
+      if (!value || typeof value !== "object") continue;
+      const item = value as Record<string, unknown>;
+      const id = typeof item.id === "string" ? item.id : undefined;
+      if (item.type === "userMessage") {
+        const text = historyText(item.content);
+        if (text) messages.push({ id, role: "user", content: text, createdAt });
+      } else if (item.type === "reasoning") {
+        reasoning = [item.summary, item.content]
+          .filter(Array.isArray)
+          .flatMap((entry) => entry as string[])
+          .join("\n");
+      } else if (item.type === "agentMessage" && typeof item.text === "string") {
+        messages.push({
+          id,
+          role: "assistant",
+          content: [
+            ...(reasoning ? [{ type: "reasoning" as const, text: reasoning }] : []),
+            { type: "text" as const, text: item.text },
+          ],
+          createdAt,
+          status: { type: "complete", reason: "stop" },
+        });
+        reasoning = "";
+      }
+    }
+  }
+  return messages;
+};
+
+const CodexChatThread = ({
+  workspace,
+  model,
+  threadId,
+  initialMessages,
+  onTimeline,
+  onSlashCommand,
+}: {
+  workspace: string;
+  model?: string;
+  threadId?: string | null;
+  initialMessages: readonly ThreadMessageLike[];
+  onTimeline: (event: TimelineEvent) => void;
+  onSlashCommand: (
+    command: string,
+    argument: string,
+    threadId: string | null,
+  ) => Promise<string | null>;
+}) => {
+  const runtime = useCodexRuntime({
+    workspace,
+    model,
+    threadId,
+    initialMessages,
+    onTimelineEvent: onTimeline,
+    onSlashCommand,
+  });
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <Thread />
     </AssistantRuntimeProvider>
+  );
+};
+
+const CodexChat = ({ workspace, model }: { workspace: string; model?: string }) => {
+  const [sessions, setSessions] = useState<CodexThreadSummary[]>([]);
+  const [selected, setSelected] = useState<ActiveCodexSession>(() => emptyCodexSession(workspace));
+  const [timeline, setTimeline] = useState<TimelineItem[]>([]);
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [commandQuery, setCommandQuery] = useState("");
+  const [commandInfo, setCommandInfo] = useState("");
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [chatError, setChatError] = useState("");
+
+  const refresh = useCallback(async () => {
+    const next = await window.codex.listThreads({ cwd: workspace });
+    setSessions(next);
+  }, [workspace]);
+
+  useEffect(() => {
+    setSelected(emptyCodexSession(workspace));
+    setTimeline([]);
+    setChatError("");
+    void refresh().catch(() => setSessions([]));
+  }, [workspace, refresh]);
+
+  const start = async (isolated = false) => {
+    const execution = isolated
+      ? await window.codex.createWorktree({
+          cwd: workspace,
+          key: `chat-${Date.now().toString(36)}`,
+        })
+      : { path: workspace };
+    setSelected(emptyCodexSession(execution.path));
+    setTimeline([]);
+    setChatError("");
+    setCommandOpen(false);
+  };
+
+  const reportChatError = (error: unknown) =>
+    setChatError(error instanceof Error ? error.message : String(error));
+
+  const select = async (thread: CodexThreadSummary) => {
+    try {
+      const detail = await window.codex.readThread({ threadId: thread.id });
+      setSelected({
+        id: thread.id,
+        cwd: detail.cwd || thread.cwd || workspace,
+        runtimeKey: `thread:${thread.id}:${Date.now()}`,
+        initialMessages: threadHistoryMessages(detail.turns),
+      });
+      setTimeline(readTimeline(thread.id));
+      setChatError("");
+    } catch (error) {
+      setChatError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const archiveCurrent = async (threadId = selected.id) => {
+    if (!threadId) throw new Error("当前还没有可归档的会话。");
+    await window.codex.archiveThread({ threadId });
+    if (selected.id === threadId) {
+      setSelected(emptyCodexSession(workspace));
+      setTimeline([]);
+    }
+    await refresh();
+  };
+
+  const deleteCurrent = async () => {
+    if (!selected.id) return;
+    await window.codex.deleteThread({ threadId: selected.id });
+    localStorage.removeItem(timelineStorageKey(selected.id));
+    setSelected(emptyCodexSession(workspace));
+    setTimeline([]);
+    setDeleteOpen(false);
+    await refresh();
+  };
+
+  const renameCurrent = async () => {
+    if (!selected.id || !renameValue.trim()) return;
+    await window.codex.renameThread({ threadId: selected.id, name: renameValue.trim() });
+    setRenameOpen(false);
+    await refresh();
+  };
+
+  const forkCurrent = async () => {
+    if (!selected.id) throw new Error("请先选择一个会话。");
+    const forked = await window.codex.forkThread({ threadId: selected.id });
+    const detail = await window.codex.resumeThread({ threadId: forked.threadId });
+    setSelected({
+      id: detail.id,
+      cwd: detail.cwd || selected.cwd,
+      runtimeKey: `thread:${detail.id}:${Date.now()}`,
+      initialMessages: threadHistoryMessages(detail.turns),
+    });
+    setTimeline([]);
+    await refresh();
+  };
+
+  const runCommand = async (command: string, argument = "", deferNavigation = false) => {
+    setCommandInfo("");
+    setChatError("");
+    const navigate = (action: () => Promise<void>) => {
+      setTimeout(() => void action().catch(reportChatError), 0);
+    };
+    try {
+      if (command === "new") {
+        if (deferNavigation) {
+          navigate(() => start());
+          return "正在创建新的本地会话。";
+        }
+        await start();
+        return "已创建新的本地会话。";
+      }
+      if (command === "worktree") {
+        if (deferNavigation) {
+          navigate(() => start(true));
+          return "正在创建隔离 Worktree 会话。";
+        }
+        await start(true);
+        return "已创建隔离 Worktree 会话。";
+      }
+      if (command === "status") {
+        return selected.id
+          ? `当前会话：${selected.id}\n工作目录：${selected.cwd}\n时间线事件：${timeline.length}`
+          : `尚未开始会话。\n工作目录：${selected.cwd}`;
+      }
+      if (command === "rename") {
+        if (!selected.id) return "请先开始或选择一个会话。";
+        if (!argument) {
+          setRenameValue(sessions.find((thread) => thread.id === selected.id)?.name ?? "");
+          setRenameOpen(true);
+          return "请在重命名窗口中输入新名称。";
+        }
+        await window.codex.renameThread({ threadId: selected.id, name: argument });
+        await refresh();
+        return `会话已重命名为“${argument}”。`;
+      }
+      if (command === "archive") {
+        if (deferNavigation) {
+          navigate(() => archiveCurrent());
+          return "正在归档当前会话。";
+        }
+        await archiveCurrent();
+        return "会话已归档。";
+      }
+      if (command === "delete") {
+        setDeleteOpen(true);
+        return "请在确认窗口中删除会话。";
+      }
+      if (command === "fork") {
+        if (deferNavigation) {
+          navigate(() => forkCurrent());
+          return "正在从当前上下文创建分支会话。";
+        }
+        await forkCurrent();
+        return "已从当前上下文创建分支会话。";
+      }
+      if (command === "compact") {
+        if (!selected.id) return "请先开始或选择一个会话。";
+        await window.codex.compactThread({ threadId: selected.id });
+        return "已请求 Codex 压缩当前会话上下文。";
+      }
+      if (command === "skills") {
+        const skills = await window.codex.listSkills({ cwd: selected.cwd });
+        return skills.length
+          ? `当前可用 Skills：\n${skills.map((skill) => `- ${skill.name}${skill.enabled ? "" : "（已禁用）"}`).join("\n")}`
+          : "当前目录没有可用 Skill。";
+      }
+      if (command === "mcp") {
+        const servers = await window.codex.listMcpServers({
+          threadId: selected.id ?? undefined,
+        });
+        return servers.length
+          ? `MCP Servers：\n${servers.map((server) => `- ${String(server.name ?? "unknown")}：${String(server.runtimeStatus ?? server.authStatus ?? "configured")}`).join("\n")}`
+          : "当前没有配置 MCP Server。";
+      }
+      return null;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setChatError(message);
+      return `命令执行失败：${message}`;
+    }
+  };
+
+  const commands = [
+    ["new", "新建本地会话"],
+    ["worktree", "新建隔离会话"],
+    ["status", "查看当前状态"],
+    ["rename", "重命名会话"],
+    ["fork", "创建分支会话"],
+    ["compact", "压缩上下文"],
+    ["skills", "查看可用 Skills"],
+    ["mcp", "查看 MCP 状态"],
+    ["archive", "归档当前会话"],
+    ["delete", "删除当前会话"],
+  ] as const;
+  const visibleCommands = commands.filter(([command, label]) =>
+    `${command} ${label}`.toLocaleLowerCase().includes(commandQuery.toLocaleLowerCase()),
+  );
+
+  return (
+    <div className="grid h-full min-h-0 min-w-0 grid-cols-[224px_minmax(0,1fr)] overflow-hidden xl:grid-cols-[224px_minmax(0,1fr)_256px]">
+      <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-border bg-secondary/35">
+        <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-3">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-[10px] font-semibold tracking-wider text-muted-foreground">
+              SESSIONS
+            </span>
+            <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">
+              {sessions.length}
+            </span>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            onClick={() => void start().catch(reportChatError)}
+            aria-label="新建会话"
+          >
+            <PlusIcon />
+          </Button>
+        </div>
+        <div className="flex shrink-0 flex-col gap-1 border-b border-border/70 p-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void start().catch(reportChatError)}
+            className="justify-start text-xs"
+          >
+            <PlusIcon data-icon="inline-start" /> 新建本地会话
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => void start(true).catch(reportChatError)}
+            className="justify-start text-xs"
+          >
+            <WorkflowIcon data-icon="inline-start" /> 新建隔离会话
+          </Button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-2">
+          {sessions.map((thread) => (
+            <div
+              key={thread.id}
+              className={`group mb-1 flex items-center gap-1 rounded-lg border transition-colors ${
+                selected.id === thread.id
+                  ? "border-border bg-card shadow-[var(--shadow-down-1)]"
+                  : "border-transparent hover:bg-accent"
+              }`}
+            >
+              <button
+                type="button"
+                onClick={() => void select(thread)}
+                className="min-w-0 flex-1 px-2.5 py-2 text-left"
+              >
+                <div className="truncate text-xs font-medium text-foreground">{thread.name}</div>
+                <div className="mt-1 flex min-w-0 items-center gap-1.5 font-mono text-[9px] text-muted-foreground">
+                  <span className="truncate">{shortPath(thread.cwd || workspace)}</span>
+                  {thread.cwd && thread.cwd !== workspace && (
+                    <span className="shrink-0 rounded bg-muted px-1 py-px">worktree</span>
+                  )}
+                </div>
+              </button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                onClick={() =>
+                  void archiveCurrent(thread.id).catch((error) => setChatError(String(error)))
+                }
+                className="mr-1 opacity-0 group-hover:opacity-100"
+                aria-label="归档会话"
+              >
+                <ArchiveIcon />
+              </Button>
+            </div>
+          ))}
+          {!sessions.length && (
+            <p className="px-2 py-5 text-center text-[11px] text-muted-foreground">还没有会话</p>
+          )}
+        </div>
+      </aside>
+      <section className="relative flex min-h-0 min-w-0 flex-col overflow-hidden">
+        <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-4">
+          <div className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
+            {selected.cwd}
+          </div>
+          <Dialog open={commandOpen} onOpenChange={setCommandOpen}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setCommandOpen((open) => !open)}
+              className="text-xs"
+            >
+              <CommandIcon data-icon="inline-start" /> 命令
+            </Button>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Codex 命令</DialogTitle>
+                <DialogDescription>
+                  可点击执行，也可以直接在消息框输入对应的斜杠命令。
+                </DialogDescription>
+              </DialogHeader>
+              <Input
+                value={commandQuery}
+                onChange={(event) => setCommandQuery(event.target.value)}
+                placeholder="搜索命令…"
+                autoFocus
+              />
+              <div className="flex max-h-80 flex-col gap-1 overflow-y-auto">
+                {visibleCommands.map(([command, label]) => (
+                  <Button
+                    key={command}
+                    type="button"
+                    variant={command === "delete" ? "destructive" : "ghost"}
+                    onClick={() => {
+                      void runCommand(command).then((message) => {
+                        if (message) setCommandInfo(message);
+                        if (!["status", "skills", "mcp"].includes(command)) setCommandOpen(false);
+                      });
+                    }}
+                    className="justify-between"
+                  >
+                    <span>{label}</span>
+                    <code className="text-[10px] opacity-70">/{command}</code>
+                  </Button>
+                ))}
+              </div>
+              {commandInfo && (
+                <pre className="max-h-40 overflow-auto rounded-lg bg-muted p-3 text-[11px] whitespace-pre-wrap">
+                  {commandInfo}
+                </pre>
+              )}
+            </DialogContent>
+          </Dialog>
+        </div>
+        {chatError && (
+          <div className="border-b border-destructive/20 bg-destructive/5 px-4 py-2 text-xs text-destructive">
+            {chatError}
+          </div>
+        )}
+        <div className="min-h-0 flex-1">
+          <CodexAttachmentProvider key={selected.runtimeKey} cwd={selected.cwd}>
+            <CodexChatThread
+              key={selected.runtimeKey}
+              workspace={selected.cwd}
+              model={model}
+              threadId={selected.id}
+              initialMessages={selected.initialMessages}
+              onSlashCommand={(command, argument) => runCommand(command, argument, true)}
+              onTimeline={(event) => {
+                if (event.threadId && !selected.id) {
+                  setSelected((current) =>
+                    current.id ? current : { ...current, id: event.threadId ?? null },
+                  );
+                  void refresh();
+                }
+                const threadId = event.threadId ?? selected.id;
+                const { threadId: _threadId, ...timelineEvent } = event;
+                setTimeline((current) => {
+                  const existing = current.findIndex((item) => item.id === timelineEvent.id);
+                  const nextTimeline =
+                    existing < 0
+                      ? [...current, timelineEvent].slice(-200)
+                      : current.map((item, index) => (index === existing ? timelineEvent : item));
+                  if (threadId) {
+                    localStorage.setItem(
+                      timelineStorageKey(threadId),
+                      JSON.stringify(nextTimeline),
+                    );
+                  }
+                  return nextTimeline;
+                });
+              }}
+            />
+          </CodexAttachmentProvider>
+        </div>
+      </section>
+      <aside className="hidden min-h-0 min-w-0 flex-col overflow-hidden border-l border-border bg-secondary/25 xl:flex">
+        <div className="shrink-0 border-b border-border px-3 py-3">
+          <div className="font-mono text-[10px] font-semibold tracking-wider text-muted-foreground">
+            RUN TIMELINE
+          </div>
+          <p className="mt-1 text-[10px] text-muted-foreground">实时记录 Codex 工具与结果</p>
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3">
+          {timeline.map((event) => (
+            <div key={event.id} className="border-l-2 border-primary/30 pl-2">
+              <div className="text-[11px] font-medium text-foreground">{event.title}</div>
+              <div className="font-mono text-[9px] text-muted-foreground">
+                {new Date(event.at).toLocaleTimeString("zh-CN", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  second: "2-digit",
+                })}
+              </div>
+              {event.detail && (
+                <p className="mt-0.5 line-clamp-4 whitespace-pre-wrap font-mono text-[10px] text-muted-foreground">
+                  {event.detail}
+                </p>
+              )}
+            </div>
+          ))}
+          {!timeline.length && (
+            <p className="text-[11px] text-muted-foreground">
+              执行后将在这里显示思考摘要、命令、工具与完成状态。
+            </p>
+          )}
+        </div>
+      </aside>
+      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>重命名会话</DialogTitle>
+            <DialogDescription>设置一个便于识别的会话名称。</DialogDescription>
+          </DialogHeader>
+          <Input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenameOpen(false)}>
+              取消
+            </Button>
+            <Button
+              disabled={!renameValue.trim()}
+              onClick={() => void renameCurrent().catch(reportChatError)}
+            >
+              保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>删除会话</DialogTitle>
+            <DialogDescription>该操作会删除 Codex 会话记录，无法撤销。</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteOpen(false)}>
+              取消
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => void deleteCurrent().catch(reportChatError)}
+            >
+              确认删除
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 };
 
@@ -819,6 +1415,16 @@ const ApprovalCard = ({
 const AuthenticatedApp = () => {
   const [status, setStatus] = useState<CodexStatus>(emptyStatus);
   const [workspace, setWorkspace] = useState(() => localStorage.getItem("codex.workspace") ?? "");
+  const [projects, setProjects] = useState<string[]>(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem("codex.projects") ?? "[]");
+      return Array.isArray(stored)
+        ? stored.filter((item): item is string => typeof item === "string")
+        : [];
+    } catch {
+      return [];
+    }
+  });
   const [selectedModel, setSelectedModel] = useState("");
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -833,6 +1439,17 @@ const AuthenticatedApp = () => {
   const changeMode = (next: TeamView | "solo") => {
     setMode(next);
     localStorage.setItem("codex.chat-mode", next);
+  };
+
+  const rememberProject = (path: string) => {
+    localStorage.setItem("codex.workspace", path);
+    setProjects((current) => {
+      const next = [path, ...current.filter((item) => item !== path)].slice(0, 12);
+      localStorage.setItem("codex.projects", JSON.stringify(next));
+      return next;
+    });
+    setWorkspace(path);
+    setApprovals([]);
   };
 
   const changeTheme = (next: AppearanceTheme) => {
@@ -867,6 +1484,14 @@ const AuthenticatedApp = () => {
       setWorkspace((current) => {
         if (current || !next.defaultWorkspace) return current;
         localStorage.setItem("codex.workspace", next.defaultWorkspace);
+        setProjects((projects) => {
+          const updated = [
+            next.defaultWorkspace,
+            ...projects.filter((project) => project !== next.defaultWorkspace),
+          ].slice(0, 12);
+          localStorage.setItem("codex.projects", JSON.stringify(updated));
+          return updated;
+        });
         return next.defaultWorkspace;
       });
       setSelectedModel(
@@ -929,9 +1554,7 @@ const AuthenticatedApp = () => {
   const chooseWorkspace = async () => {
     const selected = await window.codex.chooseWorkspace();
     if (!selected) return;
-    localStorage.setItem("codex.workspace", selected);
-    setWorkspace(selected);
-    setApprovals([]);
+    rememberProject(selected);
   };
 
   const resolveApproval = async (approval: ApprovalRequest, decision: ApprovalDecision) => {
@@ -1032,6 +1655,24 @@ const AuthenticatedApp = () => {
                 </div>
               </div>
             </button>
+            {!!projects.filter((project) => project !== workspace).length && (
+              <div className="mt-1.5 flex flex-col gap-0.5">
+                {projects
+                  .filter((project) => project !== workspace)
+                  .slice(0, 4)
+                  .map((project) => (
+                    <button
+                      key={project}
+                      type="button"
+                      onClick={() => rememberProject(project)}
+                      className="flex min-w-0 items-center gap-2 rounded px-2 py-1 text-left text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
+                    >
+                      <FolderIcon className="size-3 shrink-0" />
+                      <span className="truncate">{shortPath(project)}</span>
+                    </button>
+                  ))}
+              </div>
+            )}
           </section>
 
           <section>
@@ -1126,7 +1767,7 @@ const AuthenticatedApp = () => {
         </div>
       </aside>
 
-      <main className="relative min-w-0 flex-1 bg-background">
+      <main className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-background">
         {mode === "solo" && (
           <header className="app-titlebar electron-drag relative z-10 flex h-12 items-center justify-between border-b border-border px-4">
             <div className="flex items-center gap-2 font-mono text-xs text-foreground">
@@ -1147,7 +1788,7 @@ const AuthenticatedApp = () => {
           </header>
         )}
 
-        <div className={`relative ${mode !== "solo" ? "h-full" : "h-[calc(100%-4rem)]"}`}>
+        <div className="relative min-h-0 flex-1 overflow-hidden">
           {ready ? (
             mode !== "solo" ? (
               <TeamChat

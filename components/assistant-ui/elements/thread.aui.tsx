@@ -14,6 +14,7 @@ import {
   MessagePrimitive,
   SuggestionPrimitive,
   ThreadPrimitive,
+  useAui,
   useAuiState,
 } from "@assistant-ui/react";
 import {
@@ -24,6 +25,7 @@ import {
   ChevronRightIcon,
   CopyIcon,
   DownloadIcon,
+  PaperclipIcon,
   MicIcon,
   MoreHorizontalIcon,
   PencilIcon,
@@ -31,6 +33,7 @@ import {
   SquareIcon,
 } from "lucide-react";
 import type { FC } from "react";
+import { useCodexAttachments } from "@/src/renderer/src/codex-attachments";
 
 // Startup exposes a loading placeholder thread; treat it as a new chat so
 // the composer mounts centered. Loads after startup keep the docked layout.
@@ -84,7 +87,7 @@ export const Thread: FC<ThreadProps> = ({
 
   return (
     <ThreadPrimitive.Root
-      className="aui-root aui-thread-root @container flex h-full flex-col bg-transparent"
+      className="aui-root aui-thread-root @container flex h-full min-h-0 flex-col overflow-hidden bg-transparent"
       style={{
         ["--thread-max-width" as string]: "48rem",
         ["--composer-bg" as string]: "var(--card)",
@@ -95,12 +98,12 @@ export const Thread: FC<ThreadProps> = ({
       <ThreadPrimitive.Viewport
         turnAnchor="top"
         data-slot="aui_thread-viewport"
-        className="relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth"
+        className="relative min-h-0 flex-1 overflow-x-hidden overflow-y-auto scroll-smooth"
       >
         <div
           className={cn(
-            "mx-auto flex w-full max-w-(--thread-max-width) flex-1 flex-col px-4 pt-4",
-            isEmpty && "justify-center",
+            "mx-auto flex min-h-full w-full max-w-(--thread-max-width) flex-col px-5 pt-5",
+            isEmpty && "justify-center py-8",
           )}
         >
           <AuiIf condition={isNewChatView}>
@@ -200,6 +203,7 @@ const ThreadSuggestionItem: FC = () => {
 };
 
 const Composer: FC<Pick<ThreadProps, "placeholder">> = ({ placeholder }) => {
+  const { attachments, remove } = useCodexAttachments();
   return (
     <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
       <div
@@ -213,6 +217,22 @@ const Composer: FC<Pick<ThreadProps, "placeholder">> = ({ placeholder }) => {
           autoFocus
           aria-label="消息输入框"
         />
+        {!!attachments.length && (
+          <div className="flex flex-wrap gap-1 px-2">
+            {attachments.map((attachment) => (
+              <button
+                key={attachment.id}
+                type="button"
+                onClick={() => remove(attachment.id)}
+                className="flex max-w-48 items-center gap-1 rounded-md border border-border bg-muted px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
+                title="点击移除附件"
+              >
+                <PaperclipIcon className="size-3" />
+                <span className="truncate">{attachment.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <ComposerAction />
       </div>
     </ComposerPrimitive.Root>
@@ -220,10 +240,30 @@ const Composer: FC<Pick<ThreadProps, "placeholder">> = ({ placeholder }) => {
 };
 
 const ComposerAction: FC = () => {
+  const { pick } = useCodexAttachments();
+  const aui = useAui();
   return (
     <div className="aui-composer-action-wrapper relative flex items-center justify-between">
       <span className="pl-2 text-[11px] text-muted-foreground">Enter 发送</span>
       <div className="flex items-center gap-1.5">
+        <TooltipIconButton
+          tooltip="选择文件"
+          side="bottom"
+          type="button"
+          variant="ghost"
+          size="icon"
+          onClick={() => {
+            void pick().then((picked) => {
+              if (picked.length && !aui.composer.getState().text.trim()) {
+                aui.composer.setText("请查看并处理这些附件。");
+              }
+            });
+          }}
+          className="text-muted-foreground hover:text-foreground size-7 rounded-full"
+          aria-label="选择文件"
+        >
+          <PaperclipIcon className="size-4" />
+        </TooltipIconButton>
         <AuiIf condition={(s) => s.thread.capabilities.dictation}>
           <AuiIf condition={(s) => s.composer.dictation == null}>
             <ComposerPrimitive.Dictate asChild>
@@ -405,11 +445,11 @@ const UserMessage: FC = () => {
   return (
     <MessagePrimitive.Root
       data-slot="aui_user-message-root"
-      className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto] [&:where(>*)]:col-start-2"
+      className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_minmax(0,40rem)] content-start gap-y-2 px-2 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto] [&:where(>*)]:col-start-2"
       data-role="user"
     >
-      <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
-        <div className="aui-user-message-content peer rounded-xl rounded-tr-sm bg-primary px-4 py-2 text-primary-foreground wrap-break-word empty:hidden">
+      <div className="aui-user-message-content-wrapper relative col-start-2 flex min-w-0 justify-end">
+        <div className="aui-user-message-content peer max-w-full rounded-2xl rounded-br-md border border-border bg-muted/70 px-4 py-2.5 text-foreground shadow-[var(--shadow-down-1)] wrap-break-word empty:hidden">
           <MessagePrimitive.Parts />
         </div>
         <div className="aui-user-action-bar-wrapper absolute start-0 top-1/2 -translate-x-full -translate-y-1/2 pe-2 peer-empty:hidden rtl:translate-x-full">

@@ -13,7 +13,10 @@ import {
   MessageSquareMoreIcon,
   MoreHorizontalIcon,
   PauseIcon,
+  PaperclipIcon,
   PencilIcon,
+  PinIcon,
+  PinOffIcon,
   PlayIcon,
   PlusIcon,
   Repeat2Icon,
@@ -32,6 +35,13 @@ import remarkGfm from "remark-gfm";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -72,6 +82,7 @@ import type {
   TeamRoomSnapshot,
   TeamWorkspaceSnapshot,
 } from "../../shared/agent-team";
+import type { CodexAttachment } from "../../shared/codex";
 import { openImTransport, type OpenImConnectionState } from "./openim-transport";
 
 export type TeamView = "messages" | "contacts" | "tasks";
@@ -149,6 +160,33 @@ const emptyImConfig: ImPublicConfig = {
   hostRemoteMessages: false,
   hasUserToken: false,
   hasGatewaySecret: false,
+};
+
+type RoomListPreferences = {
+  pinnedRoomIds: string[];
+  hiddenRoomIds: string[];
+};
+
+const emptyRoomListPreferences: RoomListPreferences = {
+  pinnedRoomIds: [],
+  hiddenRoomIds: [],
+};
+
+const roomListPreferencesKey = (workspace: string) =>
+  `agent-team.room-list-preferences:${workspace}`;
+
+const readRoomListPreferences = (workspace: string): RoomListPreferences => {
+  try {
+    const stored = JSON.parse(
+      localStorage.getItem(roomListPreferencesKey(workspace)) ?? "{}",
+    ) as Partial<RoomListPreferences>;
+    return {
+      pinnedRoomIds: Array.isArray(stored.pinnedRoomIds) ? stored.pinnedRoomIds : [],
+      hiddenRoomIds: Array.isArray(stored.hiddenRoomIds) ? stored.hiddenRoomIds : [],
+    };
+  } catch {
+    return emptyRoomListPreferences;
+  }
 };
 
 const timeLabel = (timestamp: number) =>
@@ -253,7 +291,7 @@ const ConnectionBadge = ({ status }: { status: OpenImConnectionState }) => {
 };
 
 const MessageBody = ({ content }: { content: string }) => (
-  <div className="team-markdown min-w-0 text-xs leading-relaxed text-foreground">
+  <div className="team-markdown min-w-0 text-[13px] leading-6 text-foreground">
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{
@@ -262,7 +300,7 @@ const MessageBody = ({ content }: { content: string }) => (
             {...props}
             target="_blank"
             rel="noreferrer"
-            className="text-foreground underline underline-offset-4 hover:text-muted-foreground"
+            className="text-primary underline underline-offset-4 hover:text-primary/75"
           >
             {children}
           </a>
@@ -275,13 +313,13 @@ const MessageBody = ({ content }: { content: string }) => (
           ) : (
             <code
               {...props}
-              className="rounded border border-border bg-muted/70 px-1.5 py-0.5 font-mono text-[11px] text-foreground"
+              className="rounded-md border border-border bg-secondary px-1.5 py-0.5 font-mono text-[11px] text-foreground"
             >
               {children}
             </code>
           ),
         pre: ({ children }) => (
-          <pre className="my-2.5 overflow-x-auto rounded border border-border bg-muted/40 p-3 font-mono text-xs leading-5 text-foreground">
+          <pre className="my-3 overflow-x-auto rounded-lg border border-border bg-secondary/70 p-3.5 font-mono text-xs leading-5 text-foreground">
             {children}
           </pre>
         ),
@@ -328,13 +366,13 @@ const MessageRow = ({
 
   if (isUser) {
     return (
-      <article className="flex justify-end gap-2.5 py-2">
-        <div className="max-w-[min(46rem,82%)]">
+      <article className="flex justify-end gap-2.5 py-3">
+        <div className="max-w-[min(40rem,76%)]">
           <div className="mb-1 flex items-center justify-end gap-2 font-mono text-[10px] text-muted-foreground">
             <span>{timeLabel(message.createdAt)}</span>
             <span className="font-semibold text-foreground">{message.senderName}</span>
           </div>
-          <div className="rounded-xl rounded-tr-sm bg-primary px-3.5 py-2.5 text-xs leading-relaxed whitespace-pre-wrap text-primary-foreground shadow-[var(--shadow-down-1)]">
+          <div className="rounded-2xl rounded-tr-md border border-primary/20 bg-primary/10 px-4 py-3 text-[13px] leading-6 whitespace-pre-wrap text-foreground shadow-[var(--shadow-down-1)]">
             {message.content}
           </div>
           {task && (
@@ -364,14 +402,14 @@ const MessageRow = ({
   }
 
   return (
-    <article className="group flex gap-2.5 py-2">
+    <article className="group flex gap-3 py-4">
       <div
-        className={`mt-4 grid size-7 shrink-0 place-items-center rounded-lg border font-mono text-[10px] font-semibold ${theme.avatar}`}
+        className={`mt-1 grid size-8 shrink-0 place-items-center rounded-xl border font-mono text-[10px] font-semibold ${theme.avatar}`}
       >
         {agent?.initials ?? "AI"}
       </div>
-      <div className="min-w-0 max-w-[min(48rem,85%)] flex-1">
-        <div className="mb-1 flex items-center gap-2 text-[10px]">
+      <div className="min-w-0 max-w-[min(48rem,82%)] flex-1">
+        <div className="mb-1.5 flex items-center gap-2 text-[10px]">
           <span className="font-semibold text-foreground">{message.senderName}</span>
           {agent && (
             <span className="rounded border border-border bg-muted/40 px-1 py-0.2 font-mono text-[9px] text-muted-foreground">
@@ -380,7 +418,7 @@ const MessageRow = ({
           )}
           <span className="font-mono text-muted-foreground">{timeLabel(message.createdAt)}</span>
         </div>
-        <div className="rounded-xl rounded-tl-sm border border-border bg-card px-3.5 py-2.5 text-xs shadow-[var(--shadow-down-1)]">
+        <div className="px-0.5 py-0.5">
           {message.content ? <MessageBody content={message.content} /> : null}
           {message.activity && (
             <div className="flex items-center gap-2 py-1 font-mono text-[11px] text-muted-foreground">
@@ -722,7 +760,7 @@ const AgentSettings = ({
                   key={agent.id}
                   type="button"
                   onClick={() => setActiveId(agent.id)}
-                  className={`flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left ${active?.id === agent.id ? "bg-primary text-primary-foreground shadow-[var(--shadow-down-1)]" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}
+                  className={`flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left ${active?.id === agent.id ? "bg-primary/10 text-primary ring-1 ring-primary/20" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}
                 >
                   <span
                     className={`grid size-7 place-items-center rounded-lg border text-[10px] ${themeClasses[agent.theme].avatar}`}
@@ -1963,7 +2001,12 @@ export const TeamChat = ({
 }) => {
   const [state, setState] = useState<TeamWorkspaceSnapshot | null>(null);
   const [selectedRoomId, setSelectedRoomId] = useState(LOCAL_ROOM_ID);
+  const [roomListPreferences, setRoomListPreferences] = useState<RoomListPreferences>(() =>
+    readRoomListPreferences(workspace),
+  );
   const [draft, setDraft] = useState("");
+  const [taskAttachments, setTaskAttachments] = useState<CodexAttachment[]>([]);
+  const taskAttachmentsRef = useRef<CodexAttachment[]>([]);
   const [agentAction, setAgentAction] = useState<AgentMessageAction>("chat");
   const [mention, setMention] = useState<{
     start: number;
@@ -1987,6 +2030,9 @@ export const TeamChat = ({
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => openImTransport.onStatus(setConnection), []);
+  useEffect(() => {
+    setRoomListPreferences(readRoomListPreferences(workspace));
+  }, [workspace]);
   useEffect(() => {
     let cancelled = false;
     void window.agentTeam
@@ -2235,7 +2281,26 @@ export const TeamChat = ({
   useEffect(() => {
     setAgentAction("chat");
     setMention(null);
+    const pendingAttachments = taskAttachmentsRef.current;
+    taskAttachmentsRef.current = [];
+    setTaskAttachments([]);
+    for (const attachment of pendingAttachments) {
+      void window.codex
+        .discardAttachment({ cwd: attachment.cwd ?? workspace, attachment })
+        .catch(() => undefined);
+    }
   }, [selectedRoomId]);
+  useEffect(
+    () => () => {
+      for (const attachment of taskAttachmentsRef.current) {
+        void window.codex
+          .discardAttachment({ cwd: attachment.cwd ?? workspace, attachment })
+          .catch(() => undefined);
+      }
+      taskAttachmentsRef.current = [];
+    },
+    [workspace],
+  );
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [room?.messages]);
@@ -2332,8 +2397,14 @@ export const TeamChat = ({
     }
   };
   const send = async () => {
-    const text = draft.trim();
-    if (!text || sending || !room) return;
+    const draftText = draft.trim();
+    if ((!draftText && !taskAttachments.length) || sending || !room) return;
+    const attachmentText = taskAttachments.length
+      ? `\n\n附加文件（已复制到当前 Task 工作目录，可直接读取）：\n${taskAttachments
+          .map((attachment) => `- ${attachment.relativePath ?? attachment.name}`)
+          .join("\n")}`
+      : "";
+    const text = `${draftText}${attachmentText}`.trim();
     if (room.type !== "direct" && agentAction === "propose-task" && !mentionedAgents.length) {
       setError("请先在消息中 @ 一个负责规划的 Agent。");
       return;
@@ -2341,6 +2412,8 @@ export const TeamChat = ({
     setSending(true);
     setError("");
     setDraft("");
+    taskAttachmentsRef.current = [];
+    setTaskAttachments([]);
     try {
       if (connection.state === "connected" && room.syncSource === "backend" && room.externalId) {
         const targetOpenimIds = roomAgents
@@ -2409,10 +2482,30 @@ export const TeamChat = ({
       setAgentAction("chat");
       setMention(null);
     } catch (nextError) {
-      setDraft(text);
+      setDraft(draftText);
+      setTaskAttachments((current) => {
+        const restored = current.length ? current : taskAttachments;
+        taskAttachmentsRef.current = restored;
+        return restored;
+      });
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
       setSending(false);
+    }
+  };
+  const pickTaskAttachments = async () => {
+    if (!task || room?.syncSource) return;
+    try {
+      setError("");
+      const cwd = task.worktree?.path ?? workspace;
+      const picked = await window.codex.pickAttachments({ cwd });
+      setTaskAttachments((current) => {
+        const next = [...current, ...picked];
+        taskAttachmentsRef.current = next;
+        return next;
+      });
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
     }
   };
   const updateTaskStatus = async (nextTask: AgentTask, status: TaskStatus) => {
@@ -2546,11 +2639,52 @@ export const TeamChat = ({
       />
     );
 
-  const conversations = [...state.rooms].sort((a, b) => {
-    const activityA = a.messages.at(-1)?.updatedAt ?? a.createdAt;
-    const activityB = b.messages.at(-1)?.updatedAt ?? b.createdAt;
-    return activityB - activityA;
-  });
+  const updateRoomListPreferences = (
+    updater: (current: RoomListPreferences) => RoomListPreferences,
+  ) => {
+    setRoomListPreferences((current) => {
+      const next = updater(current);
+      localStorage.setItem(roomListPreferencesKey(workspace), JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const toggleRoomPin = (roomId: string) => {
+    updateRoomListPreferences((current) => ({
+      ...current,
+      pinnedRoomIds: current.pinnedRoomIds.includes(roomId)
+        ? current.pinnedRoomIds.filter((id) => id !== roomId)
+        : [roomId, ...current.pinnedRoomIds.filter((id) => id !== roomId)],
+    }));
+  };
+
+  const hideConversation = (target: TeamRoomSnapshot) => {
+    if (!window.confirm(`从当前设备的消息列表中删除“${target.name}”？聊天记录不会被销毁。`)) {
+      return;
+    }
+    updateRoomListPreferences((current) => {
+      const hiddenRoomIds = [...new Set([...current.hiddenRoomIds, target.roomId])];
+      const pinnedRoomIds = current.pinnedRoomIds.filter((id) => id !== target.roomId);
+      if (selectedRoomId === target.roomId) {
+        const nextRoom = state.rooms.find(
+          (room) => room.roomId !== target.roomId && !hiddenRoomIds.includes(room.roomId),
+        );
+        if (nextRoom) setSelectedRoomId(nextRoom.roomId);
+      }
+      return { pinnedRoomIds, hiddenRoomIds };
+    });
+  };
+
+  const conversations = state.rooms
+    .filter((room) => !roomListPreferences.hiddenRoomIds.includes(room.roomId))
+    .sort((a, b) => {
+      const pinA = roomListPreferences.pinnedRoomIds.includes(a.roomId);
+      const pinB = roomListPreferences.pinnedRoomIds.includes(b.roomId);
+      if (pinA !== pinB) return pinA ? -1 : 1;
+      const activityA = a.messages.at(-1)?.updatedAt ?? a.createdAt;
+      const activityB = b.messages.at(-1)?.updatedAt ?? b.createdAt;
+      return activityB - activityA;
+    });
   return (
     <div className="relative flex h-full min-h-0">
       <aside className="flex w-56 shrink-0 flex-col border-r border-border bg-secondary/60">
@@ -2585,66 +2719,100 @@ export const TeamChat = ({
                 (candidate) => candidate.id === item.directPrincipalId,
               );
               const isSelected = room?.roomId === item.roomId;
+              const isPinned = roomListPreferences.pinnedRoomIds.includes(item.roomId);
+              const isTaskRoom = item.type === "task";
+              const isGroupRoom = item.type === "group";
+              const kind = isTaskRoom
+                ? {
+                    label: "任务",
+                    icon: <FolderKanbanIcon className="size-3.5" />,
+                    tone: "border-warning/30 bg-warning/10 text-warning",
+                  }
+                : isGroupRoom
+                  ? {
+                      label: "群聊",
+                      icon: <UsersIcon className="size-3.5" />,
+                      tone: "border-info/30 bg-info/10 text-info",
+                    }
+                  : itemAgent
+                    ? {
+                        label: "Agent",
+                        icon: <BotIcon className="size-3.5" />,
+                        tone: "border-primary/30 bg-primary/10 text-primary",
+                      }
+                    : {
+                        label: "私聊",
+                        icon: <MessageSquareMoreIcon className="size-3.5" />,
+                        tone: "border-border bg-card text-muted-foreground",
+                      };
               return (
-                <button
-                  key={item.roomId}
-                  type="button"
-                  onClick={() => setSelectedRoomId(item.roomId)}
-                  className={`flex w-full items-center gap-2.5 rounded px-2 py-2 text-left transition ${
-                    isSelected
-                      ? "bg-primary text-primary-foreground shadow-[var(--shadow-down-1)] font-medium"
-                      : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                  }`}
-                >
-                  <span
-                    className={`grid size-6 shrink-0 place-items-center rounded border text-xs ${
-                      isSelected
-                        ? "border-primary-foreground/30 bg-primary-foreground/10 text-primary-foreground"
-                        : "border-border bg-card text-muted-foreground"
-                    }`}
-                  >
-                    {item.type === "task" ? (
-                      <FolderKanbanIcon className="size-3" />
-                    ) : item.type === "direct" ? (
-                      itemAgent ? (
-                        <BotIcon className="size-3" />
-                      ) : (
-                        <MessageSquareMoreIcon className="size-3" />
-                      )
-                    ) : (
-                      <UsersIcon className="size-3" />
-                    )}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span
-                      className={`block truncate text-xs ${isSelected ? "text-primary-foreground" : "text-foreground"}`}
+                <ContextMenu key={item.roomId}>
+                  <ContextMenuTrigger>
+                    <button
+                      key={item.roomId}
+                      type="button"
+                      onClick={() => setSelectedRoomId(item.roomId)}
+                      className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-left transition ${
+                        isSelected
+                          ? "bg-primary/10 text-foreground ring-1 ring-primary/20 font-medium"
+                          : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                      }`}
                     >
-                      {item.name}
-                    </span>
-                    <span
-                      className={`mt-0.5 block truncate font-mono text-[10px] ${isSelected ? "text-primary-foreground/70" : "text-muted-foreground"}`}
-                    >
-                      {item.type === "task" && itemTask ? (
-                        <StatusPill status={itemTask.status} />
-                      ) : item.type === "direct" ? (
-                        itemAgent ? (
-                          "agent"
-                        ) : (
-                          "direct"
-                        )
+                      <span
+                        className={`grid size-8 shrink-0 place-items-center rounded-lg border ${kind.tone}`}
+                      >
+                        {kind.icon}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-xs text-foreground">{item.name}</span>
+                        <span className="mt-1 flex min-w-0 items-center gap-1.5 font-mono text-[10px] text-muted-foreground">
+                          {isTaskRoom && itemTask ? (
+                            <StatusPill status={itemTask.status} />
+                          ) : item.type === "direct" ? (
+                            itemAgent ? (
+                              <span className="truncate">{itemAgent.title}</span>
+                            ) : (
+                              <span>一对一对话</span>
+                            )
+                          ) : (
+                            <span>{item.agentIds.length + item.humanIds.length} 位成员</span>
+                          )}
+                        </span>
+                      </span>
+                      <span className="flex w-11 shrink-0 flex-col items-end gap-1">
+                        <span
+                          className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-medium ${kind.tone}`}
+                        >
+                          {isPinned && <PinIcon className="size-2.5" />}
+                          {kind.label}
+                        </span>
+                        <span className="h-3 font-mono text-[9px] text-muted-foreground/70">
+                          {item.messages.length > 0
+                            ? timeLabel(item.messages.at(-1)?.updatedAt ?? item.createdAt)
+                            : null}
+                        </span>
+                      </span>
+                    </button>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent>
+                    <ContextMenuItem onClick={() => toggleRoomPin(item.roomId)}>
+                      {isPinned ? (
+                        <PinOffIcon className="size-3.5" />
                       ) : (
-                        `${item.agentIds.length + item.humanIds.length} members`
+                        <PinIcon className="size-3.5" />
                       )}
-                    </span>
-                  </span>
-                  {item.messages.length > 0 && (
-                    <span
-                      className={`shrink-0 font-mono text-[9px] ${isSelected ? "text-primary-foreground/70" : "text-muted-foreground/70"}`}
+                      {isPinned ? "取消置顶" : "置顶会话"}
+                    </ContextMenuItem>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem
+                      onClick={() => hideConversation(item)}
+                      className="text-destructive focus:bg-destructive/10 focus:text-destructive"
                     >
-                      {timeLabel(item.messages.at(-1)?.updatedAt ?? item.createdAt)}
-                    </span>
-                  )}
-                </button>
+                      <Trash2Icon className="size-3.5" />
+                      删除会话
+                    </ContextMenuItem>
+                  </ContextMenuContent>
+                </ContextMenu>
               );
             })}
           </div>
@@ -2836,6 +3004,43 @@ export const TeamChat = ({
                     </span>
                   )}
                 </div>
+                {!!task.runs.length && (
+                  <details className="mt-3 rounded-lg border border-border bg-secondary/45 px-3 py-2">
+                    <summary className="cursor-pointer text-[11px] font-medium text-foreground">
+                      Codex 运行过程 · {task.runs.length} runs
+                    </summary>
+                    <div className="mt-2 flex max-h-44 flex-col gap-2 overflow-y-auto">
+                      {task.runs
+                        .slice()
+                        .reverse()
+                        .map((run) => (
+                          <div key={run.id} className="border-l-2 border-primary/30 pl-2">
+                            <div className="flex items-center justify-between gap-2 font-mono text-[10px] text-muted-foreground">
+                              <span>
+                                {state.agents.find((agent) => agent.id === run.agentId)?.name ??
+                                  run.agentId}
+                              </span>
+                              <span>{run.status}</span>
+                            </div>
+                            {run.executionCwd && (
+                              <p className="mt-0.5 truncate font-mono text-[9px] text-muted-foreground">
+                                {run.executionCwd}
+                              </p>
+                            )}
+                            {(run.timeline ?? []).map((event) => (
+                              <div
+                                key={event.id}
+                                className="mt-1 text-[10px] text-muted-foreground"
+                              >
+                                <span className="font-medium text-foreground">{event.title}</span>
+                                {event.detail ? ` · ${event.detail.slice(0, 180)}` : ""}
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+                    </div>
+                  </details>
+                )}
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
                 {(task.status === "pending_review" || task.status === "changes_requested") && (
@@ -2882,8 +3087,8 @@ export const TeamChat = ({
             </div>
           </div>
         )}
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-          <div className="mx-auto max-w-4xl">
+        <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
+          <div className="mx-auto max-w-[52rem]">
             {!room?.messages.length && (
               <div className="grid min-h-[46vh] place-items-center text-center">
                 <div className="max-w-md">
@@ -2927,18 +3132,18 @@ export const TeamChat = ({
           </div>
         </div>
         <footer className="app-titlebar shrink-0 border-t border-border px-6 py-4">
-          <div className="mx-auto max-w-4xl">
+          <div className="mx-auto max-w-[52rem]">
             {room?.type === "direct" ? (
               <div className="mb-2 text-[10px] text-muted-foreground">
                 {directAgent ? "Agent 会在当前私聊中自动回复" : "好友私聊"}
               </div>
             ) : (
-              <div className="mb-2 flex items-center justify-between gap-3">
+              <div className="mb-3 flex items-center justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-2 text-[10px] text-muted-foreground">
                   <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
                     @
                   </Badge>
-                  <span>在消息栏输入 @ 选择 Agent，可连续提及多个</span>
+                  <span>输入 @ 即可提及 Agent</span>
                   {!!mentionedAgents.length && (
                     <span className="truncate text-primary">
                       将通知：{mentionedAgents.map((agent) => agent.name).join("、")}
@@ -2971,7 +3176,38 @@ export const TeamChat = ({
                 </div>
               </div>
             )}
-            <div className="relative rounded-xl border border-input bg-card p-2 shadow-[var(--shadow-down-1)] transition-colors focus-within:border-primary focus-within:ring-3 focus-within:ring-primary/15">
+            <div className="relative rounded-2xl border border-input bg-card p-2.5 shadow-[var(--shadow-down-1)] transition-colors focus-within:border-primary focus-within:ring-3 focus-within:ring-primary/15">
+              {!!taskAttachments.length && (
+                <div className="mb-2 flex flex-wrap gap-1.5 px-2">
+                  {taskAttachments.map((attachment) => (
+                    <button
+                      key={attachment.id}
+                      type="button"
+                      onClick={() => {
+                        setTaskAttachments((current) => {
+                          const next = current.filter(
+                            (candidate) => candidate.id !== attachment.id,
+                          );
+                          taskAttachmentsRef.current = next;
+                          return next;
+                        });
+                        void window.codex
+                          .discardAttachment({
+                            cwd: attachment.cwd ?? task?.worktree?.path ?? workspace,
+                            attachment,
+                          })
+                          .catch(() => undefined);
+                      }}
+                      className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-muted/50 px-1.5 py-1 text-[10px] text-muted-foreground hover:bg-muted"
+                      title="移除附件"
+                    >
+                      <PaperclipIcon className="size-3 shrink-0" />
+                      <span className="max-w-48 truncate">{attachment.name}</span>
+                      <XIcon className="size-3 shrink-0" />
+                    </button>
+                  ))}
+                </div>
+              )}
               {mention && (
                 <div className="absolute bottom-full left-0 z-30 mb-2 w-72 overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-[var(--shadow-down-3)]">
                   <div className="px-2 py-1.5 text-[10px] font-medium tracking-[0.12em] text-muted-foreground uppercase">
@@ -3064,7 +3300,7 @@ export const TeamChat = ({
                     void send();
                   }
                 }}
-                rows={2}
+                rows={3}
                 placeholder={
                   room?.type === "group"
                     ? agentAction === "propose-task"
@@ -3076,40 +3312,51 @@ export const TeamChat = ({
                         : "讨论任务细节；消息会更新上下文，但不会立即执行…"
                       : `给 ${room?.name ?? "联系人"} 发消息…`
                 }
-                className="w-full resize-none bg-transparent px-2 py-1 text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground"
+                className="w-full resize-none bg-transparent px-2 py-1.5 text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground"
               />
               <div className="flex items-center justify-between px-2 pb-1">
                 <span className="text-[10px] text-muted-foreground">
                   {room?.type === "direct"
-                    ? directAgent
-                      ? "连续 Agent 会话，不创建 Task"
-                      : "一对一好友消息"
+                    ? "Enter 发送 · Shift + Enter 换行"
                     : agentAction === "propose-task"
                       ? mentionedAgents.length
-                        ? "Agent 只生成或修改 Task 草案；人工审核后才能开始执行"
-                        : "请先在消息中 @ 一个负责规划的 Agent"
+                        ? "草案需经人工审核后才能执行"
+                        : "请先 @ 一个负责规划的 Agent"
                       : mentionedAgents.length
-                        ? "Agent 在当前会话回复；不会创建或启动 Task"
-                        : "输入 @ 提及 Agent；未提及时只发送普通消息"}
+                        ? "将在当前会话回复"
+                        : "Enter 发送 · Shift + Enter 换行"}
                 </span>
-                <Button
-                  type="button"
-                  size="icon-xs"
-                  disabled={
-                    sending ||
-                    !draft.trim() ||
-                    (room?.type !== "direct" &&
-                      agentAction === "propose-task" &&
-                      !mentionedAgents.length)
-                  }
-                  onClick={() => void send()}
-                >
-                  {sending ? (
-                    <LoaderCircleIcon className="size-4 animate-spin" />
-                  ) : (
-                    <SendIcon className="size-3.5" />
+                <div className="flex items-center gap-1">
+                  {room?.type === "task" && !room.syncSource && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      onClick={() => void pickTaskAttachments()}
+                      title="选择文件"
+                    >
+                      <PaperclipIcon className="size-3.5" />
+                    </Button>
                   )}
-                </Button>
+                  <Button
+                    type="button"
+                    size="icon-xs"
+                    disabled={
+                      sending ||
+                      (!draft.trim() && !taskAttachments.length) ||
+                      (room?.type !== "direct" &&
+                        agentAction === "propose-task" &&
+                        !mentionedAgents.length)
+                    }
+                    onClick={() => void send()}
+                  >
+                    {sending ? (
+                      <LoaderCircleIcon className="size-4 animate-spin" />
+                    ) : (
+                      <SendIcon className="size-3.5" />
+                    )}
+                  </Button>
+                </div>
               </div>
             </div>
             {error && <p className="mt-2 text-[11px] text-destructive">{error}</p>}

@@ -247,3 +247,61 @@ input {
   background: var(--surface-subtle);
   border-color: var(--border);
 }
+
+.team-markdown > :first-child {
+  margin-top: 0;
+}
+
+.team-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.team-markdown p {
+  margin: 0.7rem 0;
+}
+
+.team-markdown h1,
+.team-markdown h2,
+.team-markdown h3 {
+  margin: 1.25rem 0 0.55rem;
+  color: var(--foreground);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.team-markdown h1 {
+  font-size: 1.125rem;
+}
+
+.team-markdown h2 {
+  font-size: 1rem;
+}
+
+.team-markdown h3 {
+  font-size: 0.875rem;
+}
+
+.team-markdown ul,
+.team-markdown ol {
+  margin: 0.7rem 0;
+  padding-left: 1.25rem;
+}
+
+.team-markdown ul {
+  list-style: disc;
+}
+
+.team-markdown ol {
+  list-style: decimal;
+}
+
+.team-markdown li + li {
+  margin-top: 0.28rem;
+}
+
+.team-markdown blockquote {
+  margin: 0.9rem 0;
+  border-left: 3px solid var(--primary);
+  padding-left: 0.8rem;
+  color: var(--muted-foreground);
+}

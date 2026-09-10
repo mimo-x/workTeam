@@ -54,6 +54,7 @@ export type TeamMessage = {
   updatedAt: number;
   status: TeamMessageStatus;
   runId?: string;
+  threadId?: string;
   turnId?: string;
   replyTo?: string;
   targetAgentIds?: string[];
@@ -119,6 +120,24 @@ export type TaskRun = {
   createdAt: number;
   updatedAt: number;
   error?: string;
+  threadId?: string;
+  executionCwd?: string;
+  timeline?: RunTimelineEvent[];
+};
+
+export type RunTimelineEvent = {
+  id: string;
+  at: number;
+  type: "started" | "reasoning" | "command" | "file" | "mcp" | "approval" | "complete" | "error";
+  title: string;
+  detail?: string;
+};
+
+export type TaskWorktree = {
+  path: string;
+  branch: string;
+  baseRef: string;
+  createdAt: number;
 };
 
 export type TaskReviewDecision = "approved" | "changes_requested" | "rejected";
@@ -161,6 +180,7 @@ export type AgentTask = {
   consumedContextVersionByAgent: Record<string, number>;
   contextEvents: TaskContextEvent[];
   runs: TaskRun[];
+  worktree?: TaskWorktree;
   createdAt: number;
   updatedAt: number;
   syncSource?: "local" | "backend";
