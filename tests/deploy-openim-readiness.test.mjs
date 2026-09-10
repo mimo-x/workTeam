@@ -16,3 +16,9 @@ test("BDD: empty OpenIM responses do not produce JSON parser tracebacks", () => 
   assert.match(script, /无法获取 OpenIM 管理 Token/);
   assert.match(script, /--max-time 5/);
 });
+
+test("BDD: deployment separates internal and desktop OpenIM API addresses", () => {
+  assert.match(script, /OPENIM_API_URL=http:\/\/openim-server:10002/);
+  assert.match(script, /OPENIM_PUBLIC_API_URL=http:\/\/\$\{SERVER_IP\}:10002/);
+  assert.match(script, /set_env_value .* OPENIM_PUBLIC_API_URL/);
+});

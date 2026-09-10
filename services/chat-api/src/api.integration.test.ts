@@ -37,6 +37,9 @@ test("two users can become friends, create an Agent room, and sync settings", as
     NODE_ENV: "test",
     JWT_SECRET: "test-jwt-secret-with-at-least-32-characters",
     ENCRYPTION_MASTER_KEY: randomBytes(32).toString("base64"),
+    OPENIM_API_URL: "http://openim-internal:10002",
+    OPENIM_PUBLIC_API_URL: "http://openim-public.example:10002",
+    OPENIM_ADMIN_TOKEN: "test-openim-admin-token",
     OPENIM_CALLBACK_TOKEN: "test-callback-token-long-enough",
   });
   const { app } = await createApp(config, { pool, enableRealtime: false });
@@ -72,6 +75,22 @@ test("two users can become friends, create an Agent room, and sync settings", as
       0,
       "registration must not create verification tokens",
     );
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ data: { token: "user-token", expireTimeSeconds: 3600 } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    const imSession = await app.inject({
+      method: "POST",
+      url: "/v1/im/session",
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+      payload: {},
+    });
+    globalThis.fetch = originalFetch;
+    assert.equal(imSession.statusCode, 200, imSession.body);
+    assert.equal(imSession.json().apiAddr, "http://openim-public.example:10002");
 
     const friendRequest = await app.inject({
       method: "POST",

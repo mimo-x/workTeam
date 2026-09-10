@@ -105,7 +105,7 @@ export const createApp = async (config: AppConfig, overrides: AppOverrides = {})
         userId: user.rows[0].openim_user_id,
         token: issued.token,
         expiresIn: issued.expireTimeSeconds,
-        apiAddr: config.OPENIM_API_URL,
+        apiAddr: config.OPENIM_PUBLIC_API_URL || config.OPENIM_API_URL,
         wsAddr: config.OPENIM_WS_URL,
       };
     } catch (error) {

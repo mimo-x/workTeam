@@ -17,6 +17,7 @@ const envSchema = z.object({
   CORS_ORIGIN: z.string().default("http://localhost:5173"),
   PUBLIC_API_URL: optionalUrl.default("http://127.0.0.1:8790"),
   OPENIM_API_URL: optionalUrl.default(""),
+  OPENIM_PUBLIC_API_URL: optionalUrl.default(""),
   OPENIM_WS_URL: optionalUrl.default(""),
   OPENIM_ADMIN_TOKEN: z.string().default(""),
   OPENIM_CALLBACK_TOKEN: z.string().min(16).default("development-callback-token"),

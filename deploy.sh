@@ -161,6 +161,7 @@ ENCRYPTION_MASTER_KEY=${ENCRYPTION_KEY}
 CORS_ORIGIN=*
 PUBLIC_API_URL=http://${SERVER_IP}:8790
 OPENIM_API_URL=http://openim-server:10002
+OPENIM_PUBLIC_API_URL=http://${SERVER_IP}:10002
 OPENIM_WS_URL=ws://${SERVER_IP}:10001
 OPENIM_ADMIN_TOKEN=${OPENIM_ADMIN_TOKEN}
 OPENIM_CALLBACK_TOKEN=${CALLBACK_TOKEN}
@@ -210,6 +211,7 @@ backup_file() {
 
 backup_file "$SCRIPT_DIR/.env.backend.local"
 set_env_value "$SCRIPT_DIR/.env.backend.local" OPENIM_ADMIN_TOKEN "$OPENIM_ADMIN_TOKEN"
+set_env_value "$SCRIPT_DIR/.env.backend.local" OPENIM_PUBLIC_API_URL "http://${SERVER_IP}:10002"
 
 if [ ! -f .env.gateway.local ]; then
   GATEWAY_SECRET=$(openssl rand -base64 32)
