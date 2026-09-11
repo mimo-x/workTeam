@@ -83,7 +83,14 @@ import type {
   TeamRoomSnapshot,
   TeamWorkspaceSnapshot,
 } from "../../shared/agent-team";
+import { cloudAgentIdFor } from "../../shared/agent-cloud-id";
 import { formatErrorMessage } from "../../shared/error";
+import { cloudAgentBody, cloudAgentUpdateBody, validateAgentForCloud } from "./agent-cloud-payload";
+import {
+  appendAgentDraft,
+  initialAgentSettingsState,
+  MAX_LOCAL_AGENT_COUNT,
+} from "./agent-settings-model";
 import { canRetryAgentReply } from "./agent-message-actions";
 import {
   ApprovalInboxDialog,
@@ -210,33 +217,6 @@ const dateLabel = (timestamp: number) =>
     minute: "2-digit",
   }).format(timestamp);
 
-const cloudAgentBody = (agent: AgentDefinition, runtimeToken = "") => ({
-  name: agent.name,
-  title: agent.title,
-  mention: agent.mention,
-  description: agent.description,
-  instructions: agent.instructions,
-  visibility: agent.visibility,
-  workspaceAccess: agent.workspaceAccess,
-  executionTarget: agent.executionLocation,
-  provider: agent.runtime?.provider ?? "codex",
-  protocol: agent.runtime?.protocol ?? "app-server",
-  runtimeModel: agent.runtime?.model,
-  runtimeEndpoint: agent.runtime?.endpoint,
-  runtimeCommand: agent.runtime?.command,
-  runtimeArgs: agent.runtime?.args ?? [],
-  runtimeAuth: agent.runtime?.auth ?? "none",
-  capabilities: agent.capabilities ?? [
-    "chat",
-    "stream_progress",
-    "read_workspace",
-    ...(agent.workspaceAccess === "write" ? ["write_workspace", "run_command"] : []),
-  ],
-  skillPolicy: agent.skillPolicy ?? "none",
-  skillRefs: agent.skillRefs ?? [],
-  secrets: runtimeToken ? { bearerToken: runtimeToken } : {},
-});
-
 const runtimeProtocol = (provider: string) =>
   provider === "codex"
     ? "app-server"
@@ -247,11 +227,6 @@ const runtimeProtocol = (provider: string) =>
         : provider === "custom-cli"
           ? "cli-jsonl"
           : "cli-stream-json";
-const cloudAgentUpdateBody = (agent: AgentDefinition, runtimeToken?: string) => {
-  const { secrets: _secrets, ...body } = cloudAgentBody(agent);
-  return runtimeToken === undefined ? body : { ...body, secrets: { bearerToken: runtimeToken } };
-};
-
 const upsertRoom = (rooms: TeamRoomSnapshot[], room: TeamRoomSnapshot) => {
   const index = rooms.findIndex((candidate) => candidate.roomId === room.roomId);
   if (index < 0) return [...rooms, room];
@@ -693,6 +668,7 @@ const AgentSettings = ({
   workspace,
   agents,
   initialAgentId,
+  createOnOpen = false,
   cloudMode,
   syncCloudWorkspace,
   onClose,
@@ -701,14 +677,18 @@ const AgentSettings = ({
   workspace: string;
   agents: AgentDefinition[];
   initialAgentId?: string;
+  createOnOpen?: boolean;
   cloudMode: boolean;
   syncCloudWorkspace: () => Promise<TeamWorkspaceSnapshot>;
   onClose: () => void;
   onSaved: (snapshot: TeamWorkspaceSnapshot) => void;
 }) => {
-  const [drafts, setDrafts] = useState(() => structuredClone(agents));
+  const [initialState] = useState(() =>
+    initialAgentSettingsState(agents, { initialAgentId, createOnOpen }),
+  );
+  const [drafts, setDrafts] = useState(initialState.agents);
   const originalAgents = useRef(structuredClone(agents));
-  const [activeId, setActiveId] = useState(initialAgentId ?? agents[0]?.id ?? "");
+  const [activeId, setActiveId] = useState(initialState.activeId);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [runtimeToken, setRuntimeToken] = useState("");
@@ -757,27 +737,10 @@ const AgentSettings = ({
       current.map((agent, index) => (index === activeIndex ? { ...agent, [key]: value } : agent)),
     );
   const addAgent = () => {
-    if (drafts.filter((agent) => agent.ownerId === "local_user").length >= 24) return;
-    const suffix = Date.now().toString(36);
-    const next: AgentDefinition = {
-      id: `agent_custom_${suffix}`,
-      name: "新 Agent",
-      title: "Custom Agent",
-      mention: `@新Agent${drafts.length + 1}`,
-      initials: "新",
-      theme: "cyan",
-      description: "自定义 Agent 工作者",
-      instructions: "你是协作群中的自定义 Agent。围绕自己的职责回答，不要替其他 Agent 发言。",
-      workspaceAccess: "read",
-      visibility: "private",
-      ownerId: "local_user",
-      executionLocation: "local",
-      source: "local",
-      runtime: { provider: "codex", protocol: "app-server", target: "local" },
-      capabilities: ["chat", "stream_progress", "read_workspace"],
-    };
-    setDrafts((current) => [...current, next]);
-    setActiveId(next.id);
+    const next = appendAgentDraft(drafts);
+    if (!next.agent) return;
+    setDrafts(next.agents);
+    setActiveId(next.agent.id);
   };
   const removeAgent = () => {
     if (!active || !canEditActive || drafts.length <= 1) return;
@@ -805,24 +768,29 @@ const AgentSettings = ({
     try {
       if (cloudMode) {
         const originalById = new Map(originalAgents.current.map((agent) => [agent.id, agent]));
-        const removedRemote = originalAgents.current.filter(
-          (agent) =>
-            (agent.syncSource === "backend" || Boolean(agent.cloudAgentId)) &&
+        const removedRemote = originalAgents.current.filter((agent) => {
+          const cloudAgentId = cloudAgentIdFor(agent);
+          return (
+            Boolean(cloudAgentId) &&
             agent.ownerId === "local_user" &&
-            !drafts.some((draft) => draft.id === agent.id),
-        );
+            !drafts.some((draft) => draft.id === agent.id)
+          );
+        });
         for (const agent of removedRemote) {
+          const cloudAgentId = cloudAgentIdFor(agent);
+          if (!cloudAgentId) continue;
           await window.backend.request({
             method: "DELETE",
-            path: `/v1/agents/${encodeURIComponent(agent.cloudAgentId ?? agent.id)}`,
+            path: `/v1/agents/${encodeURIComponent(cloudAgentId)}`,
           });
         }
         for (const agent of drafts) {
           const original = originalById.get(agent.id);
           const tokenChanged = runtimeCredentialChanges.current.has(agent.id);
           const token = runtimeTokens.current.get(agent.id)?.trim() ?? "";
-          const cloudAgentId =
-            agent.cloudAgentId ?? (agent.syncSource === "backend" ? agent.id : undefined);
+          const validationError = validateAgentForCloud(agent, token);
+          if (validationError) throw new Error(validationError);
+          const cloudAgentId = cloudAgentIdFor(agent);
           if (cloudAgentId && agent.ownerId === "local_user" && original) {
             if (JSON.stringify(agent) !== JSON.stringify(original) || tokenChanged) {
               await window.backend.request({
@@ -839,7 +807,7 @@ const AgentSettings = ({
               body: cloudAgentBody(agent, token),
             });
           }
-          if (tokenChanged && (!cloudMode || cloudAgentId)) {
+          if (tokenChanged) {
             await window.agentTeam.saveRuntimeCredential({ agentId: agent.id, token });
           }
         }
@@ -908,7 +876,17 @@ const AgentSettings = ({
               </button>
             ))}
           </div>
-          <Button type="button" variant="outline" size="sm" onClick={addAgent} className="mt-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={addAgent}
+            disabled={
+              drafts.filter((agent) => agent.ownerId === "local_user").length >=
+              MAX_LOCAL_AGENT_COUNT
+            }
+            className="mt-2"
+          >
             <PlusIcon data-icon="inline-start" />
             创建 Agent
           </Button>
@@ -1617,7 +1595,7 @@ const RoomDialog = ({
       const remoteSelection =
         selectedAgents.some((id) => {
           const agent = agents.find((candidate) => candidate.id === id);
-          return agent?.syncSource === "backend" || Boolean(agent?.cloudAgentId);
+          return Boolean(agent && cloudAgentIdFor(agent));
         }) ||
         selectedHumans.some(
           (id) =>
@@ -1643,9 +1621,7 @@ const RoomDialog = ({
         }
         const localOnlyAgents = selectedAgents
           .map((id) => agents.find((agent) => agent.id === id))
-          .filter((agent): agent is AgentDefinition =>
-            Boolean(agent && agent.syncSource !== "backend" && !agent.cloudAgentId),
-          );
+          .filter((agent): agent is AgentDefinition => Boolean(agent && !cloudAgentIdFor(agent)));
         const promotedMappings = await Promise.all(
           localOnlyAgents.map(async (agent) => {
             const created = await window.backend.request<{
@@ -1673,11 +1649,13 @@ const RoomDialog = ({
         );
         const cloudAgentIds = selectedAgents.map((id) => {
           const agent = agents.find((candidate) => candidate.id === id);
-          return promotedByLocalId.get(id) ?? agent?.cloudAgentId ?? id;
+          const cloudAgentId = promotedByLocalId.get(id) ?? (agent && cloudAgentIdFor(agent));
+          if (!cloudAgentId) throw new Error(`Agent ${agent?.name ?? id} 尚未同步到云端。`);
+          return cloudAgentId;
         });
         const userIds = selectedHumans.filter((id) => id !== "local_user");
         let roomId: string;
-        if (room) {
+        if (room && room.syncSource === "backend") {
           let revision = room.revision ?? 1;
           if (name.trim() !== room.name) {
             const renamed = await window.backend.request<{ revision: number }>({
@@ -1702,6 +1680,15 @@ const RoomDialog = ({
             body: { name, userIds, agentIds: cloudAgentIds },
           });
           roomId = created.id;
+          if (room) {
+            await window.agentTeam.promoteRoom({
+              workspace,
+              localRoomId: room.roomId,
+              cloudRoomId: created.id,
+              humanIds: ["local_user", ...userIds],
+              agentIds: cloudAgentIds,
+            });
+          }
         }
         const snapshot = await syncCloudWorkspace();
         const synced = snapshot.rooms.find((candidate) => candidate.roomId === roomId);
@@ -1838,11 +1825,13 @@ const RoomDialog = ({
 const ContactsView = ({
   state,
   onEditAgents,
+  onCreateAgent,
   onEditHumans,
   onOpenDirect,
 }: {
   state: TeamWorkspaceSnapshot;
   onEditAgents: (agentId?: string) => void;
+  onCreateAgent: () => void;
   onEditHumans: () => void;
   onOpenDirect: (principalId: string) => void;
 }) => {
@@ -1956,7 +1945,7 @@ const ContactsView = ({
           <Button type="button" variant="outline" onClick={onEditHumans}>
             管理好友
           </Button>
-          <Button type="button" onClick={() => onEditAgents()}>
+          <Button type="button" onClick={onCreateAgent}>
             <PlusIcon data-icon="inline-start" />
             创建 Agent
           </Button>
@@ -2281,6 +2270,7 @@ export const TeamChat = ({
   const [error, setError] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [agentSettingsOpen, setAgentSettingsOpen] = useState(false);
+  const [createAgentOnOpen, setCreateAgentOnOpen] = useState(false);
   const [editingAgentId, setEditingAgentId] = useState<string | undefined>();
   const [contactSettingsOpen, setContactSettingsOpen] = useState(false);
   const [roomDialogOpen, setRoomDialogOpen] = useState(false);
@@ -2679,17 +2669,19 @@ export const TeamChat = ({
     try {
       const human = state?.humans.find((candidate) => candidate.id === principalId);
       const agent = state?.agents.find((candidate) => candidate.id === principalId);
+      const cloudAgentId = agent ? cloudAgentIdFor(agent) : undefined;
       let nextRoom: TeamRoomSnapshot;
       if (
         cloudMode &&
         (human?.syncSource === "backend" ||
-          agent?.syncSource === "backend" ||
-          Boolean(agent?.cloudAgentId))
+          Boolean(cloudAgentId) ||
+          agent?.syncSource === "backend")
       ) {
+        if (agent && !cloudAgentId) throw new Error("云端 Agent ID 无效，请刷新后重试。");
         const created = await window.backend.request<{ id: string }>({
           method: "POST",
           path: agent ? "/v1/rooms/agent-direct" : "/v1/rooms/direct",
-          body: agent ? { agentId: agent.cloudAgentId ?? principalId } : { userId: principalId },
+          body: agent ? { agentId: cloudAgentId } : { userId: principalId },
         });
         const snapshot = await syncCloudWorkspace();
         const syncedRoom = snapshot.rooms.find((candidate) => candidate.roomId === created.id);
@@ -2963,7 +2955,13 @@ export const TeamChat = ({
         <ContactsView
           state={state}
           onEditAgents={(agentId) => {
+            setCreateAgentOnOpen(false);
             setEditingAgentId(agentId);
+            setAgentSettingsOpen(true);
+          }}
+          onCreateAgent={() => {
+            setEditingAgentId(undefined);
+            setCreateAgentOnOpen(true);
             setAgentSettingsOpen(true);
           }}
           onEditHumans={() => setContactSettingsOpen(true)}
@@ -2974,10 +2972,17 @@ export const TeamChat = ({
             workspace={workspace}
             agents={state.agents}
             initialAgentId={editingAgentId}
+            createOnOpen={createAgentOnOpen}
             cloudMode={cloudMode}
             syncCloudWorkspace={syncCloudWorkspace}
-            onClose={() => setAgentSettingsOpen(false)}
-            onSaved={setState}
+            onClose={() => {
+              setAgentSettingsOpen(false);
+              setCreateAgentOnOpen(false);
+            }}
+            onSaved={(snapshot) => {
+              setState(snapshot);
+              setCreateAgentOnOpen(false);
+            }}
           />
         )}
         {contactSettingsOpen && (
@@ -4000,10 +4005,17 @@ export const TeamChat = ({
           workspace={workspace}
           agents={state.agents}
           initialAgentId={editingAgentId}
+          createOnOpen={createAgentOnOpen}
           cloudMode={cloudMode}
           syncCloudWorkspace={syncCloudWorkspace}
-          onClose={() => setAgentSettingsOpen(false)}
-          onSaved={setState}
+          onClose={() => {
+            setAgentSettingsOpen(false);
+            setCreateAgentOnOpen(false);
+          }}
+          onSaved={(snapshot) => {
+            setState(snapshot);
+            setCreateAgentOnOpen(false);
+          }}
         />
       )}
       {roomDialogOpen && (

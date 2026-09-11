@@ -14,6 +14,7 @@ import type {
   ImRuntimeConfig,
 } from "../../shared/agent-team";
 import { normalizeMessage } from "./openim-message";
+import { closeOpenImSdk, OpenImLifecycleQueue } from "./openim-lifecycle";
 
 export type OpenImConnectionState = {
   state: "local" | "connecting" | "connected" | "error";
@@ -93,6 +94,7 @@ export const toExternalMessage = (
 class OpenImTransport {
   private connectedKey = "";
   private connecting: Promise<void> | null = null;
+  private readonly lifecycleQueue = new OpenImLifecycleQueue();
   private initialized = false;
   private config: ImRuntimeConfig | null = null;
   private messageListeners = new Set<(message: ExternalTeamMessage) => void>();
@@ -105,12 +107,14 @@ class OpenImTransport {
     sdk.on(SdkEvent.OnConnectFailed, (response) =>
       this.setStatus({ state: "error", error: response.errMsg || "OpenIM 连接失败。" }),
     );
-    sdk.on(SdkEvent.OnKickedOffline, () =>
-      this.setStatus({ state: "error", error: "OpenIM 账号已在其他设备登录。" }),
-    );
-    sdk.on(SdkEvent.OnUserTokenExpired, () =>
-      this.setStatus({ state: "error", error: "OpenIM 用户 Token 已过期。" }),
-    );
+    sdk.on(SdkEvent.OnKickedOffline, () => {
+      this.setStatus({ state: "error", error: "OpenIM 账号已在其他设备登录。" });
+      void this.disconnect();
+    });
+    sdk.on(SdkEvent.OnUserTokenExpired, () => {
+      this.setStatus({ state: "error", error: "OpenIM 用户 Token 已过期。" });
+      void this.disconnect();
+    });
     sdk.on(SdkEvent.OnRecvNewMessages, (response: SdkResponse<MessageItem[]>) => {
       const config = this.config;
       if (!config) return;
@@ -157,46 +161,46 @@ class OpenImTransport {
     };
   }
 
+  async disconnect() {
+    await this.lifecycleQueue.run(async () => {
+      await this.closeSession();
+      this.setStatus({ state: "local" });
+    });
+  }
+
   async connect(config: ImRuntimeConfig) {
     const key = [config.apiAddr, config.wsAddr, config.userId, config.groupId].join("\u0000");
     if (this.connectedKey === key && this.status.state === "connected") return;
     if (this.connecting) return this.connecting;
-    if (!config.apiAddr || !config.wsAddr || !config.userId || !config.userToken) {
-      if (this.initialized) {
-        await sdk.logout().catch(() => undefined);
-        await sdk.unInitSDK().catch(() => undefined);
-      }
-      this.initialized = false;
-      this.connectedKey = "";
-      this.config = null;
-      this.setStatus({ state: "local" });
-      return;
-    }
-
-    this.connecting = (async () => {
-      this.setStatus({ state: "connecting" });
-      if (this.initialized && this.connectedKey !== key) {
-        await sdk.logout().catch(() => undefined);
-        await sdk.unInitSDK().catch(() => undefined);
-        this.initialized = false;
-      }
-      this.config = config;
-      if (!this.initialized) {
-        await sdk.initSDK({
-          apiAddr: config.apiAddr,
-          wsAddr: config.wsAddr,
-          platformID: config.platformId,
-          dataDir: config.dataDir,
-          systemType: "electron",
-          logLevel: LogLevel.Warn,
-          isLogStandardOutput: false,
-        });
-        this.initialized = true;
-      }
-      await sdk.login({ userID: config.userId, token: config.userToken });
-      this.connectedKey = key;
-      this.setStatus({ state: "connected" });
-    })()
+    this.connecting = this.lifecycleQueue
+      .run(async () => {
+        if (!config.apiAddr || !config.wsAddr || !config.userId || !config.userToken) {
+          await this.closeSession();
+          this.setStatus({ state: "local" });
+          return;
+        }
+        this.setStatus({ state: "connecting" });
+        if (this.initialized) await this.closeSession();
+        this.config = config;
+        try {
+          await sdk.initSDK({
+            apiAddr: config.apiAddr,
+            wsAddr: config.wsAddr,
+            platformID: config.platformId,
+            dataDir: config.dataDir,
+            systemType: "electron",
+            logLevel: LogLevel.Warn,
+            isLogStandardOutput: false,
+          });
+          this.initialized = true;
+          await sdk.login({ userID: config.userId, token: config.userToken });
+          this.connectedKey = key;
+          this.setStatus({ state: "connected" });
+        } catch (error) {
+          await this.closeSession();
+          throw error;
+        }
+      })
       .catch((error) => {
         this.setStatus({
           state: "error",
@@ -213,6 +217,13 @@ class OpenImTransport {
         this.connecting = null;
       });
     return this.connecting;
+  }
+
+  private async closeSession() {
+    if (this.initialized) await closeOpenImSdk(sdk);
+    this.initialized = false;
+    this.connectedKey = "";
+    this.config = null;
   }
 
   async sendText(
@@ -314,3 +325,9 @@ class OpenImTransport {
 }
 
 export const openImTransport = new OpenImTransport();
+
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeunload", () => {
+    void openImTransport.disconnect();
+  });
+}

@@ -55,6 +55,7 @@ const agentTeam: AgentTeamApi = {
   saveHumans: (options) => ipcRenderer.invoke("agent-team:save-humans", options),
   createRoom: (options) => ipcRenderer.invoke("agent-team:create-room", options),
   updateRoom: (options) => ipcRenderer.invoke("agent-team:update-room", options),
+  promoteRoom: (options) => ipcRenderer.invoke("agent-team:promote-room", options),
   openDirectRoom: (options) => ipcRenderer.invoke("agent-team:open-direct-room", options),
   updateTaskStatus: (options) => ipcRenderer.invoke("agent-team:update-task-status", options),
   reviewTask: (options) => ipcRenderer.invoke("agent-team:review-task", options),

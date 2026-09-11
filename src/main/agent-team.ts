@@ -24,6 +24,8 @@ import type {
   TeamRoomSnapshot,
   TeamWorkspaceSnapshot,
 } from "../shared/agent-team";
+import { cloudAgentIdFor, isCloudAgentId } from "../shared/agent-cloud-id";
+import { isUuid } from "../shared/uuid";
 import {
   DEFAULT_TASK_BUDGET,
   extractAgentActionsV1,
@@ -402,7 +404,12 @@ export class AgentTeamService {
     });
     const remoteAgentById = new Map(remote.agents.map((agent) => [agent.id, agent]));
     const reconciledLocalAgents = localAgents.map((local) => {
-      const cloud = remoteAgentById.get(local.cloudAgentId ?? local.id);
+      const cloudId =
+        local.cloudAgentId && isCloudAgentId(local.cloudAgentId) ? local.cloudAgentId : undefined;
+      const cloud = cloudId ? remoteAgentById.get(cloudId) : undefined;
+      if (!cloud && local.cloudAgentId && !isCloudAgentId(local.cloudAgentId)) {
+        return { ...local, cloudAgentId: undefined, syncSource: "local" as const };
+      }
       return cloud
         ? {
             ...local,
@@ -805,7 +812,7 @@ export class AgentTeamService {
       throw new Error("Agent 正在回复或执行任务，请结束运行后再同步到云端。");
     }
     for (const mapping of normalized) {
-      if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(mapping.cloudAgentId)) {
+      if (!isCloudAgentId(mapping.cloudAgentId)) {
         throw new Error("云端 Agent ID 无效。");
       }
       if (!mapping.openimUserId) throw new Error("云端 Agent 缺少 OpenIM 身份。");
@@ -832,10 +839,10 @@ export class AgentTeamService {
     );
     const promotedCloudIds = new Set(normalized.map((mapping) => mapping.cloudAgentId));
     state.agents = state.agents
-      .filter(
-        (agent) =>
-          promotedByLocalId.has(agent.id) || !promotedCloudIds.has(agent.cloudAgentId ?? agent.id),
-      )
+      .filter((agent) => {
+        const currentCloudId = cloudAgentIdFor(agent);
+        return promotedByLocalId.has(agent.id) || !promotedCloudIds.has(currentCloudId ?? agent.id);
+      })
       .map((agent) => promotedByLocalId.get(agent.id) ?? agent);
     const mapId = (id: string) => ids.get(id) ?? id;
     const mapIds = (values: string[]) => [...new Set(values.map(mapId))];
@@ -953,6 +960,61 @@ export class AgentTeamService {
     room.humanIds = this.validateRoomHumans(state, humanIds);
     this.persist(state);
     this.emit({ type: "room-upsert", workspace, room: clone(room) });
+    return clone(room);
+  }
+
+  async promoteRoom(
+    workspace: string,
+    localRoomId: string,
+    cloudRoomId: string,
+    openimGroupId: string | undefined,
+    revision: number | undefined,
+    humanIds: string[],
+    agentIds: string[],
+  ) {
+    if (!isUuid(cloudRoomId)) throw new Error("云端房间 ID 必须是 UUID。");
+    const state = await this.loadWorkspace(workspace);
+    const room = this.requireRoom(state, localRoomId);
+    if (room.type !== "group" || room.syncSource === "backend")
+      throw new Error("只能同步本地协作群。");
+    if (state.rooms.some((candidate) => candidate.roomId === cloudRoomId))
+      throw new Error("云端群已存在于当前工作区。");
+    const nextHumans = this.validateRoomHumans(state, humanIds);
+    const nextAgents = this.validateRoomAgents(state, agentIds);
+    const previousId = room.roomId;
+    room.roomId = cloudRoomId;
+    room.externalId = openimGroupId?.trim() || undefined;
+    room.revision = revision;
+    room.ownerId = "local_user";
+    room.syncSource = "backend";
+    room.humanIds = nextHumans;
+    room.agentIds = nextAgents;
+    for (const candidate of state.rooms)
+      for (const message of candidate.messages)
+        if (message.roomId === previousId) message.roomId = cloudRoomId;
+    for (const task of state.tasks) {
+      if (task.sourceRoomId === previousId) task.sourceRoomId = cloudRoomId;
+      if (task.taskRoomId === previousId) task.taskRoomId = cloudRoomId;
+    }
+    for (const loop of state.loops) if (loop.roomId === previousId) loop.roomId = cloudRoomId;
+    const remapped = new Map<string, AgentSession>();
+    for (const [key, session] of this.sessions) {
+      if (session.workspace !== workspace || session.roomId !== previousId) {
+        remapped.set(key, session);
+        continue;
+      }
+      session.roomId = cloudRoomId;
+      const nextKey = this.sessionKey(
+        session.workspace,
+        session.taskId ?? cloudRoomId,
+        session.agentId,
+        session.model,
+      );
+      remapped.set(nextKey, session);
+    }
+    this.sessions = remapped;
+    this.persist(state);
+    this.emit({ type: "workspace-snapshot", snapshot: clone(state) });
     return clone(room);
   }
 

@@ -1,0 +1,7 @@
+schema: spec-driven
+created: 2026-09-11
+---
+*** Add File: openspec/changes/fix-codex-ipc-handlers/proposal.md
+# 补齐 Codex 桌面端 IPC
+
+渲染层已经暴露并调用多个 Codex API，但主进程只注册了少数处理器，导致会话列表直接报错。补齐对应转发和参数校验，保证桌面端 API 可用。
