@@ -61,6 +61,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
@@ -1730,42 +1731,42 @@ const RoomDialog = ({
     }
   };
   return (
-    <Modal>
-      <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#11151e] shadow-2xl">
-        <header className="flex items-center justify-between border-b border-white/7 px-5 py-4">
-          <div>
-            <h2 className="text-sm font-semibold">{room ? "管理群组" : "新建群组"}</h2>
-            <p className="mt-1 text-xs text-zinc-500">从通讯录邀请好友和 Agent。</p>
-          </div>
-          <button type="button" onClick={onClose}>
-            <XIcon className="size-4 text-zinc-600" />
-          </button>
-        </header>
-        <div className="space-y-4 p-5">
-          <label>
-            <span className="mb-1.5 block text-[10px] text-zinc-500 uppercase">群名称</span>
-            <input
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent
+        className="flex max-h-[min(48rem,calc(100vh-3rem))] w-full max-w-3xl flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl"
+        showCloseButton
+      >
+        <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12">
+          <DialogTitle>{room ? "管理群组" : "新建群组"}</DialogTitle>
+          <DialogDescription>从通讯录邀请好友和 Agent。</DialogDescription>
+        </DialogHeader>
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="room-name">群名称</Label>
+            <Input
+              id="room-name"
               autoFocus
               value={name}
               onChange={(event) => setName(event.target.value)}
-              className="w-full rounded-xl border border-white/8 bg-black/20 px-3 py-2.5 text-sm outline-none focus:border-cyan-300/30"
             />
-          </label>
-          <div>
-            <div className="mb-2 text-[10px] text-zinc-500 uppercase">Agent 成员</div>
+          </div>
+          <fieldset className="flex flex-col gap-2">
+            <legend className="text-xs font-medium text-muted-foreground">Agent 成员</legend>
             <div className="grid gap-2 sm:grid-cols-2">
               {agents.map((agent) => {
                 const checked = selectedAgents.includes(agent.id);
                 return (
-                  <button
+                  <Button
                     key={agent.id}
                     type="button"
+                    variant={checked ? "secondary" : "outline"}
+                    aria-pressed={checked}
                     onClick={() =>
                       setSelectedAgents((current) =>
                         checked ? current.filter((id) => id !== agent.id) : [...current, agent.id],
                       )
                     }
-                    className={`flex items-center gap-3 rounded-xl border p-3 text-left ${checked ? "border-cyan-300/20 bg-cyan-300/7" : "border-white/7 bg-black/10"}`}
+                    className="h-auto justify-start p-3 text-left whitespace-normal"
                   >
                     <span
                       className={`grid size-8 place-items-center rounded-lg border text-xs ${themeClasses[agent.theme].avatar}`}
@@ -1773,61 +1774,63 @@ const RoomDialog = ({
                       {agent.initials}
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-xs text-zinc-300">{agent.name}</span>
-                      <span className="mt-0.5 block text-[9px] text-zinc-600">
+                      <span className="block truncate text-xs text-foreground">{agent.name}</span>
+                      <span className="mt-0.5 block text-[10px] text-muted-foreground">
                         {agent.visibility === "public" ? "公开" : "私有"} ·{" "}
                         {agent.workspaceAccess === "write" ? "可写" : "只读"}
                       </span>
                     </span>
-                    {checked && <CheckIcon className="size-3.5 text-cyan-300" />}
-                  </button>
+                    {checked && <CheckIcon className="text-primary" />}
+                  </Button>
                 );
               })}
             </div>
-          </div>
-          <div>
-            <div className="mb-2 text-[10px] text-zinc-500 uppercase">好友成员</div>
+          </fieldset>
+          <fieldset className="flex flex-col gap-2">
+            <legend className="text-xs font-medium text-muted-foreground">好友成员</legend>
             <div className="flex flex-wrap gap-2">
               {humans.map((human) => {
                 const checked = selectedHumans.includes(human.id);
                 const owner = human.id === "local_user";
                 return (
-                  <button
+                  <Button
                     key={human.id}
                     type="button"
+                    variant={checked ? "secondary" : "outline"}
+                    size="sm"
                     disabled={owner}
+                    aria-pressed={checked}
                     onClick={() =>
                       setSelectedHumans((current) =>
                         checked ? current.filter((id) => id !== human.id) : [...current, human.id],
                       )
                     }
-                    className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-[10px] ${checked ? "border-emerald-300/20 bg-emerald-300/7 text-emerald-200" : "border-white/7 text-zinc-600"}`}
+                    className="rounded-full"
                   >
                     <span>{human.initials}</span>
                     {human.name}
-                    {checked && <CheckIcon className="size-3" />}
-                  </button>
+                    {checked && <CheckIcon data-icon="inline-end" />}
+                  </Button>
                 );
               })}
             </div>
-          </div>
-          {error && <p className="text-xs text-red-300">{error}</p>}
+          </fieldset>
+          {error && (
+            <p role="alert" className="text-xs text-destructive">
+              {error}
+            </p>
+          )}
         </div>
-        <footer className="flex justify-end gap-2 border-t border-white/7 px-5 py-4">
-          <button type="button" onClick={onClose} className="px-3 py-2 text-xs text-zinc-500">
+        <DialogFooter className="shrink-0 border-t border-border bg-muted/50 px-5 py-4">
+          <Button type="button" variant="ghost" onClick={onClose}>
             取消
-          </button>
-          <button
-            type="button"
-            disabled={saving || !name.trim()}
-            onClick={() => void save()}
-            className="rounded-lg bg-cyan-300 px-4 py-2 text-xs font-semibold text-cyan-950 disabled:opacity-50"
-          >
+          </Button>
+          <Button type="button" disabled={saving || !name.trim()} onClick={() => void save()}>
             {room ? "保存群组" : "创建群组"}
-          </button>
-        </footer>
-      </div>
-    </Modal>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 
