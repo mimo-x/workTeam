@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { EventPublisher } from "./events.js";
 import { ApiError, parseBody, parseParams, parseQuery, requireRevision } from "./http.js";
 import { enqueueOutbox } from "./outbox.js";
+import { normalizeCompletionArtifactRefs } from "./task-completion-summary.js";
 
 const createRoomSchema = z.object({
   name: z.string().trim().min(1).max(80),
@@ -25,6 +26,47 @@ const messageQuery = z.object({
   beforeSeq: z.coerce.number().int().positive().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
+const agentMessageSchema = z.object({
+  agentId: z.string().uuid(),
+  content: z.string().trim().min(1).max(100_000),
+  deliveryId: z.string().trim().min(1).max(256),
+  runId: z.string().uuid().optional(),
+  parentMessageId: z.string().trim().min(1).max(256).optional(),
+  agentHop: z.number().int().min(1).max(1_000).default(1),
+  relayRootId: z.string().trim().min(1).max(256).optional(),
+  loopId: z.string().trim().min(1).max(256).optional(),
+  loopTurn: z.number().int().min(1).max(1_000).optional(),
+});
+
+const recordValue = (value: unknown): Record<string, unknown> | undefined =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+
+const jsonRecord = (value: unknown) => {
+  if (typeof value !== "string") return recordValue(value);
+  try {
+    return recordValue(JSON.parse(value));
+  } catch {
+    return undefined;
+  }
+};
+
+export const taskSummaryMessageMetadata = (raw: unknown) => {
+  const extension = jsonRecord(recordValue(raw)?.ex);
+  if (extension?.kind !== "task-summary") return {};
+  const taskId = z.string().uuid().safeParse(extension.taskId);
+  if (!taskId.success) return {};
+  const artifactRefs = z
+    .array(z.string().trim().min(1).max(2_048))
+    .max(64)
+    .safeParse(extension.artifactRefs);
+  return {
+    kind: "task-summary" as const,
+    taskId: taskId.data,
+    artifactRefs: artifactRefs.success ? normalizeCompletionArtifactRefs(artifactRefs.data) : [],
+  };
+};
 
 type RoomRow = {
   id: string;
@@ -538,17 +580,86 @@ export const registerRoomRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
       `SELECT server_msg_id AS "serverMsgId", client_msg_id AS "clientMsgId", room_id AS "roomId",
               sender_openim_id AS "senderOpenimId", sender_user_id AS "senderUserId",
               sender_agent_id AS "senderAgentId", content, content_type AS "contentType", seq,
-              target_agent_ids AS "targetAgentIds", sent_at AS "sentAt"
+              target_agent_ids AS "targetAgentIds", raw, sent_at AS "sentAt"
        FROM message_mirrors
        WHERE room_id = $1 AND ($2::bigint IS NULL OR seq < $2)
        ORDER BY seq DESC LIMIT $3`,
       [id, beforeSeq ?? null, limit],
     );
     return {
-      data: result.rows.reverse(),
+      data: result.rows.reverse().map(({ raw, ...message }) => ({
+        ...message,
+        ...taskSummaryMessageMetadata(raw),
+      })),
       nextCursor: result.rows.length === limit ? result.rows.at(-1)?.seq : null,
     };
   });
+
+  app.post(
+    "/v1/rooms/:id/agent-messages",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const { id } = parseParams(idParams, request);
+      const input = parseBody(agentMessageSchema, request);
+      const allowed = await pool.query<{
+        openim_group_id: string;
+        openim_user_id: string;
+        name: string;
+      }>(
+        `SELECT r.openim_group_id, a.openim_user_id, a.name
+         FROM rooms r
+         JOIN room_members rm ON rm.room_id = r.id AND rm.user_id = $2
+         JOIN room_agents ra ON ra.room_id = r.id
+         JOIN agents a ON a.id = ra.agent_id
+         WHERE r.id = $1 AND r.archived_at IS NULL AND r.openim_group_id IS NOT NULL
+           AND a.id = $3 AND a.owner_id = $2 AND a.execution_target = 'local'
+           AND a.archived_at IS NULL`,
+        [id, request.user.sub, input.agentId],
+      );
+      const target = allowed.rows[0];
+      if (!target) {
+        throw new ApiError(
+          403,
+          "AGENT_MESSAGE_NOT_ALLOWED",
+          "只能发布当前用户拥有且属于该群的本机 Agent 回复。",
+        );
+      }
+      const deliveryKey = `agent-chat:${input.deliveryId}`;
+      const existing = await pool.query("SELECT 1 FROM outbox_events WHERE delivery_key = $1", [
+        deliveryKey,
+      ]);
+      if (existing.rowCount) {
+        return reply.status(202).send({ accepted: true, duplicate: true });
+      }
+      const inserted = await pool.query<{ id: string }>(
+        `INSERT INTO outbox_events(topic, aggregate_type, aggregate_id, payload, delivery_key)
+         VALUES ('openim.message.send', 'agent_chat', $1, $2::jsonb, $3)
+         ON CONFLICT (delivery_key) DO NOTHING RETURNING id`,
+        [
+          input.deliveryId,
+          JSON.stringify({
+            sendID: target.openim_user_id,
+            senderNickname: target.name,
+            groupID: target.openim_group_id,
+            content: input.content,
+            ex: {
+              kind: "agent-message",
+              agentId: input.agentId,
+              runId: input.runId,
+              parentMessageId: input.parentMessageId,
+              agentHop: input.agentHop,
+              relayRootId: input.relayRootId,
+              loopId: input.loopId,
+              loopTurn: input.loopTurn,
+              final: true,
+            },
+          }),
+          deliveryKey,
+        ],
+      );
+      return reply.status(202).send({ accepted: true, duplicate: inserted.rows.length === 0 });
+    },
+  );
 
   app.get("/v1/agent-invitations", { preHandler: [app.authenticate] }, async (request) => {
     const result = await pool.query(

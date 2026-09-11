@@ -267,12 +267,14 @@ export const messages = pgTable(
     contentType: integer("content_type").notNull().default(101),
     seq: bigint("seq", { mode: "number" }).notNull().default(0),
     targetAgentIds: jsonb("target_agent_ids").$type<string[]>().notNull().default([]),
+    deliveryKey: text("delivery_key"),
     raw: jsonb("raw").$type<Record<string, unknown>>().notNull().default({}),
     sentAt: timestamp("sent_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     uniqueIndex("message_mirrors_client_msg_id_uq").on(table.clientMsgId),
+    uniqueIndex("message_mirrors_delivery_key_uq").on(table.deliveryKey),
     index("message_mirrors_room_seq_idx").on(table.roomId, table.seq),
   ],
 );
@@ -335,6 +337,8 @@ export const tasks = pgTable(
       .default({ descendants: 0, runs: 0 }),
     waitReason: text("wait_reason"),
     artifactRefs: jsonb("artifact_refs").$type<string[]>().notNull().default([]),
+    completionSummary: text("completion_summary"),
+    sourceSummaryPublishedAt: timestamp("source_summary_published_at", { withTimezone: true }),
     contextVersion: integer("context_version").notNull().default(1),
     latestSourceSeq: bigint("latest_source_seq", { mode: "number" }).notNull().default(0),
     ...timestamps,

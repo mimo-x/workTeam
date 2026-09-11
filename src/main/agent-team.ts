@@ -37,6 +37,12 @@ import {
   normalizeWorkspaceBindingSummary,
 } from "../shared/collaboration-governance";
 import { formatErrorMessage } from "../shared/error";
+import {
+  aggregateTaskCompletionSummaries,
+  formatTaskCompletionMessage,
+  normalizeCompletionArtifactRefs,
+  normalizeCompletionSummary,
+} from "../shared/task-completion-summary";
 import type { AgentRuntime, AgentRuntimeEvent } from "./agent-runtime";
 import type { AgentRuntimeRegistry } from "./runtime-registry";
 
@@ -60,7 +66,11 @@ type LegacyRoom = Partial<TeamRoomSnapshot> & {
   agents?: AgentDefinition[];
   messages?: TeamMessage[];
 };
-type AgentMessagePublisher = (message: TeamMessage, agent: AgentDefinition) => Promise<void>;
+type AgentMessagePublisher = (
+  message: TeamMessage,
+  agent: AgentDefinition,
+  room: TeamRoomSnapshot,
+) => Promise<void>;
 
 class EventQueue {
   private values: AgentRuntimeEvent[] = [];
@@ -650,6 +660,61 @@ export class AgentTeamService {
     }
   }
 
+  async retryMessage(options: {
+    workspace: string;
+    roomId: string;
+    messageId: string;
+    model?: string;
+  }) {
+    const state = await this.loadWorkspace(options.workspace);
+    const room = this.requireRoom(state, options.roomId);
+    const previousReply = room.messages.find((message) => message.id === options.messageId);
+    if (!previousReply || previousReply.senderType !== "agent" || !previousReply.replyTo) {
+      throw new Error("只能重新回答由 Agent 生成的消息。");
+    }
+    if (previousReply.status === "pending" || previousReply.status === "streaming") {
+      throw new Error("这个 Agent 仍在回答，请先停止当前生成。");
+    }
+    const userMessage = room.messages.find((message) => message.id === previousReply.replyTo);
+    if (!userMessage || userMessage.senderType !== "user") {
+      throw new Error("找不到这条 Agent 回答对应的用户消息。");
+    }
+    const belongsToTask = Boolean(previousReply.taskId || userMessage.taskId);
+    const belongsToLoop = Boolean(
+      previousReply.loopId || state.loops.some((loop) => loop.rootMessageId === userMessage.id),
+    );
+    if (belongsToTask || belongsToLoop || userMessage.agentAction === "propose-task") {
+      throw new Error("Task 或协作 Loop 消息暂不支持重新回答。");
+    }
+    const agent = state.agents.find((candidate) => candidate.id === previousReply.senderId);
+    if (!agent || !room.agentIds.includes(agent.id)) {
+      throw new Error("原回答的 Agent 已不在当前会话中。");
+    }
+    if (agent.executionLocation === "hosted") {
+      throw new Error("托管 Agent 暂不支持从本机重新回答。");
+    }
+    const alreadyRetrying = room.messages.some(
+      (message) =>
+        message.senderId === agent.id &&
+        message.replyTo === userMessage.id &&
+        (message.status === "pending" || message.status === "streaming"),
+    );
+    if (alreadyRetrying) throw new Error("这个 Agent 已在重新回答。");
+
+    const runId = this.scheduleAgent(
+      state,
+      room,
+      userMessage,
+      agent,
+      undefined,
+      options.model,
+      false,
+      undefined,
+      previousReply,
+    );
+    return { messageId: this.runs.get(runId)!.messageId, runId };
+  }
+
   async controlLoop(
     workspace: string,
     loopId: string,
@@ -984,6 +1049,7 @@ export class AgentTeamService {
   async updateTaskStatus(workspace: string, taskId: string, status: TaskStatus) {
     const state = await this.loadWorkspace(workspace);
     const task = this.requireTask(state, taskId);
+    const previousStatus = task.status;
     const allowed = new Set<TaskStatus>([
       "waiting",
       "review",
@@ -1012,15 +1078,54 @@ export class AgentTeamService {
       ) {
         parent.status = "blocked";
         parent.waitReason = "至少一个必需子 Task 已阻塞，请先处理。";
-      } else if (siblings.length && siblings.every((candidate) => candidate.status === "done")) {
+      } else if (
+        siblings.length &&
+        siblings.every((candidate) => candidate.status === "done") &&
+        !["review", "done", "failed", "cancelled"].includes(parent.status)
+      ) {
         parent.status = "review";
         parent.waitReason = undefined;
         parent.artifactRefs = [
-          ...new Set(siblings.flatMap((candidate) => candidate.artifactRefs ?? [])),
+          ...new Set([
+            ...(parent.artifactRefs ?? []),
+            ...siblings.flatMap((candidate) => candidate.artifactRefs ?? []),
+          ]),
         ];
+        parent.completionSummary = aggregateTaskCompletionSummaries([
+          ...(parent.completionSummary
+            ? [{ title: parent.title, completionSummary: parent.completionSummary }]
+            : []),
+          ...siblings,
+        ]);
       }
       parent.updatedAt = Date.now();
       this.emitTask(state, parent);
+    }
+    if (
+      status === "done" &&
+      previousStatus !== "done" &&
+      !task.parentTaskId &&
+      !task.sourceSummaryPublishedAt
+    ) {
+      const sourceRoom = this.requireRoom(state, task.sourceRoomId);
+      const summaryAgent =
+        state.agents.find((agent) => agent.id === task.assigneeIds[0]) ?? state.agents[0];
+      task.sourceSummaryPublishedAt = Date.now();
+      const summaryMessage = this.createMessage(state, sourceRoom, {
+        senderId: summaryAgent.id,
+        senderName: summaryAgent.name,
+        senderType: "agent",
+        content: formatTaskCompletionMessage({
+          title: task.title,
+          completionSummary: task.completionSummary,
+          artifactRefs: task.artifactRefs,
+        }),
+        taskId: task.id,
+        kind: "task-summary",
+        artifactRefs: normalizeCompletionArtifactRefs(task.artifactRefs),
+        transport: "local",
+      });
+      this.upsertMessage(state, sourceRoom, summaryMessage);
     }
     this.persist(state);
     this.emitTask(state, task);
@@ -1456,6 +1561,7 @@ export class AgentTeamService {
     model?: string,
     proposalRequested = false,
     loop?: AgentLoopSession,
+    retryOf?: TeamMessage,
   ) {
     const runId = randomUUID();
     const response = this.createMessage(state, room, {
@@ -1516,6 +1622,7 @@ export class AgentTeamService {
         taskRun,
         model,
         proposalRequested,
+        retryOf,
       );
     const executeWithWorkspacePolicy = () =>
       agent.workspaceAccess === "write"
@@ -1536,6 +1643,7 @@ export class AgentTeamService {
     taskRun: TaskRun | undefined,
     model?: string,
     proposalRequested = false,
+    retryOf?: TeamMessage,
   ) {
     const queue = new EventQueue();
     const nativeAgentActions: AgentActionV1[] = [];
@@ -1573,6 +1681,9 @@ export class AgentTeamService {
         effectiveModel,
       );
       let session = this.sessions.get(threadKey);
+      if (session && ["completed", "failed", "cancelled"].includes(session.state)) {
+        session = undefined;
+      }
       activeSession = session;
       const providerSessionId = session?.providerThread?.providerSessionId;
       const shouldStartSession =
@@ -1681,6 +1792,7 @@ export class AgentTeamService {
               response.loopId
                 ? state.loops.find((candidate) => candidate.id === response.loopId)
                 : undefined,
+              retryOf,
             ),
         effectiveModel,
         skills,
@@ -1844,6 +1956,9 @@ export class AgentTeamService {
                 : this.hasActiveRuns(task, taskRun.id)
                   ? "running"
                   : "review";
+            if (response.status === "complete" && !task.completionSummary) {
+              task.completionSummary = normalizeCompletionSummary(response.content) || undefined;
+            }
             task.updatedAt = response.updatedAt;
           }
           this.upsertMessage(state, room, response);
@@ -1858,7 +1973,7 @@ export class AgentTeamService {
               ...clone(response),
               roomId: room.externalId ?? room.roomId,
             };
-            void this.publishAgentMessage(published, agent).catch((error) => {
+            void this.publishAgentMessage(published, agent, room).catch((error) => {
               response.error = `OpenIM 发布失败：${errorMessage(error)}`;
               this.upsertMessage(state, room, response);
             });
@@ -1901,7 +2016,7 @@ export class AgentTeamService {
                 atUserIds: this.resolveAtUserIds(state, sourceRoom, response.content),
                 transport: "openim" as const,
               };
-              void this.publishAgentMessage(published, agent).catch((error) => {
+              void this.publishAgentMessage(published, agent, sourceRoom).catch((error) => {
                 response.error = `OpenIM 发布失败：${errorMessage(error)}`;
                 this.upsertMessage(state, room, response);
               });
@@ -2182,7 +2297,19 @@ export class AgentTeamService {
         parent.waitReason = action.reason;
         nextStatus = "blocked";
       } else {
-        if (action.action === "complete") parent.artifactRefs = [...new Set(action.artifactRefs)];
+        if (action.action === "complete") {
+          const completionSummary = normalizeCompletionSummary(action.summary);
+          parent.completionSummary = parent.completionSummary
+            ? normalizeCompletionSummary(
+                parent.completionSummary === completionSummary
+                  ? parent.completionSummary
+                  : `${parent.completionSummary}\n${completionSummary}`,
+              )
+            : completionSummary || undefined;
+          parent.artifactRefs = [
+            ...new Set([...(parent.artifactRefs ?? []), ...action.artifactRefs]),
+          ];
+        }
         parent.waitReason = undefined;
         nextStatus = "review";
       }
@@ -2252,11 +2379,13 @@ export class AgentTeamService {
     agent: AgentDefinition,
     proposalRequested: boolean,
     loop?: AgentLoopSession,
+    retryOf?: TeamMessage,
   ) {
     const history = room.messages
       .filter(
         (message) =>
           message.id !== userMessage.id &&
+          message.id !== retryOf?.id &&
           message.status === "complete" &&
           Boolean(message.content),
       )
@@ -2279,6 +2408,9 @@ export class AgentTeamService {
     const proposalRule = proposalRequested
       ? "用户明确要求生成 Task 草案。请分析上下文并在回答末尾输出结构化草案。"
       : "只有当用户明确要求完成一个会产生交付物的具体工作时，才生成 Task 草案；普通提问、讨论、咨询或意图不明确时只正常回复。";
+    const retryInstruction = retryOf
+      ? "用户要求你针对同一条消息重新回答。忽略上一版回答，给出一版独立的新回答；不要评价、复述或引用上一版。"
+      : "";
     const loopProtocol = loop
       ? [
           `你正在参加协作 Loop「${loop.title}」，Loop ID 为 ${loop.id}。`,
@@ -2307,7 +2439,8 @@ export class AgentTeamService {
       '需要生成草案时，在正常回复末尾附加且只附加一次：<agent-team-task-proposal>{"title":"标题","objective":"目标与执行说明","expectedResult":"预期结果","plan":["步骤1","步骤2"],"acceptanceCriteria":["验收条件"],"requestedAccess":"read或write"}</agent-team-task-proposal>。这段标记不会展示给用户。',
       taskContext,
       history ? `最近的会话记录：\n${history}` : "这是这段会话的第一条消息。",
-      `${userMessage.senderName}（${this.memberMention(state, userMessage.senderId)}）的新消息：\n${userMessage.content}`,
+      retryInstruction,
+      `${userMessage.senderName}（${this.memberMention(state, userMessage.senderId)}）${retryOf ? "需要重新回答的原消息" : "的新消息"}：\n${userMessage.content}`,
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -2405,12 +2538,13 @@ export class AgentTeamService {
     requested?: string[],
   ) {
     const members = state.agents.filter((agent) => room.agentIds.includes(agent.id));
+    if (requested) return members.filter((agent) => requested.includes(agent.id));
     if (/@(所有Agent|全部Agent|all-agents|all)(?=\s|$)/i.test(text)) return members;
     const mentioned = members.filter(
       (agent) => text.includes(agent.mention) || text.includes(`@${agent.id}`),
     );
     if (mentioned.length) return mentioned;
-    return members.filter((agent) => requested?.includes(agent.id));
+    return [];
   }
 
   private createMessage(

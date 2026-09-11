@@ -9,6 +9,11 @@ import type { EventPublisher } from "./events.js";
 import { ApiError, parseBody, parseParams, parseQuery, requireRevision } from "./http.js";
 import { enqueueOutbox } from "./outbox.js";
 import { agentScopesForTask, currentTaskGrant } from "./task-permissions.js";
+import {
+  aggregateTaskCompletionSummaries,
+  formatTaskCompletionMessage,
+  normalizeCompletionArtifactRefs,
+} from "./task-completion-summary.js";
 
 const idParams = z.object({ id: z.string().uuid() });
 const taskStatuses = [
@@ -154,6 +159,8 @@ const taskSelect = `
          t.delegated_by_agent_id AS "delegatedByAgentId", t.depth,
          t.budget, t.budget_usage AS "budgetUsage", t.wait_reason AS "waitReason",
          t.artifact_refs AS "artifactRefs",
+         t.completion_summary AS "completionSummary",
+         t.source_summary_published_at AS "sourceSummaryPublishedAt",
          t.context_version AS "contextVersion", t.latest_source_seq AS "latestSourceSeq",
          t.created_at AS "createdAt", t.updated_at AS "updatedAt"
   FROM tasks t`;
@@ -1018,8 +1025,14 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
     let task: {
       task_room_id: string;
       source_room_id: string;
+      source_group_id: string | null;
       parent_task_id: string | null;
       member_role: string;
+      status: string;
+      title: string;
+      completion_summary: string | null;
+      artifact_refs: string[];
+      source_summary_published_at: Date | null;
     };
     let parentUpdate: {
       id: string;
@@ -1028,12 +1041,19 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
       status: string;
       artifactRefs: string[];
     } | null = null;
+    let summaryPublication: {
+      sourceRoomId: string;
+      taskId: string;
+      artifactRefs: string[];
+    } | null = null;
     try {
       await client.query("BEGIN");
       const found = await client.query<typeof task>(
-        `SELECT t.task_room_id, t.source_room_id, t.parent_task_id,
-                rm.role AS member_role FROM tasks t
+        `SELECT t.task_room_id, t.source_room_id, source_room.openim_group_id AS source_group_id,
+                t.parent_task_id, t.status, t.title, t.completion_summary, t.artifact_refs,
+                t.source_summary_published_at, rm.role AS member_role FROM tasks t
          JOIN room_members rm ON rm.room_id = t.source_room_id
+         JOIN rooms source_room ON source_room.id = t.source_room_id
          WHERE t.id = $1 AND rm.user_id = $2 FOR UPDATE`,
         [id, request.user.sub],
       );
@@ -1066,12 +1086,25 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
         outcome: status,
       });
       if (task.parent_task_id) {
-        const siblings = await client.query<{ status: string; artifact_refs: string[] }>(
-          "SELECT status, artifact_refs FROM tasks WHERE parent_task_id = $1",
+        const parent = await client.query<{
+          task_room_id: string;
+          status: string;
+          title: string;
+          completion_summary: string | null;
+          artifact_refs: string[];
+        }>(
+          `SELECT task_room_id, status, title, completion_summary, artifact_refs
+           FROM tasks WHERE id = $1 FOR UPDATE`,
           [task.parent_task_id],
         );
-        const parent = await client.query<{ task_room_id: string }>(
-          "SELECT task_room_id FROM tasks WHERE id = $1 FOR UPDATE",
+        const siblings = await client.query<{
+          status: string;
+          title: string;
+          completion_summary: string | null;
+          artifact_refs: string[];
+        }>(
+          `SELECT status, title, completion_summary, artifact_refs
+           FROM tasks WHERE parent_task_id = $1 ORDER BY created_at, id`,
           [task.parent_task_id],
         );
         const blockedChild = siblings.rows.some((child) =>
@@ -1093,15 +1126,32 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
             status: "blocked",
             artifactRefs: [],
           };
-        } else if (allDone) {
+        } else if (
+          allDone &&
+          !["review", "done", "failed", "cancelled"].includes(parent.rows[0].status)
+        ) {
           const artifactRefs = [
-            ...new Set(siblings.rows.flatMap((child) => child.artifact_refs ?? [])),
+            ...new Set([
+              ...(parent.rows[0].artifact_refs ?? []),
+              ...siblings.rows.flatMap((child) => child.artifact_refs ?? []),
+            ]),
           ];
+          const completionSummary = aggregateTaskCompletionSummaries([
+            ...(parent.rows[0].completion_summary
+              ? [
+                  {
+                    title: parent.rows[0].title,
+                    completion_summary: parent.rows[0].completion_summary,
+                  },
+                ]
+              : []),
+            ...siblings.rows,
+          ]);
           await client.query(
             `UPDATE tasks SET status = 'review', wait_reason = NULL,
-                    artifact_refs = $1::jsonb, updated_at = now()
-             WHERE id = $2 AND status NOT IN ('done', 'failed', 'cancelled')`,
-            [JSON.stringify(artifactRefs), task.parent_task_id],
+                    completion_summary = $1, artifact_refs = $2::jsonb, updated_at = now()
+             WHERE id = $3 AND status NOT IN ('done', 'failed', 'cancelled')`,
+            [completionSummary, JSON.stringify(artifactRefs), task.parent_task_id],
           );
           parentUpdate = {
             id: task.parent_task_id,
@@ -1111,6 +1161,84 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
             artifactRefs,
           };
         }
+      }
+      if (
+        status === "done" &&
+        task.status !== "done" &&
+        !task.parent_task_id &&
+        !task.source_summary_published_at
+      ) {
+        if (!task.source_group_id) {
+          throw new ApiError(
+            409,
+            "SOURCE_ROOM_NOT_PUBLISHABLE",
+            "来源群尚未绑定 OpenIM 群，无法发布 Task 总结。",
+          );
+        }
+        const agentSender = await client.query<{
+          openim_user_id: string;
+          name: string;
+        }>(
+          `SELECT a.openim_user_id, a.name FROM task_assignees ta
+           JOIN agents a ON a.id = ta.agent_id
+           WHERE ta.task_id = $1 ORDER BY a.id LIMIT 1`,
+          [id],
+        );
+        let sender: { openimUserId: string; name: string };
+        if (agentSender.rows[0]) {
+          sender = {
+            openimUserId: agentSender.rows[0].openim_user_id,
+            name: agentSender.rows[0].name,
+          };
+        } else {
+          const userSender = (
+            await client.query<{ openim_user_id: string; display_name: string }>(
+              "SELECT openim_user_id, display_name FROM users WHERE id = $1",
+              [request.user.sub],
+            )
+          ).rows[0];
+          if (!userSender) {
+            throw new ApiError(
+              409,
+              "TASK_SUMMARY_SENDER_UNAVAILABLE",
+              "没有可用于发布 Task 总结的群成员身份。",
+            );
+          }
+          sender = { openimUserId: userSender.openim_user_id, name: userSender.display_name };
+        }
+        const artifactRefs = normalizeCompletionArtifactRefs(task.artifact_refs);
+        const content = formatTaskCompletionMessage({
+          title: task.title,
+          completionSummary: task.completion_summary,
+          artifactRefs,
+        });
+        await enqueueOutbox(client, "openim.message.send", "task_source_summary", id, {
+          sendID: sender.openimUserId,
+          senderNickname: sender.name,
+          groupID: task.source_group_id,
+          content,
+          ex: {
+            kind: "task-summary",
+            taskId: id,
+            artifactRefs,
+            final: true,
+            deliveryKey: `task-summary:${id}`,
+          },
+        });
+        await client.query(
+          "UPDATE tasks SET source_summary_published_at = now(), updated_at = now() WHERE id = $1",
+          [id],
+        );
+        await appendCollaborationAudit(client, {
+          actorUserId: request.user.sub,
+          roomId: task.source_room_id,
+          taskId: id,
+          eventType: "task.summary_published",
+          summary: "Task 验收总结已发布到来源群。",
+          outcome: "published",
+          metadata: { artifactRefs },
+        });
+        summaryPublication = { sourceRoomId: task.source_room_id, taskId: id, artifactRefs };
       }
       await client.query("COMMIT");
     } catch (error) {
@@ -1136,6 +1264,13 @@ export const registerTaskRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
         taskId: parentUpdate.id,
         status: parentUpdate.status,
         artifactRefs: parentUpdate.artifactRefs,
+      });
+    }
+    if (summaryPublication) {
+      await events.publishToRoom(summaryPublication.sourceRoomId, {
+        type: "task.summary.published",
+        taskId: summaryPublication.taskId,
+        artifactRefs: summaryPublication.artifactRefs,
       });
     }
     return { id, status };

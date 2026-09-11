@@ -191,6 +191,135 @@ test("Agent and friend direct messages reuse rooms and do not create Tasks", asy
   }
 });
 
+test("BDD: retrying a completed Agent reply appends an independent answer to the same question", async () => {
+  const storeDir = await mkdtemp(join(tmpdir(), "agent-team-retry-complete-"));
+  const workspace = "/tmp/agent-retry-complete-workspace";
+  const codex = new FakeCodex();
+  codex.responses.push("第一版回答", "第二版回答");
+  const service = new AgentTeamService(codex as unknown as AgentRuntime, storeDir);
+
+  try {
+    const room = await service.openDirectRoom(workspace, "agent_coordinator");
+    const sent = await service.sendMessage({
+      workspace,
+      roomId: room.roomId,
+      text: "请解释这个方案",
+    });
+    await waitFor(async () => {
+      const current = await service.getWorkspace(workspace);
+      return Boolean(
+        current.rooms
+          .find((candidate) => candidate.roomId === room.roomId)
+          ?.messages.some(
+            (message) =>
+              message.senderType === "agent" &&
+              message.replyTo === sent.messageId &&
+              message.status === "complete",
+          ),
+      );
+    });
+    const firstSnapshot = await service.getWorkspace(workspace);
+    const firstReply = firstSnapshot.rooms
+      .find((candidate) => candidate.roomId === room.roomId)!
+      .messages.find(
+        (message) => message.senderType === "agent" && message.replyTo === sent.messageId,
+      )!;
+
+    const retried = await service.retryMessage({
+      workspace,
+      roomId: room.roomId,
+      messageId: firstReply.id,
+    });
+    await waitFor(async () => {
+      const current = await service.getWorkspace(workspace);
+      return (
+        current.rooms
+          .find((candidate) => candidate.roomId === room.roomId)
+          ?.messages.find((message) => message.id === retried.messageId)?.status === "complete"
+      );
+    });
+
+    const current = await service.getWorkspace(workspace);
+    const replies = current.rooms
+      .find((candidate) => candidate.roomId === room.roomId)!
+      .messages.filter(
+        (message) => message.senderType === "agent" && message.replyTo === sent.messageId,
+      );
+    assert.deepEqual(
+      replies.map((message) => message.content),
+      ["第一版回答", "第二版回答"],
+    );
+    assert.notEqual(retried.messageId, firstReply.id);
+    assert.equal(codex.threadStarts, 1, "a completed retry should preserve the continuous Session");
+    assert.match(codex.prompts[1], /用户要求你针对同一条消息重新回答/);
+    assert.match(codex.prompts[1], /请解释这个方案/);
+    assert.doesNotMatch(codex.prompts[1], /第一版回答/);
+  } finally {
+    await service.flush();
+    await rm(storeDir, { recursive: true, force: true });
+  }
+});
+
+test("BDD: retrying a failed Agent reply starts a recoverable Session", async () => {
+  const storeDir = await mkdtemp(join(tmpdir(), "agent-team-retry-failed-"));
+  const workspace = "/tmp/agent-retry-failed-workspace";
+  const codex = new FakeCodex();
+  codex.nextTurnError = new Error("首次回答失败");
+  const service = new AgentTeamService(codex as unknown as AgentRuntime, storeDir);
+
+  try {
+    const room = await service.openDirectRoom(workspace, "agent_coordinator");
+    const sent = await service.sendMessage({
+      workspace,
+      roomId: room.roomId,
+      text: "请再试一次",
+    });
+    await waitFor(async () => {
+      const current = await service.getWorkspace(workspace);
+      return Boolean(
+        current.rooms
+          .find((candidate) => candidate.roomId === room.roomId)
+          ?.messages.some(
+            (message) => message.replyTo === sent.messageId && message.status === "error",
+          ),
+      );
+    });
+    const failedSnapshot = await service.getWorkspace(workspace);
+    const failedReply = failedSnapshot.rooms
+      .find((candidate) => candidate.roomId === room.roomId)!
+      .messages.find((message) => message.replyTo === sent.messageId)!;
+
+    codex.responses.push("恢复后的回答");
+    const retried = await service.retryMessage({
+      workspace,
+      roomId: room.roomId,
+      messageId: failedReply.id,
+    });
+    await waitFor(async () => {
+      const current = await service.getWorkspace(workspace);
+      return (
+        current.rooms
+          .find((candidate) => candidate.roomId === room.roomId)
+          ?.messages.find((message) => message.id === retried.messageId)?.status === "complete"
+      );
+    });
+
+    const current = await service.getWorkspace(workspace);
+    const retriedReply = current.rooms
+      .find((candidate) => candidate.roomId === room.roomId)!
+      .messages.find((message) => message.id === retried.messageId)!;
+    assert.equal(retriedReply.content, "恢复后的回答");
+    assert.equal(codex.threadStarts, 2, "a failed Session must be replaced before retrying");
+    assert.deepEqual(
+      current.sessions.map((session) => session.state),
+      ["failed", "waiting"],
+    );
+  } finally {
+    await service.flush();
+    await rm(storeDir, { recursive: true, force: true });
+  }
+});
+
 test("legacy workspace data is upgraded without changing Agent identity or permissions", async () => {
   const storeDir = await mkdtemp(join(tmpdir(), "agent-domain-migration-"));
   const workspace = "/tmp/agent-domain-migration-workspace";
@@ -704,6 +833,159 @@ test("group mentions stay in chat and an approved Task proposal starts explicitl
   }
 });
 
+test("BDD: an accepted local root Task publishes one durable summary to its source group", async () => {
+  const storeDir = await mkdtemp(join(tmpdir(), "agent-team-task-summary-"));
+  const workspace = "/tmp/task-summary-workspace";
+  const codex = new FakeCodex();
+  const service = new AgentTeamService(codex as unknown as AgentRuntime, storeDir);
+
+  try {
+    const initial = await service.getWorkspace(workspace);
+    const sourceRoom = initial.rooms.find((candidate) => candidate.type === "group")!;
+    const reviewer = initial.agents.find((candidate) => candidate.id === "agent_reviewer")!;
+
+    codex.responses.push(
+      '已生成草案。\n<agent-team-task-proposal>{"title":"读取桌面文件","objective":"读取并分析桌面文件","expectedResult":"可回看的文件分析总结","plan":["列出文件","分析文本内容"],"acceptanceCriteria":["总结同步到来源群"],"requestedAccess":"read"}</agent-team-task-proposal>',
+    );
+    await service.sendMessage({
+      workspace,
+      roomId: sourceRoom.roomId,
+      text: `${reviewer.mention} 读取一下桌面上的文件`,
+      agentAction: "propose-task",
+    });
+    await waitFor(async () => (await service.getWorkspace(workspace)).tasks.length === 1);
+
+    let task = (await service.getWorkspace(workspace)).tasks[0];
+    await service.reviewTask(workspace, task.id, "approved");
+    codex.responses.push(
+      `桌面文件分析完成。\n<!-- agent-action-v1 ${JSON.stringify({
+        protocolVersion: 1,
+        actionId: "complete-desktop-review",
+        taskId: task.id,
+        taskRevision: task.revision,
+        action: "complete",
+        summary: "共发现 3 个可读文本文件，均已完成静态分析。",
+        artifactRefs: ["reports/desktop-files.md"],
+      })} -->`,
+    );
+    await service.startTask(workspace, task.id);
+    await waitFor(async () => {
+      const current = await service.getWorkspace(workspace);
+      return current.tasks.find((candidate) => candidate.id === task.id)?.status === "review";
+    });
+
+    let snapshot = await service.getWorkspace(workspace);
+    assert.equal(
+      snapshot.rooms
+        .find((candidate) => candidate.roomId === sourceRoom.roomId)!
+        .messages.filter((message) => message.kind === "task-summary").length,
+      0,
+      "entering review must not publish before human acceptance",
+    );
+
+    task = await service.updateTaskStatus(workspace, task.id, "done");
+    assert.equal(task.status, "done");
+    snapshot = await service.getWorkspace(workspace);
+    const summaries = snapshot.rooms
+      .find((candidate) => candidate.roomId === sourceRoom.roomId)!
+      .messages.filter((message) => message.kind === "task-summary" && message.taskId === task.id);
+    assert.equal(summaries.length, 1);
+    assert.match(summaries[0].content, /共发现 3 个可读文本文件/);
+    assert.deepEqual(summaries[0].artifactRefs, ["reports/desktop-files.md"]);
+
+    await service.updateTaskStatus(workspace, task.id, "done");
+    snapshot = await service.getWorkspace(workspace);
+    assert.equal(
+      snapshot.rooms
+        .find((candidate) => candidate.roomId === sourceRoom.roomId)!
+        .messages.filter((message) => message.kind === "task-summary" && message.taskId === task.id)
+        .length,
+      1,
+      "repeated acceptance must not duplicate the source summary",
+    );
+  } finally {
+    await service.flush();
+    await rm(storeDir, { recursive: true, force: true });
+  }
+});
+
+test("BDD: a local child Task aggregates into its parent without posting to the source group", async () => {
+  const storeDir = await mkdtemp(join(tmpdir(), "agent-team-child-summary-"));
+  const workspace = "/tmp/child-summary-workspace";
+  const codex = new FakeCodex();
+  const service = new AgentTeamService(codex as unknown as AgentRuntime, storeDir);
+
+  try {
+    const initial = await service.getWorkspace(workspace);
+    const sourceRoom = initial.rooms.find((candidate) => candidate.type === "group")!;
+    const coder = initial.agents.find((candidate) => candidate.id === "agent_coder")!;
+    const reviewer = initial.agents.find((candidate) => candidate.id === "agent_reviewer")!;
+
+    codex.responses.push(
+      '已生成草案。\n<agent-team-task-proposal>{"title":"登录分析","objective":"分析并复核登录实现","expectedResult":"可验收结论","plan":["分析","复核"],"acceptanceCriteria":["复核通过"],"requestedAccess":"read"}</agent-team-task-proposal>',
+    );
+    await service.sendMessage({
+      workspace,
+      roomId: sourceRoom.roomId,
+      text: `${coder.mention} 分析登录实现并安排复核`,
+      agentAction: "propose-task",
+    });
+    await waitFor(async () => (await service.getWorkspace(workspace)).tasks.length === 1);
+    let root = (await service.getWorkspace(workspace)).tasks[0];
+    await service.reviewTask(workspace, root.id, "approved");
+    codex.responses.push(
+      `初步分析完成，交给审查员复核。\n<!-- agent-action-v1 ${JSON.stringify({
+        protocolVersion: 1,
+        actionId: "delegate-summary-review",
+        taskId: root.id,
+        taskRevision: root.revision,
+        action: "create_subtask",
+        title: "复核登录实现",
+        objective: "复核登录分析结论",
+        expectedResult: "独立复核摘要",
+        assigneeIds: [reviewer.id],
+        requestedScopes: ["workspace.read"],
+        acceptanceCriteria: ["结论可复核"],
+      })} -->`,
+      "复核完成，没有发现阻塞问题。",
+    );
+    await service.startTask(workspace, root.id);
+    await waitFor(async () => {
+      const current = await service.getWorkspace(workspace);
+      return current.tasks.some(
+        (candidate) => candidate.parentTaskId === root.id && candidate.status === "review",
+      );
+    });
+
+    let snapshot = await service.getWorkspace(workspace);
+    const child = snapshot.tasks.find((candidate) => candidate.parentTaskId === root.id)!;
+    await service.updateTaskStatus(workspace, child.id, "done");
+    snapshot = await service.getWorkspace(workspace);
+    root = snapshot.tasks.find((candidate) => candidate.id === root.id)!;
+    assert.equal(root.status, "review");
+    assert.match(root.completionSummary ?? "", /登录分析：初步分析完成/);
+    assert.match(root.completionSummary ?? "", /复核登录实现：复核完成/);
+    assert.equal(
+      snapshot.rooms
+        .find((candidate) => candidate.roomId === sourceRoom.roomId)!
+        .messages.filter((message) => message.kind === "task-summary").length,
+      0,
+    );
+
+    await service.updateTaskStatus(workspace, root.id, "done");
+    snapshot = await service.getWorkspace(workspace);
+    const summaries = snapshot.rooms
+      .find((candidate) => candidate.roomId === sourceRoom.roomId)!
+      .messages.filter((message) => message.kind === "task-summary");
+    assert.equal(summaries.length, 1);
+    assert.match(summaries[0].content, /登录分析：初步分析完成/);
+    assert.match(summaries[0].content, /复核登录实现：复核完成/);
+  } finally {
+    await service.flush();
+    await rm(storeDir, { recursive: true, force: true });
+  }
+});
+
 test("an approved local Task can delegate a governed child while chat markers stay non-authoritative", async () => {
   const storeDir = await mkdtemp(join(tmpdir(), "agent-team-local-delegation-"));
   const workspace = "/tmp/local-delegation-workspace";
@@ -1089,6 +1371,48 @@ test("Agent execution failure with error object produces humanized error instead
     assert.ok(agentMessage.error?.includes('模型 "gpt-6-astra" 不受支持'));
     assert.ok(agentMessage.error?.includes("当前群组没有任何已配置账号支持该模型"));
     assert.ok(agentMessage.error?.includes("原始报错："));
+  } finally {
+    await service.flush();
+    await rm(storeDir, { recursive: true, force: true });
+  }
+});
+
+test("BDD: explicit external-message targets cannot expand to other mentioned Agents", async () => {
+  const storeDir = await mkdtemp(join(tmpdir(), "agent-team-exact-target-"));
+  const workspace = "/tmp/agent-team-exact-target-workspace";
+  const codex = new FakeCodex();
+  const published: Array<{ agentId: string; roomId: string }> = [];
+  const service = new AgentTeamService(
+    codex as unknown as AgentRuntime,
+    storeDir,
+    async (_message, target, room) => {
+      published.push({ agentId: target.id, roomId: room.roomId });
+    },
+  );
+
+  try {
+    const initial = await service.getWorkspace(workspace);
+    const room = initial.rooms.find((candidate) => candidate.type === "group")!;
+    const coordinator = initial.agents.find((candidate) => candidate.id === "agent_coordinator")!;
+    const architect = initial.agents.find((candidate) => candidate.id === "agent_architect")!;
+    const ingested = await service.ingestExternalMessage({
+      workspace,
+      message: {
+        externalId: "cloud-message-exact-target",
+        roomId: room.roomId,
+        senderId: "local_user",
+        senderName: "我",
+        content: `${coordinator.mention} ${architect.mention} 请一起分析`,
+        createdAt: Date.now(),
+        agentAction: "chat",
+      },
+      targetAgentIds: [coordinator.id],
+      triggerAgents: true,
+    });
+    assert.equal(ingested.runIds.length, 1);
+    await waitFor(async () => published.length === 1);
+    assert.deepEqual(published, [{ agentId: coordinator.id, roomId: room.roomId }]);
+    assert.equal(codex.prompts.length, 1);
   } finally {
     await service.flush();
     await rm(storeDir, { recursive: true, force: true });

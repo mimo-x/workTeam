@@ -44,6 +44,7 @@ const agentTeam: AgentTeamApi = {
   ingestExternalMessage: (options) =>
     ipcRenderer.invoke("agent-team:ingest-external-message", options),
   stopRun: (options) => ipcRenderer.invoke("agent-team:stop-run", options),
+  retryMessage: (options) => ipcRenderer.invoke("agent-team:retry-message", options),
   promoteAgents: (options) => ipcRenderer.invoke("agent-team:promote-agents", options),
   controlLoop: (options) => ipcRenderer.invoke("agent-team:control-loop", options),
   saveAgents: (options) => ipcRenderer.invoke("agent-team:save-agents", options),

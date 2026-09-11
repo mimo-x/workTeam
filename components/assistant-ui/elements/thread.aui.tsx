@@ -89,7 +89,7 @@ export const Thread: FC<ThreadProps> = ({
     <ThreadPrimitive.Root
       className="aui-root aui-thread-root @container flex h-full min-h-0 flex-col overflow-hidden bg-transparent"
       style={{
-        ["--thread-max-width" as string]: "48rem",
+        ["--thread-max-width" as string]: "52rem",
         ["--composer-bg" as string]: "var(--card)",
         ["--composer-radius" as string]: "1.5rem",
         ["--composer-padding" as string]: "8px",
@@ -102,8 +102,8 @@ export const Thread: FC<ThreadProps> = ({
       >
         <div
           className={cn(
-            "mx-auto flex min-h-full w-full max-w-(--thread-max-width) flex-col px-5 pt-5",
-            isEmpty && "justify-center py-8",
+            "mx-auto flex min-h-full w-full max-w-(--thread-max-width) flex-col px-8 pt-7",
+            isEmpty && "justify-center py-10",
           )}
         >
           <AuiIf condition={isNewChatView}>
@@ -119,7 +119,7 @@ export const Thread: FC<ThreadProps> = ({
 
           <ThreadPrimitive.ViewportFooter
             className={cn(
-              "aui-thread-viewport-footer flex flex-col gap-4 overflow-visible bg-transparent pb-4 md:pb-6",
+              "aui-thread-viewport-footer flex flex-col gap-4 overflow-visible bg-transparent pb-5 md:pb-7",
               !isEmpty && "sticky bottom-0 mt-auto",
             )}
           >
@@ -165,7 +165,7 @@ const ThreadWelcome: FC<Pick<ThreadProps, "badge" | "welcome" | "description">> 
 }) => {
   return (
     <div className="aui-thread-welcome-root mb-8 flex flex-col items-center px-4 text-center">
-      <div className="fade-in slide-in-from-bottom-1 animate-in mb-5 grid size-14 place-items-center rounded-xl border border-primary/20 bg-primary/10 text-lg font-semibold text-primary shadow-[var(--shadow-primary)] duration-200">
+      <div className="fade-in slide-in-from-bottom-1 animate-in mb-5 grid size-14 place-items-center rounded-2xl bg-primary/10 text-lg font-semibold text-primary duration-200">
         {badge}
       </div>
       <h1 className="aui-thread-welcome-message-inner fade-in slide-in-from-bottom-1 animate-in fill-mode-both text-3xl font-semibold tracking-tight text-foreground duration-200 md:text-4xl">
@@ -208,11 +208,11 @@ const Composer: FC<Pick<ThreadProps, "placeholder">> = ({ placeholder }) => {
     <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
       <div
         data-slot="aui_composer-shell"
-        className="border-input focus-within:border-primary flex w-full cursor-text flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) shadow-[var(--shadow-down-1)] transition-[border-color] focus-within:ring-3 focus-within:ring-primary/15"
+        className="flex w-full cursor-text flex-col gap-2 rounded-(--composer-radius) border border-border/80 bg-(--composer-bg) p-(--composer-padding) shadow-[var(--shadow-down-3)] transition-[border-color,box-shadow] focus-within:border-primary/50 focus-within:shadow-[var(--shadow-primary)]"
       >
         <ComposerPrimitive.Input
           placeholder={placeholder}
-          className="aui-composer-input placeholder:text-muted-foreground max-h-48 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 text-foreground outline-none"
+          className="aui-composer-input placeholder:text-muted-foreground max-h-48 min-h-12 w-full resize-none bg-transparent px-3 py-2 text-base leading-6 text-foreground outline-none"
           rows={1}
           autoFocus
           aria-label="消息输入框"
@@ -445,11 +445,11 @@ const UserMessage: FC = () => {
   return (
     <MessagePrimitive.Root
       data-slot="aui_user-message-root"
-      className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_minmax(0,40rem)] content-start gap-y-2 px-2 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto] [&:where(>*)]:col-start-2"
+      className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_minmax(0,44rem)] content-start gap-y-2 px-2 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto] [&:where(>*)]:col-start-2"
       data-role="user"
     >
       <div className="aui-user-message-content-wrapper relative col-start-2 flex min-w-0 justify-end">
-        <div className="aui-user-message-content peer max-w-full rounded-2xl rounded-br-md border border-border bg-muted/70 px-4 py-2.5 text-foreground shadow-[var(--shadow-down-1)] wrap-break-word empty:hidden">
+        <div className="aui-user-message-content peer w-fit max-w-[80%] rounded-xl rounded-br-sm bg-muted px-3 py-2 text-sm leading-5 text-foreground wrap-break-word empty:hidden">
           <MessagePrimitive.Parts />
         </div>
         <div className="aui-user-action-bar-wrapper absolute start-0 top-1/2 -translate-x-full -translate-y-1/2 pe-2 peer-empty:hidden rtl:translate-x-full">

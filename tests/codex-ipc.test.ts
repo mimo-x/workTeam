@@ -1,9 +1,10 @@
+import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
-import assert from "node:assert/strict";
 
 test("Given 渲染层调用 Codex 会话 API When 主进程注册 IPC Then 每个调用都有处理器", async () => {
   const source = await readFile(new URL("../src/main/index.ts", import.meta.url), "utf8");
+  const compactSource = source.replace(/\s+/g, "");
   for (const channel of [
     "codex:list-threads",
     "codex:read-thread",
@@ -18,6 +19,9 @@ test("Given 渲染层调用 Codex 会话 API When 主进程注册 IPC Then 每�
     "codex:create-worktree",
     "codex:remove-worktree",
   ]) {
-    assert.match(source, new RegExp(`ipcMain\\.handle\\(\\"${channel}\\"`));
+    assert.ok(
+      compactSource.includes(`ipcMain.handle("${channel}"`),
+      `${channel} should have an IPC handler`,
+    );
   }
 });

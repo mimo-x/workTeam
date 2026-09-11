@@ -377,6 +377,24 @@ const registerIpc = () => {
     agentTeam.stopRun(requireString(options.runId, "run ID", 256)),
   );
   ipcMain.handle(
+    "agent-team:retry-message",
+    async (
+      _event,
+      options: {
+        workspace?: unknown;
+        roomId?: unknown;
+        messageId?: unknown;
+        model?: unknown;
+      },
+    ) =>
+      agentTeam.retryMessage({
+        workspace: await requireDirectory(options.workspace),
+        roomId: requireString(options.roomId, "房间 ID", 256),
+        messageId: requireString(options.messageId, "消息 ID", 256),
+        model: typeof options.model === "string" ? options.model : undefined,
+      }),
+  );
+  ipcMain.handle(
     "agent-team:promote-agents",
     async (_event, options: { workspace?: unknown; mappings?: unknown }) => {
       if (!Array.isArray(options.mappings) || options.mappings.length > 24) {
@@ -704,11 +722,11 @@ app.whenReady().then(async () => {
   );
   workspaceBindings = new WorkspaceBindingStore(workspaceBindingsPath(userDataPath), safeStorage);
   remoteAgentHost = new RemoteAgentHost(backend, runtimeRegistry, workspaceBindings);
-  const publisher = new AgentGatewayPublisher(imConfig);
+  const publisher = new AgentGatewayPublisher(imConfig, backend);
   agentTeam = new AgentTeamService(
     runtimeRegistry,
     join(userDataPath, "agent-team-rooms"),
-    (message, agent) => publisher.publish(message, agent),
+    (message, agent, room) => publisher.publish(message, agent, room),
   );
   registerIpc();
   codex.onEvent((event) => sendToRenderer("codex:event", event));

@@ -9,6 +9,7 @@ import type { AppConfig } from "./config.js";
 import type { EventPublisher } from "./events.js";
 import { ApiError, parseBody } from "./http.js";
 import { enqueueOutbox } from "./outbox.js";
+import { normalizeCompletionSummary } from "./task-completion-summary.js";
 import type { EnvelopeCipher } from "./security.js";
 import { randomToken, tokenHash } from "./security.js";
 import type { EncryptedEnvelope } from "./schema.js";
@@ -848,6 +849,9 @@ export class RealtimeHub implements EventPublisher {
         ...(invalidActionCount ? [`包含 ${invalidActionCount} 个无效 Agent 动作。`] : []),
         ...actionResult.errors,
       ];
+      const fallbackSummary = actionResult.hasCompletionSummary
+        ? ""
+        : normalizeCompletionSummary(content);
       await client.query(
         `UPDATE task_runs SET status = $1, completed_at = CASE WHEN $1 = 'complete' THEN now() ELSE NULL END,
                 error = $2, lease_token_hash = NULL, lease_expires_at = NULL, updated_at = now()
@@ -866,15 +870,29 @@ export class RealtimeHub implements EventPublisher {
         );
       } else if (actionResult.createdTasks.length) {
         await client.query(
-          `UPDATE tasks SET status = 'waiting', wait_reason = '等待委派的子 Task 完成。', updated_at = now()
-           WHERE id = $1 AND status IN ('running', 'waiting')`,
-          [run.task_id],
+          `UPDATE tasks SET status = 'waiting', wait_reason = '等待委派的子 Task 完成。',
+                  completion_summary = CASE
+                    WHEN $1::text = '' THEN completion_summary
+                    WHEN completion_summary IS NULL OR completion_summary = '' THEN $1
+                    WHEN completion_summary = $1 THEN completion_summary
+                    ELSE completion_summary || E'\n' || $1
+                  END,
+                  updated_at = now()
+           WHERE id = $2 AND status IN ('approved', 'queued', 'running', 'waiting')`,
+          [fallbackSummary, run.task_id],
         );
       } else {
         await client.query(
-          `UPDATE tasks SET status = 'review', wait_reason = NULL, updated_at = now()
-           WHERE id = $1 AND status IN ('running', 'waiting')`,
-          [run.task_id],
+          `UPDATE tasks SET status = 'review', wait_reason = NULL,
+                  completion_summary = CASE
+                    WHEN $1::text = '' THEN completion_summary
+                    WHEN completion_summary IS NULL OR completion_summary = '' THEN $1
+                    WHEN completion_summary = $1 THEN completion_summary
+                    ELSE completion_summary || E'\\n' || $1
+                  END,
+                  updated_at = now()
+           WHERE id = $2 AND status IN ('approved', 'queued', 'running', 'waiting', 'review')`,
+          [fallbackSummary, run.task_id],
         );
       }
       await enqueueOutbox(client, "openim.message.send", "task_run", runId, {

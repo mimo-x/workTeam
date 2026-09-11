@@ -70,3 +70,19 @@ test("BDD: Agent settings dialog uses semantic surfaces in light and dark themes
   assert.match(agentSettings, /<(?:Input|Textarea|Select)/);
   assert.match(agentSettings, /text-(?:foreground|muted-foreground)/);
 });
+
+test("BDD: create group dialog uses semantic surfaces in light and dark themes", async () => {
+  const source = await readFile(sourcePath, "utf8");
+  const roomDialog = extractView(source, "const RoomDialog =", "const ContactsView =");
+
+  assert.doesNotMatch(
+    roomDialog,
+    fixedDarkColors,
+    "create group dialog must not bypass theme tokens with fixed dark colors",
+  );
+  assert.match(roomDialog, /<Dialog/);
+  assert.match(roomDialog, /<DialogTitle/);
+  assert.match(roomDialog, /<Input/);
+  assert.match(roomDialog, /<Button/);
+  assert.match(roomDialog, /text-(?:foreground|muted-foreground)/);
+});

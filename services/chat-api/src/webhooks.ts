@@ -145,6 +145,11 @@ export const registerOpenImWebhooks = (
       [senderOpenimId],
     );
     const extension = parseJson(body.ex);
+    const rawDeliveryKey = extension.deliveryKey ?? extension.deliveryId;
+    const deliveryKey =
+      typeof rawDeliveryKey === "string" && rawDeliveryKey.trim()
+        ? rawDeliveryKey.trim().slice(0, 256)
+        : null;
     const agentAction = extension.agentAction === "propose-task" ? "propose-task" : "chat";
     const mentionedOpenimIds = new Set([
       ...(Array.isArray(body.atUserList) ? body.atUserList.map(String) : []),
@@ -171,8 +176,10 @@ export const registerOpenImWebhooks = (
     try {
       await client.query("BEGIN");
       const duplicate = await client.query(
-        "SELECT 1 FROM message_mirrors WHERE server_msg_id = $1 OR client_msg_id = $2",
-        [serverMsgId, clientMsgId],
+        `SELECT 1 FROM message_mirrors
+         WHERE server_msg_id = $1 OR client_msg_id = $2
+            OR ($3::text IS NOT NULL AND delivery_key = $3)`,
+        [serverMsgId, clientMsgId, deliveryKey],
       );
       if (duplicate.rowCount) {
         await client.query("COMMIT");
@@ -181,9 +188,10 @@ export const registerOpenImWebhooks = (
       const inserted = await client.query(
         `INSERT INTO message_mirrors(
            server_msg_id, client_msg_id, room_id, openim_conversation_id, sender_openim_id,
-           sender_user_id, sender_agent_id, content, content_type, seq, target_agent_ids, raw, sent_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13)
-         ON CONFLICT (server_msg_id) DO NOTHING RETURNING server_msg_id`,
+           sender_user_id, sender_agent_id, content, content_type, seq, target_agent_ids,
+           delivery_key, raw, sent_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13::jsonb,$14)
+         ON CONFLICT DO NOTHING RETURNING server_msg_id`,
         [
           serverMsgId,
           clientMsgId,
@@ -196,6 +204,7 @@ export const registerOpenImWebhooks = (
           Number(body.contentType ?? 101),
           sequence,
           JSON.stringify(targetAgents.rows.map((agent) => agent.id)),
+          deliveryKey,
           JSON.stringify(body),
           sentAt,
         ],

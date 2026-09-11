@@ -266,6 +266,8 @@ export type TeamMessage = {
   loopTurn?: number;
   agentAction?: AgentMessageAction;
   taskId?: string;
+  kind?: "task-summary";
+  artifactRefs?: string[];
   activity?: string;
   error?: string;
   transport: "local" | "openim";
@@ -397,6 +399,8 @@ export type AgentTask = {
   budgetUsage?: TaskBudgetUsage;
   waitReason?: string;
   artifactRefs?: string[];
+  completionSummary?: string;
+  sourceSummaryPublishedAt?: number;
   contextVersion: number;
   latestSourceSeq: number;
   consumedContextVersionByAgent: Record<string, number>;
@@ -499,6 +503,12 @@ export type AgentTeamApi = {
     taskRoomId?: string;
   }>;
   stopRun: (options: { runId: string }) => Promise<void>;
+  retryMessage: (options: {
+    workspace: string;
+    roomId: string;
+    messageId: string;
+    model?: string;
+  }) => Promise<{ messageId: string; runId: string }>;
   promoteAgents: (options: {
     workspace: string;
     mappings: Array<{

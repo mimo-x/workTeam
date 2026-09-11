@@ -35,6 +35,10 @@ test("two users can become friends, create an Agent room, and sync settings", as
   await pool.query(await readFile(join(migrationsDir, "0003_agent_registry.sql"), "utf8"));
   await pool.query(await readFile(join(migrationsDir, "0004_agent_runtime_config.sql"), "utf8"));
   await pool.query(await readFile(join(migrationsDir, "0005_governed_collaboration.sql"), "utf8"));
+  await pool.query(await readFile(join(migrationsDir, "0006_task_completion_summary.sql"), "utf8"));
+  await pool.query(
+    await readFile(join(migrationsDir, "0007_agent_chat_outbox_idempotency.sql"), "utf8"),
+  );
   const config = loadConfig({
     NODE_ENV: "test",
     JWT_SECRET: "test-jwt-secret-with-at-least-32-characters",
@@ -207,6 +211,52 @@ test("two users can become friends, create an Agent room, and sync settings", as
     });
     assert.equal(room.statusCode, 201, room.body);
     assert.equal(room.json().pendingAgentIds.length, 0);
+
+    const chatDeliveryId = randomUUID();
+    const chatRunId = randomUUID();
+    const publishAgentChat = () =>
+      app.inject({
+        method: "POST",
+        url: `/v1/rooms/${room.json().id}/agent-messages`,
+        headers: { authorization: `Bearer ${alice.accessToken}` },
+        payload: {
+          agentId: agent.id,
+          content: "这是本机 Agent 的分析结果。",
+          deliveryId: chatDeliveryId,
+          runId: chatRunId,
+          parentMessageId: "server-chat-source",
+          agentHop: 1,
+        },
+      });
+    const publishedAgentChat = await publishAgentChat();
+    assert.equal(publishedAgentChat.statusCode, 202, publishedAgentChat.body);
+    assert.equal(publishedAgentChat.json().duplicate, false);
+    const duplicateAgentChat = await publishAgentChat();
+    assert.equal(duplicateAgentChat.statusCode, 202, duplicateAgentChat.body);
+    assert.equal(duplicateAgentChat.json().duplicate, true);
+    const agentChatOutbox = await pool.query(
+      `SELECT payload FROM outbox_events
+       WHERE topic = 'openim.message.send' AND aggregate_type = 'agent_chat'
+         AND aggregate_id = $1`,
+      [chatDeliveryId],
+    );
+    assert.equal(agentChatOutbox.rowCount, 1);
+    assert.equal(agentChatOutbox.rows[0].payload.sendID, agent.openimUserId);
+    assert.equal(agentChatOutbox.rows[0].payload.groupID, room.json().openimGroupId);
+    assert.equal(agentChatOutbox.rows[0].payload.content, "这是本机 Agent 的分析结果。");
+
+    const otherUserCannotPublishOwnedAgent = await app.inject({
+      method: "POST",
+      url: `/v1/rooms/${room.json().id}/agent-messages`,
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+      payload: {
+        agentId: agent.id,
+        content: "伪造 Agent 回复",
+        deliveryId: randomUUID(),
+      },
+    });
+    assert.equal(otherUserCannotPublishOwnedAgent.statusCode, 403);
+    assert.equal(otherUserCannotPublishOwnedAgent.json().error.code, "AGENT_MESSAGE_NOT_ALLOWED");
 
     const bobDeviceId = randomUUID();
     await pool.query(
@@ -1633,12 +1683,34 @@ test("two users can become friends, create an Agent room, and sync settings", as
       payload: { status: "done" },
     });
     assert.equal(completedChild.statusCode, 200, completedChild.body);
+    assert.equal(
+      Number(
+        (
+          await pool.query(
+            `SELECT count(*) FROM outbox_events
+             WHERE aggregate_type = 'task_source_summary' AND aggregate_id = $1`,
+            [finalChildId],
+          )
+        ).rows[0].count,
+      ),
+      0,
+      "a child Task must aggregate into its parent without posting to the source group",
+    );
     const aggregatedParent = await pool.query<{ status: string; artifact_refs: string[] }>(
       "SELECT status, artifact_refs FROM tasks WHERE id = $1",
       [finalTaskId],
     );
     assert.equal(aggregatedParent.rows[0].status, "review");
     assert.deepEqual(aggregatedParent.rows[0].artifact_refs, ["reports/login-review.md"]);
+    assert.match(
+      (
+        await pool.query<{ completion_summary: string }>(
+          "SELECT completion_summary FROM tasks WHERE id = $1",
+          [finalTaskId],
+        )
+      ).rows[0].completion_summary,
+      /实现 Agent 已完成分析/,
+    );
     const completedParent = await app.inject({
       method: "PATCH",
       url: `/v1/tasks/${finalTaskId}/status`,
@@ -1649,6 +1721,113 @@ test("two users can become friends, create an Agent room, and sync settings", as
     assert.equal(
       (await pool.query("SELECT status FROM tasks WHERE id = $1", [finalTaskId])).rows[0].status,
       "done",
+    );
+    const sourceSummaryOutbox = await pool.query<{ payload: Record<string, unknown> }>(
+      `SELECT payload FROM outbox_events
+       WHERE aggregate_type = 'task_source_summary' AND aggregate_id = $1`,
+      [finalTaskId],
+    );
+    assert.equal(sourceSummaryOutbox.rows.length, 1);
+    assert.equal(sourceSummaryOutbox.rows[0].payload.groupID, room.json().openimGroupId);
+    assert.match(String(sourceSummaryOutbox.rows[0].payload.content), /登录分析复核通过/);
+    assert.deepEqual(
+      (sourceSummaryOutbox.rows[0].payload.ex as { artifactRefs?: string[] }).artifactRefs,
+      ["reports/login-review.md"],
+    );
+    assert.equal(
+      (sourceSummaryOutbox.rows[0].payload.ex as { kind?: string }).kind,
+      "task-summary",
+    );
+    assert.equal(
+      (sourceSummaryOutbox.rows[0].payload.ex as { taskId?: string }).taskId,
+      finalTaskId,
+    );
+
+    const mirroredSummary = await app.inject({
+      method: "POST",
+      url: "/internal/openim/callbacks/message/after?token=test-callback-token-long-enough",
+      payload: {
+        sendID: sourceSummaryOutbox.rows[0].payload.sendID,
+        groupID: sourceSummaryOutbox.rows[0].payload.groupID,
+        serverMsgID: "server-task-summary-63",
+        clientMsgID: "client-task-summary-63",
+        content: JSON.stringify({ content: sourceSummaryOutbox.rows[0].payload.content }),
+        contentType: 101,
+        seq: 63,
+        sendTime: Date.now(),
+        ex: JSON.stringify(sourceSummaryOutbox.rows[0].payload.ex),
+      },
+    });
+    assert.equal(mirroredSummary.statusCode, 200, mirroredSummary.body);
+    const retriedMirroredSummary = await app.inject({
+      method: "POST",
+      url: "/internal/openim/callbacks/message/after?token=test-callback-token-long-enough",
+      payload: {
+        sendID: sourceSummaryOutbox.rows[0].payload.sendID,
+        groupID: sourceSummaryOutbox.rows[0].payload.groupID,
+        serverMsgID: "server-task-summary-retry-63",
+        clientMsgID: "client-task-summary-retry-63",
+        content: JSON.stringify({ content: sourceSummaryOutbox.rows[0].payload.content }),
+        contentType: 101,
+        seq: 64,
+        sendTime: Date.now(),
+        ex: JSON.stringify(sourceSummaryOutbox.rows[0].payload.ex),
+      },
+    });
+    assert.equal(retriedMirroredSummary.statusCode, 200, retriedMirroredSummary.body);
+    assert.equal(
+      Number(
+        (
+          await pool.query("SELECT count(*) FROM message_mirrors WHERE delivery_key = $1", [
+            `task-summary:${finalTaskId}`,
+          ])
+        ).rows[0].count,
+      ),
+      1,
+      "a retried provider delivery must not create a second durable source summary",
+    );
+    const sourceMessages = await app.inject({
+      method: "GET",
+      url: `/v1/rooms/${room.json().id}/messages?limit=200`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    });
+    assert.equal(sourceMessages.statusCode, 200, sourceMessages.body);
+    const syncedSummary = sourceMessages
+      .json()
+      .data.find(
+        (message: { serverMsgId: string }) => message.serverMsgId === "server-task-summary-63",
+      );
+    assert.equal(syncedSummary.kind, "task-summary");
+    assert.equal(syncedSummary.taskId, finalTaskId);
+    assert.deepEqual(syncedSummary.artifactRefs, ["reports/login-review.md"]);
+
+    const completedTaskDetail = await app.inject({
+      method: "GET",
+      url: `/v1/tasks/${finalTaskId}`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+    });
+    assert.equal(completedTaskDetail.statusCode, 200, completedTaskDetail.body);
+    assert.match(completedTaskDetail.json().completionSummary, /登录分析复核通过/);
+    assert.ok(completedTaskDetail.json().sourceSummaryPublishedAt);
+
+    const repeatedCompletion = await app.inject({
+      method: "PATCH",
+      url: `/v1/tasks/${finalTaskId}/status`,
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+      payload: { status: "done" },
+    });
+    assert.equal(repeatedCompletion.statusCode, 200, repeatedCompletion.body);
+    assert.equal(
+      Number(
+        (
+          await pool.query(
+            `SELECT count(*) FROM outbox_events
+             WHERE aggregate_type = 'task_source_summary' AND aggregate_id = $1`,
+            [finalTaskId],
+          )
+        ).rows[0].count,
+      ),
+      1,
     );
 
     await pool.query("UPDATE agents SET capabilities = '[]'::jsonb WHERE id = $1", [agent.id]);
