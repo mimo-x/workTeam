@@ -62,6 +62,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
@@ -85,6 +86,7 @@ import type {
 } from "../../shared/agent-team";
 import { cloudAgentIdFor } from "../../shared/agent-cloud-id";
 import { formatErrorMessage } from "../../shared/error";
+import { agentAvailability, splitAgentDirectory } from "./agent-availability";
 import { cloudAgentBody, cloudAgentUpdateBody, validateAgentForCloud } from "./agent-cloud-payload";
 import {
   appendAgentDraft,
@@ -120,6 +122,7 @@ import {
   type MentionCandidate,
 } from "./openim-mentions";
 import { resolveRoomSaveTarget } from "./room-save-target";
+import { missingSavedRoomAgentIds } from "./room-membership-sync";
 import { TaskCompletionCard } from "./task-completion-card";
 
 export type TeamView = "messages" | "contacts" | "tasks";
@@ -1588,6 +1591,16 @@ const RoomDialog = ({
   const [selectedHumans, setSelectedHumans] = useState<string[]>(room?.humanIds ?? ["local_user"]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const addedAgentNames = room
+    ? agents
+        .filter((agent) => selectedAgents.includes(agent.id) && !room.agentIds.includes(agent.id))
+        .map((agent) => agent.name)
+    : [];
+  const removedAgentNames = room
+    ? agents
+        .filter((agent) => room.agentIds.includes(agent.id) && !selectedAgents.includes(agent.id))
+        .map((agent) => agent.name)
+    : [];
   const save = async () => {
     setSaving(true);
     setError("");
@@ -1655,6 +1668,7 @@ const RoomDialog = ({
         });
         const userIds = selectedHumans.filter((id) => id !== "local_user");
         let roomId: string;
+        let pendingAgentIds: string[] = [];
         if (room && room.syncSource === "backend") {
           let revision = room.revision ?? 1;
           if (name.trim() !== room.name) {
@@ -1666,20 +1680,25 @@ const RoomDialog = ({
             });
             revision = renamed.revision;
           }
-          await window.backend.request({
+          const updatedMembers = await window.backend.request<{ pendingAgentIds?: string[] }>({
             method: "PUT",
             path: `/v1/rooms/${encodeURIComponent(room.roomId)}/members`,
             headers: { "if-match": String(revision) },
             body: { userIds, agentIds: cloudAgentIds },
           });
+          pendingAgentIds = updatedMembers.pendingAgentIds ?? [];
           roomId = room.roomId;
         } else {
-          const created = await window.backend.request<{ id: string }>({
+          const created = await window.backend.request<{
+            id: string;
+            pendingAgentIds?: string[];
+          }>({
             method: "POST",
             path: "/v1/rooms",
             body: { name, userIds, agentIds: cloudAgentIds },
           });
           roomId = created.id;
+          pendingAgentIds = created.pendingAgentIds ?? [];
           if (room) {
             await window.agentTeam.promoteRoom({
               workspace,
@@ -1693,6 +1712,17 @@ const RoomDialog = ({
         const snapshot = await syncCloudWorkspace();
         const synced = snapshot.rooms.find((candidate) => candidate.roomId === roomId);
         if (!synced) throw new Error("云端群已保存，但同步结果中没有对应会话。");
+        const missingAgentIds = missingSavedRoomAgentIds({
+          requestedAgentIds: cloudAgentIds,
+          pendingAgentIds,
+          syncedAgentIds: synced.agentIds,
+        });
+        if (missingAgentIds.length) {
+          const missingNames = missingAgentIds.map(
+            (id) => agents.find((agent) => cloudAgentIdFor(agent) === id)?.name ?? id,
+          );
+          throw new Error(`群已保存，但以下 Agent 尚未同步：${missingNames.join("、")}。请重试。`);
+        }
         next = synced;
       } else {
         next = room
@@ -1726,7 +1756,11 @@ const RoomDialog = ({
       >
         <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12">
           <DialogTitle>{room ? "管理群组" : "新建群组"}</DialogTitle>
-          <DialogDescription>从通讯录邀请好友和 Agent。</DialogDescription>
+          <DialogDescription>
+            {room
+              ? "保存后将以当前选择替换群成员；其他用户的 Agent 需经所有者同意。"
+              : "从通讯录邀请好友和 Agent；其他用户的 Agent 需经所有者同意。"}
+          </DialogDescription>
         </DialogHeader>
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5">
           <div className="flex flex-col gap-2">
@@ -1774,6 +1808,14 @@ const RoomDialog = ({
               })}
             </div>
           </fieldset>
+          {room && (addedAgentNames.length > 0 || removedAgentNames.length > 0) && (
+            <p className="text-xs text-muted-foreground">
+              Agent 变更：
+              {addedAgentNames.length > 0 && `加入 ${addedAgentNames.join("、")}`}
+              {addedAgentNames.length > 0 && removedAgentNames.length > 0 && "；"}
+              {removedAgentNames.length > 0 && `移出 ${removedAgentNames.join("、")}`}。
+            </p>
+          )}
           <fieldset className="flex flex-col gap-2">
             <legend className="text-xs font-medium text-muted-foreground">好友成员</legend>
             <div className="flex flex-wrap gap-2">
@@ -1836,23 +1878,17 @@ const ContactsView = ({
   onOpenDirect: (principalId: string) => void;
 }) => {
   const [query, setQuery] = useState("");
+  const [activeDirectory, setActiveDirectory] = useState<"friends" | "agents">("friends");
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const matches = (agent: AgentDefinition) =>
     !normalizedQuery ||
     [agent.name, agent.title, agent.description, agent.runtime?.provider]
       .filter(Boolean)
       .some((value) => value!.toLocaleLowerCase().includes(normalizedQuery));
-  const privateAgents = state.agents.filter((agent) => agent.visibility === "private");
-  const publicAgents = state.agents.filter((agent) => agent.visibility === "public");
+  const { ownedAgents, publicAgents } = splitAgentDirectory(state.agents);
   const AgentCard = ({ agent }: { agent: AgentDefinition }) => {
     const owned = agent.ownerId === "local_user";
-    const registryOffline = agent.source === "registry" && agent.runtimeStatus !== "online";
-    const runtimeStatus =
-      agent.runtimeStatus === "online"
-        ? "在线"
-        : agent.runtimeStatus === "offline"
-          ? "离线"
-          : "状态未知";
+    const availability = agentAvailability(agent);
     return (
       <Card size="sm">
         <CardHeader>
@@ -1875,16 +1911,30 @@ const ContactsView = ({
                 </Badge>
               </div>
               <CardDescription className="mt-0.5 font-mono text-[10px]">
-                {agent.title} · {agent.runtime?.provider ?? "codex"} · {runtimeStatus}
+                {agent.title} · {agent.runtime?.provider ?? "codex"} · {availability.executionLabel}
               </CardDescription>
             </div>
           </div>
           <CardAction>
-            <span className={`block size-2 rounded-full ${themeClasses[agent.theme].dot}`} />
+            <Badge
+              variant={
+                availability.kind === "remote_online"
+                  ? "default"
+                  : availability.kind === "local_available"
+                    ? "secondary"
+                    : "outline"
+              }
+            >
+              {availability.label}
+            </Badge>
           </CardAction>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-2">
           <p className="min-h-10 text-xs leading-5 text-muted-foreground">{agent.description}</p>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-2 text-[10px] text-muted-foreground">
+            <span>{availability.detail}</span>
+            <span className="font-mono">{availability.heartbeatLabel}</span>
+          </div>
         </CardContent>
         <CardFooter className="justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
@@ -1900,9 +1950,9 @@ const ContactsView = ({
               type="button"
               size="xs"
               variant="outline"
-              disabled={registryOffline}
+              disabled={!availability.canMessage}
               onClick={() => onOpenDirect(agent.id)}
-              title={registryOffline ? "Agent 当前离线，暂时不能执行" : undefined}
+              title={!availability.canMessage ? availability.detail : undefined}
             >
               <MessageSquareMoreIcon data-icon="inline-start" />
               私聊
@@ -1926,33 +1976,48 @@ const ContactsView = ({
     );
   };
   return (
-    <div className="h-full overflow-y-auto bg-background">
+    <Tabs
+      value={activeDirectory}
+      onValueChange={(value) => setActiveDirectory(value as "friends" | "agents")}
+      className="h-full min-h-0 flex-col gap-0 overflow-hidden bg-background"
+    >
       <header className="electron-drag sticky top-0 z-10 flex h-16 items-center justify-between border-b border-border bg-background/95 px-7 backdrop-blur-xl">
-        <div>
-          <h1 className="text-sm font-semibold text-foreground">通讯录</h1>
-          <p className="mt-0.5 text-[10px] text-muted-foreground">
-            好友与 Agent 工作者使用统一身份
-          </p>
+        <div className="flex items-center gap-5">
+          <div>
+            <h1 className="text-sm font-semibold text-foreground">通讯录</h1>
+            <p className="mt-0.5 text-[10px] text-muted-foreground">
+              好友关系与 Agent 可用性分别管理
+            </p>
+          </div>
+          <TabsList className="electron-no-drag" aria-label="通讯录视图">
+            <TabsTrigger value="friends">好友</TabsTrigger>
+            <TabsTrigger value="agents">Agent 目录</TabsTrigger>
+          </TabsList>
         </div>
         <div className="electron-no-drag flex items-center gap-2">
-          <Input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索 Agent"
-            aria-label="搜索 Agent"
-            className="w-44"
-          />
-          <Button type="button" variant="outline" onClick={onEditHumans}>
-            管理好友
-          </Button>
-          <Button type="button" onClick={onCreateAgent}>
-            <PlusIcon data-icon="inline-start" />
-            创建 Agent
-          </Button>
+          {activeDirectory === "friends" ? (
+            <Button type="button" variant="outline" onClick={onEditHumans}>
+              管理好友
+            </Button>
+          ) : (
+            <>
+              <Input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="搜索 Agent"
+                aria-label="搜索 Agent"
+                className="w-44"
+              />
+              <Button type="button" onClick={onCreateAgent}>
+                <PlusIcon data-icon="inline-start" />
+                创建 Agent
+              </Button>
+            </>
+          )}
         </div>
       </header>
-      <div className="mx-auto flex max-w-4xl flex-col gap-8 p-7">
-        <section>
+      <TabsContent value="friends" className="min-h-0 overflow-y-auto">
+        <section className="mx-auto max-w-4xl p-7">
           <div className="mb-3 flex items-center gap-2">
             <UsersIcon className="size-4 text-muted-foreground" />
             <h2 className="text-xs font-medium text-foreground">好友</h2>
@@ -1994,39 +2059,43 @@ const ContactsView = ({
             ))}
           </div>
         </section>
-        <section>
-          <div className="mb-3 flex items-center gap-2">
-            <LockIcon className="size-4 text-muted-foreground" />
-            <h2 className="text-xs font-medium text-foreground">我的私有 Agent</h2>
-            <Badge variant="secondary" className="font-mono text-[10px]">
-              {privateAgents.length}
-            </Badge>
-          </div>
-          <div className="flex flex-col gap-2">
-            {privateAgents.filter(matches).map((agent) => (
-              <AgentCard key={agent.id} agent={agent} />
-            ))}
-          </div>
-        </section>
-        <section>
-          <div className="mb-3 flex items-center gap-2">
-            <Globe2Icon className="size-4 text-muted-foreground" />
-            <h2 className="text-xs font-medium text-foreground">公开 Agent</h2>
-            <Badge variant="secondary" className="font-mono text-[10px]">
-              {publicAgents.length}
-            </Badge>
-          </div>
-          <div className="flex flex-col gap-2">
-            {publicAgents.filter(matches).map((agent) => (
-              <AgentCard key={agent.id} agent={agent} />
-            ))}
-          </div>
-          {normalizedQuery && !state.agents.some(matches) && (
-            <p className="mt-3 text-center text-xs text-muted-foreground">没有匹配的 Agent</p>
-          )}
-        </section>
-      </div>
-    </div>
+      </TabsContent>
+      <TabsContent value="agents" className="min-h-0 overflow-y-auto">
+        <div className="mx-auto flex max-w-4xl flex-col gap-8 p-7">
+          <section>
+            <div className="mb-3 flex items-center gap-2">
+              <LockIcon className="size-4 text-muted-foreground" />
+              <h2 className="text-xs font-medium text-foreground">我的 Agent</h2>
+              <Badge variant="secondary" className="font-mono text-[10px]">
+                {ownedAgents.length}
+              </Badge>
+            </div>
+            <div className="flex flex-col gap-2">
+              {ownedAgents.filter(matches).map((agent) => (
+                <AgentCard key={agent.id} agent={agent} />
+              ))}
+            </div>
+          </section>
+          <section>
+            <div className="mb-3 flex items-center gap-2">
+              <Globe2Icon className="size-4 text-muted-foreground" />
+              <h2 className="text-xs font-medium text-foreground">公开 Agent</h2>
+              <Badge variant="secondary" className="font-mono text-[10px]">
+                {publicAgents.length}
+              </Badge>
+            </div>
+            <div className="flex flex-col gap-2">
+              {publicAgents.filter(matches).map((agent) => (
+                <AgentCard key={agent.id} agent={agent} />
+              ))}
+            </div>
+            {normalizedQuery && ![...ownedAgents, ...publicAgents].some(matches) && (
+              <p className="mt-3 text-center text-xs text-muted-foreground">没有匹配的 Agent</p>
+            )}
+          </section>
+        </div>
+      </TabsContent>
+    </Tabs>
   );
 };
 
@@ -2433,6 +2502,11 @@ export const TeamChat = ({
         setConfigRevision((value) => value + 1);
         return;
       }
+      if (type === "agent.chat.failed") {
+        setError(String(event.message ?? "Agent 群聊请求处理失败。"));
+        return;
+      }
+      if (type === "agent.chat.requested") return;
       if (
         !type.startsWith("friend") &&
         !type.startsWith("room.") &&

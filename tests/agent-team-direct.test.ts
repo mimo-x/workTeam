@@ -19,6 +19,7 @@ class FakeCodex {
   nextTurnError?: unknown;
   private readonly sessions = new Set<string>();
   sessionInputs: Array<string | undefined> = [];
+  sessionAccesses: Array<"read-only" | "workspace-write"> = [];
 
   onEvent(listener: (event: AgentRuntimeEvent) => void) {
     this.listeners.add(listener);
@@ -34,8 +35,12 @@ class FakeCodex {
     return this.sessions.has(sessionId);
   }
 
-  async startSession(input?: { providerSessionId?: string }) {
+  async startSession(input?: {
+    providerSessionId?: string;
+    access?: "read-only" | "workspace-write";
+  }) {
     this.sessionInputs.push(input?.providerSessionId);
+    this.sessionAccesses.push(input?.access ?? "read-only");
     const threadId = input?.providerSessionId ?? (await this.startThread()).threadId;
     this.sessions.add(threadId);
     return { sessionId: threadId, providerSessionId: threadId };
@@ -1413,6 +1418,11 @@ test("BDD: explicit external-message targets cannot expand to other mentioned Ag
     await waitFor(async () => published.length === 1);
     assert.deepEqual(published, [{ agentId: coordinator.id, roomId: room.roomId }]);
     assert.equal(codex.prompts.length, 1);
+    assert.deepEqual(
+      codex.sessionAccesses,
+      ["read-only"],
+      "cross-member chat must not inherit the Agent's workspace-write capability",
+    );
   } finally {
     await service.flush();
     await rm(storeDir, { recursive: true, force: true });

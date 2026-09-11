@@ -136,10 +136,13 @@ export const registerOpenImWebhooks = (
         )
       : await findDirectRoom(pool, senderOpenimId, receiverOpenimId);
     if (!room.rows[0]) return callbackResponse(true);
-    const senderUser = await pool.query<{ id: string; openim_user_id: string }>(
-      "SELECT id, openim_user_id FROM users WHERE openim_user_id = $1",
-      [senderOpenimId],
-    );
+    const senderUser = await pool.query<{
+      id: string;
+      openim_user_id: string;
+      display_name: string;
+    }>("SELECT id, openim_user_id, display_name FROM users WHERE openim_user_id = $1", [
+      senderOpenimId,
+    ]);
     const senderAgent = await pool.query<{ id: string }>(
       "SELECT id FROM agents WHERE openim_user_id = $1",
       [senderOpenimId],
@@ -269,6 +272,24 @@ export const registerOpenImWebhooks = (
       serverMsgId,
       seq: sequence,
     });
+    if (room.rows[0].type === "group" && senderUser.rows[0] && agentAction === "chat") {
+      for (const agent of targetAgents.rows) {
+        if (agent.owner_id === senderUser.rows[0].id) continue;
+        events.publishToAgentHost(agent.owner_id, agent.id, {
+          type: "agent.chat.requested",
+          roomId: room.rows[0].id,
+          serverMsgId,
+          seq: sequence,
+          senderUserId: senderUser.rows[0].id,
+          senderOpenimId,
+          senderName: senderUser.rows[0].display_name,
+          content: text,
+          sentAt: sentAt.toISOString(),
+          agentAction: "chat",
+          targetAgentIds: [agent.id],
+        });
+      }
+    }
     for (const update of contextUpdates) {
       await events.publishToRoom(update.taskRoomId, {
         type: "task.context.appended",

@@ -90,3 +90,49 @@ test("host registration errors are sent as protocol errors instead of escaping",
   );
   assert.match(sent.join("\n"), /DEVICE_REGISTRATION_FAILED/);
 });
+
+test("BDD: Given two active hosts When a friend mentions my Agent Then only one matching host receives the chat request", () => {
+  const firstHostEvents: string[] = [];
+  const latestHostEvents: string[] = [];
+  const otherUserEvents: string[] = [];
+  const hub = new RealtimeHub(
+    undefined as never,
+    undefined as never,
+    { HOST_HEARTBEAT_SECONDS: 10, HOST_LEASE_SECONDS: 30 } as never,
+    undefined as never,
+  );
+  const connections = (
+    hub as unknown as {
+      connections: Set<TestConnection>;
+    }
+  ).connections;
+  connections.add({
+    socket: { readyState: 1, send: (value: string) => firstHostEvents.push(value), close() {} },
+    userId: "alice",
+    deviceId: "alice-first",
+    agentIds: new Set(["alice-agent"]),
+  });
+  connections.add({
+    socket: { readyState: 1, send: (value: string) => latestHostEvents.push(value), close() {} },
+    userId: "alice",
+    deviceId: "alice-latest",
+    agentIds: new Set(["alice-agent"]),
+  });
+  connections.add({
+    socket: { readyState: 1, send: (value: string) => otherUserEvents.push(value), close() {} },
+    userId: "bob",
+    deviceId: "bob-device",
+    agentIds: new Set(["alice-agent"]),
+  });
+
+  const delivered = hub.publishToAgentHost("alice", "alice-agent", {
+    type: "agent.chat.requested",
+    roomId: "shared-room",
+  });
+
+  assert.equal(delivered, true);
+  assert.equal(firstHostEvents.length, 0);
+  assert.equal(latestHostEvents.length, 1);
+  assert.match(latestHostEvents[0], /agent\.chat\.requested/);
+  assert.equal(otherUserEvents.length, 0);
+});

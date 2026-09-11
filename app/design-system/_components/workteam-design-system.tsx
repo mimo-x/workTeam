@@ -65,6 +65,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -103,6 +104,30 @@ const PRINCIPLES = [
     icon: WandSparkles,
   },
 ];
+
+const AGENT_AVAILABILITY_STATES = [
+  {
+    group: "我的 Agent",
+    name: "代码审查员",
+    status: "本机可用",
+    detail: "尚无心跳 · 当前设备直连",
+    variant: "secondary",
+  },
+  {
+    group: "公开 Agent",
+    name: "研究协作员",
+    status: "远程在线",
+    detail: "最后心跳 2 分钟前 · 远程主机",
+    variant: "default",
+  },
+  {
+    group: "公开 Agent",
+    name: "架构顾问",
+    status: "暂无执行主机",
+    detail: "最后心跳 3 小时前 · 执行入口禁用",
+    variant: "outline",
+  },
+] as const;
 
 const CORE_COLORS = [
   { name: "Brand / Info", hex: "#5B5BD6", use: "主操作、链接、选中、信息" },
@@ -1395,6 +1420,75 @@ export function CodexDesktopDesignSystem() {
                           </div>
                         ))}
                       </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="shadow-none">
+                  <CardHeader>
+                    <CardTitle>通讯录与 Agent 可用性</CardTitle>
+                    <CardDescription>
+                      好友关系和 Agent 发现使用独立视图；Agent 主状态描述执行位置，不直接暴露
+                      Runtime 的 unknown/offline 原始值。
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="grid gap-6 lg:grid-cols-[1fr_18rem]">
+                    <Tabs defaultValue="agents">
+                      <TabsList aria-label="通讯录组件示例">
+                        <TabsTrigger value="friends">好友</TabsTrigger>
+                        <TabsTrigger value="agents">Agent 目录</TabsTrigger>
+                      </TabsList>
+                      <TabsContent value="friends">
+                        <div className="rounded-xl border border-dashed p-5 text-center text-xs text-muted-foreground">
+                          好友列表只展示 Human，不混入公开 Agent。
+                        </div>
+                      </TabsContent>
+                      <TabsContent value="agents" className="flex flex-col gap-4">
+                        {["我的 Agent", "公开 Agent"].map((group) => {
+                          const agents = AGENT_AVAILABILITY_STATES.filter(
+                            (agent) => agent.group === group,
+                          );
+                          return (
+                            <section key={group} className="flex flex-col gap-2">
+                              <div className="flex items-center gap-2">
+                                <p className="text-xs font-medium">{group}</p>
+                                <Badge variant="secondary" className="font-mono text-[10px]">
+                                  {agents.length}
+                                </Badge>
+                              </div>
+                              {agents.map((agent) => (
+                                <div
+                                  key={agent.name}
+                                  className="flex items-center gap-3 rounded-xl border bg-card p-3"
+                                >
+                                  <div className="grid size-9 shrink-0 place-items-center rounded-xl border bg-muted/50 text-xs font-semibold">
+                                    {agent.name.slice(0, 1)}
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-sm font-medium">{agent.name}</p>
+                                    <p className="mt-0.5 text-[10px] text-muted-foreground">
+                                      {agent.detail}
+                                    </p>
+                                  </div>
+                                  <Badge variant={agent.variant}>{agent.status}</Badge>
+                                </div>
+                              ))}
+                            </section>
+                          );
+                        })}
+                      </TabsContent>
+                    </Tabs>
+                    <div className="flex flex-col gap-3">
+                      <h3 className="text-xs font-medium">三态定义</h3>
+                      <p className="text-xs leading-5 text-muted-foreground">
+                        本机可用：当前设备可直接执行，即使没有注册中心心跳。
+                      </p>
+                      <p className="text-xs leading-5 text-muted-foreground">
+                        远程在线：远程 Host 最近确认在线，可发起私聊或任务。
+                      </p>
+                      <p className="text-xs leading-5 text-muted-foreground">
+                        暂无执行主机：身份仍可发现，但执行入口禁用，并展示最后心跳或“尚无心跳”。
+                      </p>
                     </div>
                   </CardContent>
                 </Card>

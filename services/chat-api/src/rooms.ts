@@ -117,7 +117,7 @@ export const registerRoomRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
     );
     if (!result.rows.length) return { data: [] };
     const roomIds = result.rows.map((row) => row.id);
-    const [members, agentRows, bindingRows] = await Promise.all([
+    const [members, bindingRows, agentRows] = await Promise.all([
       pool.query(
         `SELECT rm.room_id AS "roomId", u.id, u.handle, u.display_name AS "displayName",
                 u.openim_user_id AS "openimUserId", rm.role
@@ -138,9 +138,14 @@ export const registerRoomRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
         roomIds,
       ),
       pool.query(
-        `SELECT ra.room_id AS "roomId", a.id, a.name, a.title, a.mention, a.visibility,
-                a.openim_user_id AS "openimUserId"
+        `SELECT ra.room_id AS "roomId", a.id, a.owner_id AS "ownerId",
+                u.display_name AS "ownerName", a.openim_user_id AS "openimUserId",
+                a.name, a.title, a.mention, a.description, a.visibility,
+                a.execution_target AS "executionTarget", a.provider, a.protocol,
+                a.capabilities, a.runtime_status AS "runtimeStatus",
+                a.runtime_last_seen_at AS "runtimeLastSeenAt", a.version
          FROM room_agents ra JOIN agents a ON a.id = ra.agent_id
+         JOIN users u ON u.id = a.owner_id
          WHERE ra.room_id IN (${roomIds.map((_, index) => `$${index + 1}`).join(",")})
            AND a.archived_at IS NULL`,
         roomIds,
