@@ -4,12 +4,12 @@ import {
   CheckCircle2Icon,
   CheckIcon,
   CircleAlertIcon,
-  Clock3Icon,
   EyeIcon,
   FolderKanbanIcon,
   Globe2Icon,
   LoaderCircleIcon,
   LockIcon,
+  MonitorCogIcon,
   MessageSquareMoreIcon,
   PauseIcon,
   PencilIcon,
@@ -25,6 +25,7 @@ import {
   Trash2Icon,
   UserRoundCogIcon,
   UsersIcon,
+  ShieldCheckIcon,
   XIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -71,6 +72,8 @@ import type {
   HumanContact,
   ImConfigInput,
   ImPublicConfig,
+  PermissionConstraints,
+  PermissionScope,
   TaskStatus,
   TeamEvent,
   TeamMessage,
@@ -78,6 +81,15 @@ import type {
   TeamWorkspaceSnapshot,
 } from "../../shared/agent-team";
 import { formatErrorMessage } from "../../shared/error";
+import {
+  ApprovalInboxDialog,
+  AuditTimeline,
+  HostBindingDialog,
+  TaskGrantDialog,
+  TaskInspector,
+  type ApprovalInboxItem,
+  type CollaborationAuditItem,
+} from "./collaboration-governance-panels";
 import {
   conversationListStorageKey,
   hideConversation,
@@ -99,16 +111,6 @@ import {
 export type TeamView = "messages" | "contacts" | "tasks";
 
 const LOCAL_ROOM_ID = "local-agent-team";
-const activeTaskStatuses: TaskStatus[] = [
-  "pending_review",
-  "changes_requested",
-  "approved",
-  "queued",
-  "running",
-  "waiting",
-  "review",
-  "blocked",
-];
 const taskLabels: Record<TaskStatus, string> = {
   pending_review: "待人工审核",
   changes_requested: "待修改",
@@ -116,6 +118,11 @@ const taskLabels: Record<TaskStatus, string> = {
   queued: "待处理",
   running: "执行中",
   waiting: "等待确认",
+  waiting_for_host: "等待主机",
+  waiting_for_permission: "等待授权",
+  waiting_for_approval: "等待操作确认",
+  waiting_for_assignee: "等待负责人",
+  waiting_for_budget: "等待预算",
   review: "待验收",
   blocked: "已阻塞",
   done: "已完成",
@@ -137,6 +144,11 @@ const taskTone: Record<TaskStatus, string> = {
   queued: "border-border bg-muted text-muted-foreground",
   running: "border-primary/30 bg-primary/10 text-primary",
   waiting: "border-border bg-muted text-muted-foreground",
+  waiting_for_host: "border-warning/30 bg-warning/10 text-warning",
+  waiting_for_permission: "border-warning/30 bg-warning/10 text-warning",
+  waiting_for_approval: "border-warning/30 bg-warning/10 text-warning",
+  waiting_for_assignee: "border-warning/30 bg-warning/10 text-warning",
+  waiting_for_budget: "border-warning/30 bg-warning/10 text-warning",
   review: "border-border bg-accent text-accent-foreground",
   blocked: "border-destructive/30 bg-destructive/10 text-destructive",
   done: "border-success/30 bg-success/10 text-success",
@@ -393,12 +405,12 @@ const MessageRow = ({
   if (alignment === "end") {
     return (
       <article className="flex justify-end gap-2.5 py-3">
-        <div className="max-w-[min(40rem,76%)]">
+        <div className="max-w-[min(32rem,68%)]">
           <div className="mb-1 flex items-center justify-end gap-2 font-mono text-[10px] text-muted-foreground">
             <span>{timeLabel(message.createdAt)}</span>
             <span className="font-semibold text-foreground">{message.senderName}</span>
           </div>
-          <div className="rounded-2xl rounded-tr-md border border-primary/20 bg-primary/10 px-4 py-3 text-[13px] leading-6 whitespace-pre-wrap text-foreground shadow-[var(--shadow-down-1)]">
+          <div className="rounded-xl rounded-tr-sm border border-primary/15 bg-primary/8 px-3 py-2 text-[13px] leading-6 whitespace-pre-wrap text-foreground">
             {message.content}
           </div>
           {task && (
@@ -2004,7 +2016,20 @@ const TaskBoard = ({
   const columns: Array<{ title: string; statuses: TaskStatus[] }> = [
     { title: "待审核", statuses: ["pending_review", "changes_requested"] },
     { title: "待执行", statuses: ["approved", "queued"] },
-    { title: "执行中", statuses: ["running", "waiting", "blocked", "review"] },
+    {
+      title: "执行中",
+      statuses: [
+        "running",
+        "waiting",
+        "waiting_for_host",
+        "waiting_for_permission",
+        "waiting_for_approval",
+        "waiting_for_assignee",
+        "waiting_for_budget",
+        "blocked",
+        "review",
+      ],
+    },
     { title: "已结束", statuses: ["done", "failed", "cancelled"] },
   ];
   const sorted = [...state.tasks].sort((a, b) => b.updatedAt - a.updatedAt);
@@ -2040,6 +2065,10 @@ const TaskBoard = ({
                 <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
                   {tasks.map((task) => {
                     const room = state.rooms.find((item) => item.roomId === task.sourceRoomId);
+                    const canAdmin =
+                      task.syncSource !== "backend" ||
+                      room?.memberRole === "owner" ||
+                      room?.memberRole === "admin";
                     const agents = state.agents.filter((agent) =>
                       task.assigneeIds.includes(agent.id),
                     );
@@ -2079,11 +2108,39 @@ const TaskBoard = ({
                           )}
                         </CardHeader>
                         <CardContent>
+                          <div className="mb-2 flex flex-wrap gap-1.5">
+                            <Badge variant="outline" className="font-mono text-[9px]">
+                              {task.parentTaskId ? `子 Task · L${task.depth ?? 1}` : "根 Task"}
+                            </Badge>
+                            {(task.requestedScopes ?? []).map((scope) => (
+                              <Badge key={scope} variant="outline" className="text-[9px]">
+                                {scope === "workspace.read"
+                                  ? "读文件"
+                                  : scope === "workspace.write"
+                                    ? "写文件"
+                                    : scope === "command.run"
+                                      ? "运行命令"
+                                      : "网络读取"}
+                              </Badge>
+                            ))}
+                          </div>
                           <p className="truncate font-mono text-[10px] text-muted-foreground">
                             {session
                               ? `Session ${sessionLabels[session.state]} · ${session.provider}${session.error ? ` · ${session.error}` : ""}`
                               : "尚未创建运行会话"}
                           </p>
+                          {task.waitReason && (
+                            <p className="mt-2 line-clamp-2 rounded-md bg-warning/10 p-2 text-[10px] leading-4 text-warning">
+                              {task.waitReason}
+                            </p>
+                          )}
+                          {task.budget && task.budgetUsage && (
+                            <p className="mt-2 font-mono text-[9px] text-muted-foreground">
+                              Budget · 子任务 {task.budgetUsage.descendants}/
+                              {task.budget.maxDescendants} · Runs {task.budgetUsage.runs}/
+                              {task.budget.maxRuns}
+                            </p>
+                          )}
                         </CardContent>
                         <CardFooter className="flex-col items-stretch gap-3">
                           <div className="flex items-center justify-between gap-3">
@@ -2101,7 +2158,7 @@ const TaskBoard = ({
                               {dateLabel(task.updatedAt)}
                             </span>
                           </div>
-                          {task.status === "review" && (
+                          {canAdmin && task.status === "review" && (
                             <Button
                               type="button"
                               size="xs"
@@ -2112,27 +2169,28 @@ const TaskBoard = ({
                               验收完成
                             </Button>
                           )}
-                          {(task.status === "pending_review" ||
-                            task.status === "changes_requested") && (
-                            <div className="grid grid-cols-2 gap-2">
-                              <Button
-                                type="button"
-                                size="xs"
-                                variant="outline"
-                                onClick={() => onReview(task, "changes_requested")}
-                              >
-                                退回修改
-                              </Button>
-                              <Button
-                                type="button"
-                                size="xs"
-                                onClick={() => onReview(task, "approved")}
-                              >
-                                审核通过
-                              </Button>
-                            </div>
-                          )}
-                          {task.status === "approved" && (
+                          {canAdmin &&
+                            (task.status === "pending_review" ||
+                              task.status === "changes_requested") && (
+                              <div className="grid grid-cols-2 gap-2">
+                                <Button
+                                  type="button"
+                                  size="xs"
+                                  variant="outline"
+                                  onClick={() => onReview(task, "changes_requested")}
+                                >
+                                  退回修改
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="xs"
+                                  onClick={() => onReview(task, "approved")}
+                                >
+                                  审核通过
+                                </Button>
+                              </div>
+                            )}
+                          {canAdmin && task.status === "approved" && (
                             <Button type="button" size="xs" onClick={() => onStart(task)}>
                               <SendIcon data-icon="inline-start" />
                               开始执行
@@ -2187,6 +2245,15 @@ export const TeamChat = ({
   const [roomDialogOpen, setRoomDialogOpen] = useState(false);
   const [editingRoom, setEditingRoom] = useState<TeamRoomSnapshot | undefined>();
   const [pendingDeleteRoom, setPendingDeleteRoom] = useState<TeamRoomSnapshot | null>(null);
+  const [hostBindingOpen, setHostBindingOpen] = useState(false);
+  const [approvalInboxOpen, setApprovalInboxOpen] = useState(false);
+  const [taskGrantOpen, setTaskGrantOpen] = useState(false);
+  const [grantTask, setGrantTask] = useState<AgentTask | undefined>();
+  const [approvals, setApprovals] = useState<ApprovalInboxItem[]>([]);
+  const [auditItems, setAuditItems] = useState<CollaborationAuditItem[]>([]);
+  const [governanceLoading, setGovernanceLoading] = useState(false);
+  const [governanceRevision, setGovernanceRevision] = useState(0);
+  const [backendUserId, setBackendUserId] = useState("local_user");
   const [conversationPreferencesRevision, setConversationPreferencesRevision] = useState(0);
   const [imConfig, setImConfig] = useState<ImPublicConfig>(emptyImConfig);
   const [cloudMode, setCloudMode] = useState(false);
@@ -2257,6 +2324,7 @@ export const TeamChat = ({
       }
       if (backendState.authenticated) {
         setCloudMode(true);
+        setBackendUserId(backendState.user?.id ?? "local_user");
         try {
           const snapshot = await syncCloudWorkspace();
           if (cancelled) return;
@@ -2290,6 +2358,7 @@ export const TeamChat = ({
       const config = await window.im.getConfig();
       if (cancelled) return;
       setCloudMode(false);
+      setBackendUserId("local_user");
       setImConfig(config);
       if (
         config.apiAddr &&
@@ -2337,10 +2406,14 @@ export const TeamChat = ({
         !type.startsWith("room.") &&
         !type.startsWith("message.") &&
         !type.startsWith("task.") &&
-        !type.startsWith("agent.")
+        !type.startsWith("agent.") &&
+        !type.startsWith("approval.") &&
+        !type.startsWith("workspace-binding.") &&
+        !type.startsWith("run.")
       ) {
         return;
       }
+      setGovernanceRevision((value) => value + 1);
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         void syncCloudWorkspace().catch((nextError) => setError(formatErrorMessage(nextError)));
@@ -2413,6 +2486,10 @@ export const TeamChat = ({
   const sourceRoom = task
     ? state?.rooms.find((candidate) => candidate.roomId === task.sourceRoomId)
     : undefined;
+  const canManageTask =
+    task?.syncSource !== "backend" ||
+    sourceRoom?.memberRole === "owner" ||
+    sourceRoom?.memberRole === "admin";
   const roomAgents = state?.agents.filter((agent) => room?.agentIds.includes(agent.id)) ?? [];
   const roomHumans = state?.humans.filter((human) => room?.humanIds.includes(human.id)) ?? [];
   const mentionCandidates = buildMentionCandidates(roomAgents, roomHumans);
@@ -2465,6 +2542,36 @@ export const TeamChat = ({
       (message) => message.status === "pending" || message.status === "streaming",
     ).length ??
     0;
+  const governanceRoomId =
+    room?.type === "task" ? task?.sourceRoomId : room?.type === "group" ? room.roomId : undefined;
+  const refreshGovernance = useCallback(async () => {
+    if (!cloudMode || !governanceRoomId) {
+      setApprovals([]);
+      setAuditItems([]);
+      return;
+    }
+    setGovernanceLoading(true);
+    try {
+      const [approvalResponse, auditResponse] = await Promise.all([
+        window.backend.request<{ data: ApprovalInboxItem[] }>({
+          path: "/v1/execution-approvals?status=pending&limit=100",
+        }),
+        window.backend.request<{ data: CollaborationAuditItem[] }>({
+          path: `/v1/rooms/${encodeURIComponent(governanceRoomId)}/audit?limit=100${task ? `&taskId=${encodeURIComponent(task.id)}` : ""}`,
+        }),
+      ]);
+      setApprovals(approvalResponse.data);
+      setAuditItems(auditResponse.data);
+    } catch (nextError) {
+      setError(formatErrorMessage(nextError));
+    } finally {
+      setGovernanceLoading(false);
+    }
+  }, [cloudMode, governanceRoomId, task]);
+
+  useEffect(() => {
+    void refreshGovernance();
+  }, [governanceRevision, refreshGovernance]);
 
   useEffect(() => {
     setAgentAction("chat");
@@ -2734,6 +2841,27 @@ export const TeamChat = ({
     } catch (nextError) {
       setError(formatErrorMessage(nextError));
     }
+  };
+  const decideExecutionApproval = async (
+    approval: ApprovalInboxItem,
+    decision: "deny" | "allow_once" | "allow_for_task",
+  ) => {
+    setError("");
+    await window.backend.request({
+      method: "POST",
+      path: `/v1/execution-approvals/${encodeURIComponent(approval.id)}/decision`,
+      body: { decision, constraints: approval.requestedConstraints ?? {} },
+    });
+    await Promise.all([syncCloudWorkspace(), refreshGovernance()]);
+  };
+  const createTaskGrant = async (scopes: PermissionScope[], constraints: PermissionConstraints) => {
+    if (!grantTask) return;
+    await window.backend.request({
+      method: "POST",
+      path: `/v1/tasks/${encodeURIComponent(grantTask.id)}/permission-grants`,
+      body: { scopes, constraints, expiresInSeconds: 3_600 },
+    });
+    await Promise.all([syncCloudWorkspace(), refreshGovernance()]);
   };
   const controlLoop = async (nextLoop: AgentLoopSession, action: "pause" | "resume" | "cancel") => {
     try {
@@ -3024,10 +3152,39 @@ export const TeamChat = ({
           </div>
           <div className="electron-no-drag flex shrink-0 items-center gap-2">
             <ConnectionBadge status={connection} />
+            {cloudMode && room?.type === "group" && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                onClick={() => setHostBindingOpen(true)}
+                className={cn(
+                  room.workspaceBinding?.status === "online" ? "text-success" : "text-warning",
+                )}
+              >
+                <MonitorCogIcon data-icon="inline-start" />
+                {room.workspaceBinding?.status === "online"
+                  ? room.workspaceBinding.label
+                  : "设置项目主机"}
+              </Button>
+            )}
+            {cloudMode && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                onClick={() => setApprovalInboxOpen(true)}
+                className={cn(approvals.length > 0 && "text-warning")}
+              >
+                <ShieldCheckIcon data-icon="inline-start" />
+                审批{approvals.length > 0 ? ` ${approvals.length}` : ""}
+              </Button>
+            )}
             {room &&
               room.type !== "direct" &&
               (room.syncSource !== "backend" ||
-                (room.type === "group" && room.ownerId === "local_user")) && (
+                room.memberRole === "owner" ||
+                room.memberRole === "admin") && (
                 <Button
                   type="button"
                   variant="ghost"
@@ -3194,26 +3351,27 @@ export const TeamChat = ({
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                {(task.status === "pending_review" || task.status === "changes_requested") && (
-                  <>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="xs"
-                      onClick={() => void reviewTask(task, "changes_requested")}
-                    >
-                      退回修改
-                    </Button>
-                    <Button
-                      type="button"
-                      size="xs"
-                      onClick={() => void reviewTask(task, "approved")}
-                    >
-                      审核通过
-                    </Button>
-                  </>
-                )}
-                {task.status === "approved" && (
+                {canManageTask &&
+                  (task.status === "pending_review" || task.status === "changes_requested") && (
+                    <>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        onClick={() => void reviewTask(task, "changes_requested")}
+                      >
+                        退回修改
+                      </Button>
+                      <Button
+                        type="button"
+                        size="xs"
+                        onClick={() => void reviewTask(task, "approved")}
+                      >
+                        审核通过
+                      </Button>
+                    </>
+                  )}
+                {canManageTask && task.status === "approved" && (
                   <Button type="button" size="xs" onClick={() => void startTask(task)}>
                     开始执行
                   </Button>
@@ -3470,7 +3628,12 @@ export const TeamChat = ({
         </footer>
       </section>
 
-      <aside className="hidden w-64 shrink-0 border-l border-border bg-card xl:flex xl:flex-col">
+      <aside
+        className={cn(
+          "hidden shrink-0 border-l border-border bg-card xl:flex xl:flex-col",
+          room?.type === "task" ? "w-80" : "w-64",
+        )}
+      >
         <div className="flex h-12 items-center border-b border-border px-3 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
           {room?.type === "task"
             ? "Context Feed"
@@ -3480,6 +3643,30 @@ export const TeamChat = ({
         </div>
         {room?.type === "group" ? (
           <div className="min-h-0 flex-1 overflow-y-auto p-2">
+            {cloudMode && (
+              <button
+                type="button"
+                onClick={() => setHostBindingOpen(true)}
+                className="mb-3 flex w-full items-center gap-2 rounded-lg border border-border bg-muted/20 p-2.5 text-left hover:bg-muted/40"
+              >
+                <MonitorCogIcon
+                  className={cn(
+                    "size-4",
+                    room.workspaceBinding?.status === "online" ? "text-success" : "text-warning",
+                  )}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-medium">
+                    {room.workspaceBinding?.label ?? "尚未设置项目主机"}
+                  </span>
+                  <span className="mt-0.5 block truncate font-mono text-[9px] text-muted-foreground">
+                    {room.workspaceBinding
+                      ? `${room.workspaceBinding.repositoryUrl ?? "无仓库身份"} · v${room.workspaceBinding.revision} · ${room.workspaceBinding.status === "online" ? "在线" : "离线"}`
+                      : "绑定后 Task 才能在指定电脑执行"}
+                  </span>
+                </span>
+              </button>
+            )}
             <div className="mb-1.5 px-2 font-mono text-[10px] tracking-wider text-muted-foreground uppercase">
               Agents
             </div>
@@ -3564,64 +3751,68 @@ export const TeamChat = ({
                 <div className="mt-1 line-clamp-2 text-xs text-foreground">{item.title}</div>
               </button>
             ))}
+            {cloudMode && (
+              <div className="mt-4 border-t border-border pt-3">
+                <AuditTimeline items={auditItems} />
+              </div>
+            )}
           </div>
         ) : room?.type === "task" ? (
           <div className="min-h-0 flex-1 overflow-y-auto p-3">
-            <div className="rounded border border-border bg-muted/20 p-2.5">
-              <div className="flex items-center justify-between">
-                <span className="font-mono text-[10px] text-foreground">
-                  context v{task?.contextVersion}
-                </span>
-                {task && <StatusPill status={task.status} />}
-              </div>
-              <p className="mt-1.5 text-[11px] text-muted-foreground">
-                这些是主群持续同步到当前 Task 的消息引用。
-              </p>
-            </div>
-            <div className="mt-2 flex flex-col gap-1.5">
-              {sourceContext.map((message) => (
-                <button
-                  key={message.id}
-                  type="button"
-                  onClick={() => sourceRoom && setSelectedRoomId(sourceRoom.roomId)}
-                  className="w-full rounded border border-border bg-card p-2 text-left hover:bg-muted/40"
-                >
-                  <div className="flex items-center justify-between font-mono text-[9px] text-muted-foreground">
-                    <span>
-                      {message.senderName} · #{message.seq}
-                    </span>
-                    <span>{timeLabel(message.createdAt)}</span>
-                  </div>
-                  <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                    {message.content}
-                  </p>
-                </button>
-              ))}
-            </div>
             {task && (
-              <div className="mt-4 flex gap-2">
-                {task.status === "review" && (
-                  <button
-                    type="button"
-                    onClick={() => void updateTaskStatus(task, "done")}
-                    className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-success/10 py-2 text-[10px] text-success"
-                  >
-                    <CheckCircle2Icon className="size-3" />
-                    验收
-                  </button>
-                )}
-                {activeTaskStatuses.includes(task.status) && task.status !== "waiting" && (
-                  <button
-                    type="button"
-                    onClick={() => void updateTaskStatus(task, "waiting")}
-                    className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-warning/10 py-2 text-[10px] text-warning"
-                  >
-                    <Clock3Icon className="size-3" />
-                    等待
-                  </button>
-                )}
+              <TaskInspector
+                task={task}
+                state={state}
+                role={sourceRoom?.memberRole}
+                currentUserId={backendUserId}
+                onOpenTask={openTask}
+                onReview={(decision) => void reviewTask(task, decision)}
+                onStart={() => void startTask(task)}
+                onGrant={() => {
+                  setGrantTask(task);
+                  setTaskGrantOpen(true);
+                }}
+                onComplete={() => void updateTaskStatus(task, "done")}
+              />
+            )}
+            {cloudMode && (
+              <div className="mt-4 border-t border-border pt-3">
+                <AuditTimeline items={auditItems} />
               </div>
             )}
+            <div className="mt-4 border-t border-border pt-3">
+              <div className="rounded border border-border bg-muted/20 p-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-[10px] text-foreground">
+                    context v{task?.contextVersion}
+                  </span>
+                  {task && <StatusPill status={task.status} />}
+                </div>
+                <p className="mt-1.5 text-[11px] text-muted-foreground">
+                  这些是主群持续同步到当前 Task 的消息引用。
+                </p>
+              </div>
+              <div className="mt-2 flex flex-col gap-1.5">
+                {sourceContext.map((message) => (
+                  <button
+                    key={message.id}
+                    type="button"
+                    onClick={() => sourceRoom && setSelectedRoomId(sourceRoom.roomId)}
+                    className="w-full rounded border border-border bg-card p-2 text-left hover:bg-muted/40"
+                  >
+                    <div className="flex items-center justify-between font-mono text-[9px] text-muted-foreground">
+                      <span>
+                        {message.senderName} · #{message.seq}
+                      </span>
+                      <span>{timeLabel(message.createdAt)}</span>
+                    </div>
+                    <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                      {message.content}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
@@ -3699,6 +3890,40 @@ export const TeamChat = ({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {cloudMode && room?.type === "group" && (
+        <HostBindingDialog
+          open={hostBindingOpen}
+          workspace={workspace}
+          roomId={room.roomId}
+          roomRevision={room.revision ?? 1}
+          role={room.memberRole}
+          currentUserId={backendUserId}
+          currentBinding={room.workspaceBinding}
+          onOpenChange={setHostBindingOpen}
+          onChanged={async () => {
+            await syncCloudWorkspace();
+            setGovernanceRevision((value) => value + 1);
+          }}
+        />
+      )}
+      <ApprovalInboxDialog
+        open={approvalInboxOpen}
+        approvals={approvals}
+        loading={governanceLoading}
+        onOpenChange={setApprovalInboxOpen}
+        onRefresh={refreshGovernance}
+        onDecision={decideExecutionApproval}
+      />
+      <TaskGrantDialog
+        open={taskGrantOpen}
+        task={grantTask}
+        onOpenChange={(open) => {
+          setTaskGrantOpen(open);
+          if (!open) setGrantTask(undefined);
+        }}
+        onGrant={createTaskGrant}
+      />
 
       {settingsOpen && (
         <ImSettings

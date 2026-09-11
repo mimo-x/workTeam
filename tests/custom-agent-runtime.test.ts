@@ -144,6 +144,11 @@ test("CustomHttpRuntime does not send local workspace by default and streams eve
       start(controller) {
         controller.enqueue(
           encoder.encode(
+            `data: ${JSON.stringify({ type: "approval.requested", turnId: "remote_turn", data: { requestId: "approval_1", method: "item/commandExecution/requestApproval", command: "npm test" } })}\n\n`,
+          ),
+        );
+        controller.enqueue(
+          encoder.encode(
             `data: ${JSON.stringify({ type: "message.completed", turnId: "remote_turn", data: { text: "远程完成" } })}\n\n`,
           ),
         );
@@ -160,14 +165,21 @@ test("CustomHttpRuntime does not send local workspace by default and streams eve
 
   try {
     const runtime = new CustomHttpRuntime(httpManifest, "secret");
-    const events: string[] = [];
-    runtime.onEvent((event) => events.push(event.method));
+    const events: Array<{ method: string; sessionId?: string; params: Record<string, unknown> }> =
+      [];
+    runtime.onEvent((event) => events.push(event));
     await runtime.startSession({ workspace: "/private/project", access: "read-only" });
     assert.equal(await runtime.checkHealth(), true);
     await runtime.startTurn("remote_session", "/private/project", "测试");
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(requests[0].body?.workspace, undefined);
-    assert.deepEqual(events, ["message/completed", "turn/completed"]);
+    assert.deepEqual(
+      events.map((event) => event.method),
+      ["approval/requested", "message/completed", "turn/completed"],
+    );
+    assert.equal(events[0].sessionId, "remote_session");
+    assert.equal(events[0].params.turnId, "remote_turn");
+    assert.equal(events[0].params.requestId, "approval_1");
   } finally {
     globalThis.fetch = originalFetch;
   }

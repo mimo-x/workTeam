@@ -37,6 +37,7 @@ type RoomRow = {
   revision: number;
   created_at: Date;
   updated_at: Date;
+  current_user_role?: "owner" | "admin" | "member";
 };
 
 const roomDto = (row: RoomRow) => ({
@@ -50,6 +51,7 @@ const roomDto = (row: RoomRow) => ({
     ? row.direct_key.split(":").at(-1)
     : undefined,
   revision: row.revision,
+  memberRole: row.current_user_role,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -65,7 +67,7 @@ const isRoomMember = async (pool: pg.Pool, roomId: string, userId: string) => {
 export const registerRoomRoutes = (app: FastifyInstance, pool: pg.Pool, events: EventPublisher) => {
   app.get("/v1/rooms", { preHandler: [app.authenticate] }, async (request) => {
     const result = await pool.query<RoomRow>(
-      `SELECT r.* FROM rooms r
+      `SELECT r.*, rm.role AS current_user_role FROM rooms r
        JOIN room_members rm ON rm.room_id = r.id
        WHERE rm.user_id = $1 AND r.archived_at IS NULL
        ORDER BY r.updated_at DESC`,
@@ -73,12 +75,24 @@ export const registerRoomRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
     );
     if (!result.rows.length) return { data: [] };
     const roomIds = result.rows.map((row) => row.id);
-    const [members, agentRows] = await Promise.all([
+    const [members, agentRows, bindingRows] = await Promise.all([
       pool.query(
         `SELECT rm.room_id AS "roomId", u.id, u.handle, u.display_name AS "displayName",
                 u.openim_user_id AS "openimUserId", rm.role
          FROM room_members rm JOIN users u ON u.id = rm.user_id
          WHERE rm.room_id IN (${roomIds.map((_, index) => `$${index + 1}`).join(",")})`,
+        roomIds,
+      ),
+      pool.query(
+        `SELECT rwb.room_id AS "roomId", wb.id, wb.user_id AS "hostUserId",
+                wb.device_id AS "hostDeviceId", wb.label,
+                wb.repository_url AS "repositoryUrl", wb.revision,
+                wb.baseline_scopes AS "baselineScopes", wb.status,
+                wb.last_seen_at AS "lastSeenAt"
+         FROM room_workspace_bindings rwb
+         JOIN workspace_bindings wb ON wb.id = rwb.workspace_binding_id
+         WHERE rwb.room_id IN (${roomIds.map((_, index) => `$${index + 1}`).join(",")})
+           AND rwb.status = 'active' AND wb.revoked_at IS NULL`,
         roomIds,
       ),
       pool.query(
@@ -95,6 +109,7 @@ export const registerRoomRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
         ...roomDto(row),
         members: members.rows.filter((item) => item.roomId === row.id),
         agents: agentRows.rows.filter((item) => item.roomId === row.id),
+        workspaceBinding: bindingRows.rows.find((item) => item.roomId === row.id),
       })),
     };
   });

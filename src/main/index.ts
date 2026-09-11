@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from "electron";
 import OpenIMSdkMain from "@openim/electron-client-sdk";
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
@@ -16,6 +16,7 @@ import { RemoteAgentHost } from "./remote-agent-host";
 import { AgentRuntimeRegistry } from "./runtime-registry";
 import { OpenCodeRuntime } from "./opencode-runtime";
 import { RuntimeCredentialStore, runtimeCredentialsPath } from "./runtime-credentials";
+import { WorkspaceBindingStore, workspaceBindingsPath } from "./workspace-binding-store";
 import type {
   AgentDefinition,
   AgentMessageAction,
@@ -24,6 +25,8 @@ import type {
   ImConfigInput,
   TaskStatus,
   TaskReviewDecision,
+  PermissionScope,
+  WorkspaceBindingSummary,
 } from "../shared/agent-team";
 import type { ApprovalDecision, RpcRequestId } from "../shared/codex";
 import type {
@@ -46,6 +49,7 @@ let agentTeam: AgentTeamService;
 let runtimeCredentials: RuntimeCredentialStore;
 let backend: BackendClient;
 let remoteAgentHost: RemoteAgentHost;
+let workspaceBindings: WorkspaceBindingStore;
 
 const requireDirectory = async (value: unknown) => {
   if (typeof value !== "string" || !isAbsolute(value)) throw new Error("请选择有效的项目目录。");
@@ -518,6 +522,79 @@ const registerIpc = () => {
   ipcMain.handle("backend:start-host", async (_event, options: { workspace?: unknown }) =>
     remoteAgentHost.start(await requireDirectory(options?.workspace)),
   );
+  ipcMain.handle(
+    "backend:register-workspace-binding",
+    async (
+      _event,
+      options: {
+        workspace?: unknown;
+        label?: unknown;
+        repositoryUrl?: unknown;
+        baselineScopes?: unknown;
+      },
+    ) => {
+      const workspace = await requireDirectory(options?.workspace);
+      const label = requireString(options?.label, "项目标签", 80);
+      const repositoryUrl =
+        typeof options?.repositoryUrl === "string" && options.repositoryUrl.trim()
+          ? options.repositoryUrl.trim()
+          : null;
+      const allowedScopes = new Set<PermissionScope>([
+        "workspace.read",
+        "workspace.write",
+        "command.run",
+        "network.read",
+      ]);
+      const baselineScopes = Array.isArray(options?.baselineScopes)
+        ? [
+            ...new Set(
+              options.baselineScopes.filter((scope): scope is PermissionScope =>
+                allowedScopes.has(scope as PermissionScope),
+              ),
+            ),
+          ]
+        : ["workspace.read" as const];
+      const host = remoteAgentHost.getState();
+      if (host.status !== "connected" || !host.deviceId) {
+        throw new Error("请先连接本机 Agent Host，再创建项目绑定。");
+      }
+      const binding = await backend.request<
+        Omit<WorkspaceBindingSummary, "repositoryUrl" | "lastSeenAt"> & {
+          repositoryUrl: string | null;
+          lastSeenAt?: string | null;
+        }
+      >({
+        method: "POST",
+        path: "/v1/workspace-bindings",
+        body: {
+          deviceId: host.deviceId,
+          label,
+          repositoryUrl,
+          baselineScopes,
+        },
+      });
+      await workspaceBindings.save({
+        bindingId: binding.id,
+        bindingRevision: binding.revision,
+        hostDeviceId: binding.hostDeviceId,
+        path: workspace,
+      });
+      return {
+        ...binding,
+        repositoryUrl: binding.repositoryUrl ?? undefined,
+        lastSeenAt: binding.lastSeenAt ? Date.parse(binding.lastSeenAt) : undefined,
+      } satisfies WorkspaceBindingSummary;
+    },
+  );
+  ipcMain.handle("backend:list-workspace-bindings", () => workspaceBindings.summaries());
+  ipcMain.handle(
+    "backend:remove-workspace-binding",
+    async (_event, options: { bindingId?: unknown }) => ({
+      removed: await workspaceBindings.remove(
+        requireString(options?.bindingId, "项目绑定 ID", 128),
+      ),
+    }),
+  );
   ipcMain.handle("backend:stop-host", () => remoteAgentHost.stop());
   ipcMain.handle("backend:get-host-state", () => remoteAgentHost.getState());
   ipcMain.handle("backend:import-workspace", async (_event, options: { workspace?: unknown }) => {
@@ -537,7 +614,8 @@ app.whenReady().then(async () => {
     join(userDataPath, "openim-cloud-data"),
     (agentId, token) => runtimeRegistry.setCredential(agentId, token),
   );
-  remoteAgentHost = new RemoteAgentHost(backend, runtimeRegistry);
+  workspaceBindings = new WorkspaceBindingStore(workspaceBindingsPath(userDataPath), safeStorage);
+  remoteAgentHost = new RemoteAgentHost(backend, runtimeRegistry, workspaceBindings);
   const publisher = new AgentGatewayPublisher(imConfig);
   agentTeam = new AgentTeamService(
     runtimeRegistry,
