@@ -18,7 +18,11 @@ export class OpenImClient {
     return Boolean(this.config.OPENIM_API_URL && this.config.OPENIM_ADMIN_TOKEN);
   }
 
-  private async call<T>(path: string, body: Record<string, unknown>) {
+  private async call<T>(
+    path: string,
+    body: Record<string, unknown>,
+    operationId: string = randomUUID(),
+  ) {
     if (!this.config.OPENIM_API_URL || !this.config.OPENIM_ADMIN_TOKEN) {
       throw new OpenImUnavailableError("OpenIM 尚未配置。");
     }
@@ -26,7 +30,7 @@ export class OpenImClient {
       method: "POST",
       headers: {
         "content-type": "application/json; charset=utf-8",
-        operationID: randomUUID(),
+        operationID: operationId,
         token: this.config.OPENIM_ADMIN_TOKEN,
       },
       body: JSON.stringify(body),
@@ -101,6 +105,7 @@ export class OpenImClient {
     recvID?: string;
     content: string;
     ex?: Record<string, unknown>;
+    operationId?: string;
   }) {
     return this.call<{ serverMsgID: string; clientMsgID: string; sendTime: number }>(
       "/msg/send_msg",
@@ -118,6 +123,7 @@ export class OpenImClient {
         notOfflinePush: false,
         ex: JSON.stringify(input.ex ?? {}),
       },
+      input.operationId,
     );
   }
 }

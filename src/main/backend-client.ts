@@ -106,6 +106,9 @@ type CloudMessage = {
   content: string;
   seq: number | string;
   targetAgentIds?: string[];
+  kind?: "task-summary";
+  taskId?: string;
+  artifactRefs?: string[];
   sentAt: string;
 };
 
@@ -139,6 +142,8 @@ type CloudTask = {
   budgetUsage?: AgentTask["budgetUsage"];
   waitReason?: string | null;
   artifactRefs?: string[];
+  completionSummary?: string | null;
+  sourceSummaryPublishedAt?: string | null;
   contextVersion: number;
   latestSourceSeq: number | string;
   createdAt: string;
@@ -465,6 +470,9 @@ export class BackendClient {
           updatedAt: sentAt,
           status: "complete",
           targetAgentIds: message.targetAgentIds ?? [],
+          kind: message.kind,
+          taskId: message.taskId,
+          artifactRefs: message.artifactRefs ?? [],
           transport: "openim",
         };
       });
@@ -577,6 +585,10 @@ export class BackendClient {
         budgetUsage: task.budgetUsage,
         waitReason: task.waitReason ?? undefined,
         artifactRefs: task.artifactRefs ?? [],
+        completionSummary: task.completionSummary ?? undefined,
+        sourceSummaryPublishedAt: task.sourceSummaryPublishedAt
+          ? timestamp(task.sourceSummaryPublishedAt)
+          : undefined,
         contextVersion: Number(task.contextVersion) || 1,
         latestSourceSeq: Number(task.latestSourceSeq) || Number(anchor?.sourceSeq) || 1,
         consumedContextVersionByAgent: Object.fromEntries(

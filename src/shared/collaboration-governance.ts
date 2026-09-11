@@ -224,6 +224,8 @@ export const normalizeTaskGovernance = (
   | "budgetUsage"
   | "waitReason"
   | "artifactRefs"
+  | "completionSummary"
+  | "sourceSummaryPublishedAt"
 > => {
   const requestedScopes = normalizePermissionScopes(task.requestedScopes);
   const createdAt = Number(task.createdAt) || Date.now();
@@ -248,6 +250,8 @@ export const normalizeTaskGovernance = (
     budgetUsage: normalizeTaskBudgetUsage(task.budgetUsage, createdAt),
     waitReason: stringValue(task.waitReason) || undefined,
     artifactRefs: stringArray(task.artifactRefs),
+    completionSummary: stringValue(task.completionSummary).slice(0, 4_000) || undefined,
+    sourceSummaryPublishedAt: Number(task.sourceSummaryPublishedAt) || undefined,
   };
 };
 

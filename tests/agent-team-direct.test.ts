@@ -541,6 +541,159 @@ test("group mentions stay in chat and an approved Task proposal starts explicitl
   }
 });
 
+test("BDD: an accepted local root Task publishes one durable summary to its source group", async () => {
+  const storeDir = await mkdtemp(join(tmpdir(), "agent-team-task-summary-"));
+  const workspace = "/tmp/task-summary-workspace";
+  const codex = new FakeCodex();
+  const service = new AgentTeamService(codex as unknown as AgentRuntime, storeDir);
+
+  try {
+    const initial = await service.getWorkspace(workspace);
+    const sourceRoom = initial.rooms.find((candidate) => candidate.type === "group")!;
+    const reviewer = initial.agents.find((candidate) => candidate.id === "agent_reviewer")!;
+
+    codex.responses.push(
+      '已生成草案。\n<agent-team-task-proposal>{"title":"读取桌面文件","objective":"读取并分析桌面文件","expectedResult":"可回看的文件分析总结","plan":["列出文件","分析文本内容"],"acceptanceCriteria":["总结同步到来源群"],"requestedAccess":"read"}</agent-team-task-proposal>',
+    );
+    await service.sendMessage({
+      workspace,
+      roomId: sourceRoom.roomId,
+      text: `${reviewer.mention} 读取一下桌面上的文件`,
+      agentAction: "propose-task",
+    });
+    await waitFor(async () => (await service.getWorkspace(workspace)).tasks.length === 1);
+
+    let task = (await service.getWorkspace(workspace)).tasks[0];
+    await service.reviewTask(workspace, task.id, "approved");
+    codex.responses.push(
+      `桌面文件分析完成。\n<!-- agent-action-v1 ${JSON.stringify({
+        protocolVersion: 1,
+        actionId: "complete-desktop-review",
+        taskId: task.id,
+        taskRevision: task.revision,
+        action: "complete",
+        summary: "共发现 3 个可读文本文件，均已完成静态分析。",
+        artifactRefs: ["reports/desktop-files.md"],
+      })} -->`,
+    );
+    await service.startTask(workspace, task.id);
+    await waitFor(async () => {
+      const current = await service.getWorkspace(workspace);
+      return current.tasks.find((candidate) => candidate.id === task.id)?.status === "review";
+    });
+
+    let snapshot = await service.getWorkspace(workspace);
+    assert.equal(
+      snapshot.rooms
+        .find((candidate) => candidate.roomId === sourceRoom.roomId)!
+        .messages.filter((message) => message.kind === "task-summary").length,
+      0,
+      "entering review must not publish before human acceptance",
+    );
+
+    task = await service.updateTaskStatus(workspace, task.id, "done");
+    assert.equal(task.status, "done");
+    snapshot = await service.getWorkspace(workspace);
+    const summaries = snapshot.rooms
+      .find((candidate) => candidate.roomId === sourceRoom.roomId)!
+      .messages.filter((message) => message.kind === "task-summary" && message.taskId === task.id);
+    assert.equal(summaries.length, 1);
+    assert.match(summaries[0].content, /共发现 3 个可读文本文件/);
+    assert.deepEqual(summaries[0].artifactRefs, ["reports/desktop-files.md"]);
+
+    await service.updateTaskStatus(workspace, task.id, "done");
+    snapshot = await service.getWorkspace(workspace);
+    assert.equal(
+      snapshot.rooms
+        .find((candidate) => candidate.roomId === sourceRoom.roomId)!
+        .messages.filter((message) => message.kind === "task-summary" && message.taskId === task.id)
+        .length,
+      1,
+      "repeated acceptance must not duplicate the source summary",
+    );
+  } finally {
+    await service.flush();
+    await rm(storeDir, { recursive: true, force: true });
+  }
+});
+
+test("BDD: a local child Task aggregates into its parent without posting to the source group", async () => {
+  const storeDir = await mkdtemp(join(tmpdir(), "agent-team-child-summary-"));
+  const workspace = "/tmp/child-summary-workspace";
+  const codex = new FakeCodex();
+  const service = new AgentTeamService(codex as unknown as AgentRuntime, storeDir);
+
+  try {
+    const initial = await service.getWorkspace(workspace);
+    const sourceRoom = initial.rooms.find((candidate) => candidate.type === "group")!;
+    const coder = initial.agents.find((candidate) => candidate.id === "agent_coder")!;
+    const reviewer = initial.agents.find((candidate) => candidate.id === "agent_reviewer")!;
+
+    codex.responses.push(
+      '已生成草案。\n<agent-team-task-proposal>{"title":"登录分析","objective":"分析并复核登录实现","expectedResult":"可验收结论","plan":["分析","复核"],"acceptanceCriteria":["复核通过"],"requestedAccess":"read"}</agent-team-task-proposal>',
+    );
+    await service.sendMessage({
+      workspace,
+      roomId: sourceRoom.roomId,
+      text: `${coder.mention} 分析登录实现并安排复核`,
+      agentAction: "propose-task",
+    });
+    await waitFor(async () => (await service.getWorkspace(workspace)).tasks.length === 1);
+    let root = (await service.getWorkspace(workspace)).tasks[0];
+    await service.reviewTask(workspace, root.id, "approved");
+    codex.responses.push(
+      `初步分析完成，交给审查员复核。\n<!-- agent-action-v1 ${JSON.stringify({
+        protocolVersion: 1,
+        actionId: "delegate-summary-review",
+        taskId: root.id,
+        taskRevision: root.revision,
+        action: "create_subtask",
+        title: "复核登录实现",
+        objective: "复核登录分析结论",
+        expectedResult: "独立复核摘要",
+        assigneeIds: [reviewer.id],
+        requestedScopes: ["workspace.read"],
+        acceptanceCriteria: ["结论可复核"],
+      })} -->`,
+      "复核完成，没有发现阻塞问题。",
+    );
+    await service.startTask(workspace, root.id);
+    await waitFor(async () => {
+      const current = await service.getWorkspace(workspace);
+      return current.tasks.some(
+        (candidate) => candidate.parentTaskId === root.id && candidate.status === "review",
+      );
+    });
+
+    let snapshot = await service.getWorkspace(workspace);
+    const child = snapshot.tasks.find((candidate) => candidate.parentTaskId === root.id)!;
+    await service.updateTaskStatus(workspace, child.id, "done");
+    snapshot = await service.getWorkspace(workspace);
+    root = snapshot.tasks.find((candidate) => candidate.id === root.id)!;
+    assert.equal(root.status, "review");
+    assert.match(root.completionSummary ?? "", /登录分析：初步分析完成/);
+    assert.match(root.completionSummary ?? "", /复核登录实现：复核完成/);
+    assert.equal(
+      snapshot.rooms
+        .find((candidate) => candidate.roomId === sourceRoom.roomId)!
+        .messages.filter((message) => message.kind === "task-summary").length,
+      0,
+    );
+
+    await service.updateTaskStatus(workspace, root.id, "done");
+    snapshot = await service.getWorkspace(workspace);
+    const summaries = snapshot.rooms
+      .find((candidate) => candidate.roomId === sourceRoom.roomId)!
+      .messages.filter((message) => message.kind === "task-summary");
+    assert.equal(summaries.length, 1);
+    assert.match(summaries[0].content, /登录分析：初步分析完成/);
+    assert.match(summaries[0].content, /复核登录实现：复核完成/);
+  } finally {
+    await service.flush();
+    await rm(storeDir, { recursive: true, force: true });
+  }
+});
+
 test("an approved local Task can delegate a governed child while chat markers stay non-authoritative", async () => {
   const storeDir = await mkdtemp(join(tmpdir(), "agent-team-local-delegation-"));
   const workspace = "/tmp/local-delegation-workspace";
