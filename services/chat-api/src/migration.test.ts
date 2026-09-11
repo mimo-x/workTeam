@@ -96,11 +96,15 @@ test("existing tasks survive upgrade but active work requires reconfirmation", a
       [taskId, userId, sourceRoomId, taskRoomId],
     );
 
-    await applyMigrations(pool, ["0005_governed_collaboration.sql"]);
+    await applyMigrations(pool, [
+      "0005_governed_collaboration.sql",
+      "0006_task_completion_summary.sql",
+    ]);
 
     const upgraded = await pool.query(
       `SELECT status, revision, requested_scopes, root_task_id, wait_reason,
-              workspace_binding_id, parent_task_id
+              workspace_binding_id, parent_task_id, completion_summary,
+              source_summary_published_at
        FROM tasks WHERE id = $1`,
       [taskId],
     );
@@ -111,6 +115,27 @@ test("existing tasks survive upgrade but active work requires reconfirmation", a
     assert.match(upgraded.rows[0].wait_reason, /重新确认/);
     assert.equal(upgraded.rows[0].workspace_binding_id, null);
     assert.equal(upgraded.rows[0].parent_task_id, null);
+    assert.equal(upgraded.rows[0].completion_summary, null);
+    assert.equal(upgraded.rows[0].source_summary_published_at, null);
+
+    await pool.query(
+      `INSERT INTO message_mirrors(
+         server_msg_id, client_msg_id, room_id, openim_conversation_id, sender_openim_id,
+         sender_user_id, content, delivery_key, sent_at
+       ) VALUES ('summary-server-1', 'summary-client-1', $1, 'source-conversation',
+                 'owner-openim', $2, 'Summary', 'task-summary:legacy-task', now())`,
+      [sourceRoomId, userId],
+    );
+    await assert.rejects(
+      pool.query(
+        `INSERT INTO message_mirrors(
+           server_msg_id, client_msg_id, room_id, openim_conversation_id, sender_openim_id,
+           sender_user_id, content, delivery_key, sent_at
+         ) VALUES ('summary-server-2', 'summary-client-2', $1, 'source-conversation',
+                   'owner-openim', $2, 'Summary retry', 'task-summary:legacy-task', now())`,
+        [sourceRoomId, userId],
+      ),
+    );
   } finally {
     await pool.end();
   }

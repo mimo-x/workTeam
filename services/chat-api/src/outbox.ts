@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import type pg from "pg";
 
 import type { OpenImClient } from "./openim.js";
@@ -141,10 +139,11 @@ export class OutboxProcessor {
         groupID: payload.groupID ? String(payload.groupID) : undefined,
         recvID: payload.recvID ? String(payload.recvID) : undefined,
         content: String(payload.content),
+        operationId: row.id,
         ex: {
           ...(payload.ex && typeof payload.ex === "object" ? payload.ex : {}),
           deliveryId: row.id,
-          operationId: randomUUID(),
+          operationId: row.id,
         },
       });
     }

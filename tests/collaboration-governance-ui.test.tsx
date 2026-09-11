@@ -163,6 +163,8 @@ test("design system defines governed collaboration patterns and semantic tokens"
   assert.match(source, /双重授权/);
   assert.match(source, /Task tree 与预算/);
   assert.match(source, /电脑操作审批卡/);
+  assert.match(source, /根 Task 人工验收完成后/);
+  assert.match(source, /reports\/login-timeout-review\.md/);
   assert.match(source, /max-w-\[68%\]/);
   assert.match(css, /--governance-ready: var\(--success\)/);
   assert.match(css, /--governance-waiting: var\(--warning\)/);

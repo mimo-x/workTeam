@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { EventPublisher } from "./events.js";
 import { ApiError, parseBody, parseParams, parseQuery, requireRevision } from "./http.js";
 import { enqueueOutbox } from "./outbox.js";
+import { normalizeCompletionArtifactRefs } from "./task-completion-summary.js";
 
 const createRoomSchema = z.object({
   name: z.string().trim().min(1).max(80),
@@ -25,6 +26,36 @@ const messageQuery = z.object({
   beforeSeq: z.coerce.number().int().positive().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
+
+const recordValue = (value: unknown): Record<string, unknown> | undefined =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+
+const jsonRecord = (value: unknown) => {
+  if (typeof value !== "string") return recordValue(value);
+  try {
+    return recordValue(JSON.parse(value));
+  } catch {
+    return undefined;
+  }
+};
+
+export const taskSummaryMessageMetadata = (raw: unknown) => {
+  const extension = jsonRecord(recordValue(raw)?.ex);
+  if (extension?.kind !== "task-summary") return {};
+  const taskId = z.string().uuid().safeParse(extension.taskId);
+  if (!taskId.success) return {};
+  const artifactRefs = z
+    .array(z.string().trim().min(1).max(2_048))
+    .max(64)
+    .safeParse(extension.artifactRefs);
+  return {
+    kind: "task-summary" as const,
+    taskId: taskId.data,
+    artifactRefs: artifactRefs.success ? normalizeCompletionArtifactRefs(artifactRefs.data) : [],
+  };
+};
 
 type RoomRow = {
   id: string;
@@ -538,14 +569,17 @@ export const registerRoomRoutes = (app: FastifyInstance, pool: pg.Pool, events: 
       `SELECT server_msg_id AS "serverMsgId", client_msg_id AS "clientMsgId", room_id AS "roomId",
               sender_openim_id AS "senderOpenimId", sender_user_id AS "senderUserId",
               sender_agent_id AS "senderAgentId", content, content_type AS "contentType", seq,
-              target_agent_ids AS "targetAgentIds", sent_at AS "sentAt"
+              target_agent_ids AS "targetAgentIds", raw, sent_at AS "sentAt"
        FROM message_mirrors
        WHERE room_id = $1 AND ($2::bigint IS NULL OR seq < $2)
        ORDER BY seq DESC LIMIT $3`,
       [id, beforeSeq ?? null, limit],
     );
     return {
-      data: result.rows.reverse(),
+      data: result.rows.reverse().map(({ raw, ...message }) => ({
+        ...message,
+        ...taskSummaryMessageMetadata(raw),
+      })),
       nextCursor: result.rows.length === limit ? result.rows.at(-1)?.seq : null,
     };
   });

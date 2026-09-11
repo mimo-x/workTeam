@@ -111,6 +111,7 @@ import {
   type MentionCandidate,
 } from "./openim-mentions";
 import { resolveRoomSaveTarget } from "./room-save-target";
+import { TaskCompletionCard } from "./task-completion-card";
 
 export type TeamView = "messages" | "contacts" | "tasks";
 
@@ -419,7 +420,14 @@ const MessageRow = ({
           <div className="rounded-xl rounded-tr-sm border border-primary/15 bg-primary/8 px-3 py-2 text-[13px] leading-6 whitespace-pre-wrap text-foreground">
             {message.content}
           </div>
-          {task && (
+          {task && message.kind === "task-summary" && (
+            <TaskCompletionCard
+              task={task}
+              artifactRefs={message.artifactRefs ?? task.artifactRefs ?? []}
+              onOpenTask={onOpenTask}
+            />
+          )}
+          {task && message.kind !== "task-summary" && (
             <button
               type="button"
               onClick={() => onOpenTask(task)}
@@ -469,6 +477,13 @@ const MessageRow = ({
         </div>
         <div className="px-0.5 py-0.5">
           {message.content ? <MessageBody content={message.content} /> : null}
+          {task && message.kind === "task-summary" && (
+            <TaskCompletionCard
+              task={task}
+              artifactRefs={message.artifactRefs ?? task.artifactRefs ?? []}
+              onOpenTask={onOpenTask}
+            />
+          )}
           {message.activity && (
             <div className="flex items-center gap-2 py-1 font-mono text-[11px] text-muted-foreground">
               <LoaderCircleIcon className="size-3 animate-spin text-primary" />

@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { appendCollaborationAudit } from "./collaboration-audit.js";
 import { enqueueOutbox } from "./outbox.js";
+import { normalizeCompletionSummary } from "./task-completion-summary.js";
 
 const scopes = ["workspace.read", "workspace.write", "command.run", "network.read"] as const;
 type PermissionScope = (typeof scopes)[number];
@@ -502,8 +503,14 @@ export const applyAgentActions = async (
   const createdTasks: Array<{ taskId: string; taskRoomId: string; status: string }> = [];
   const errors: string[] = [];
   const dispatchUserIds = new Set<string>();
+  let hasCompletionSummary = false;
   if (!parent || parent.revision !== input.taskRevision) {
-    return { createdTasks, errors: ["Agent 动作关联的 Task revision 已失效。"], dispatchUserIds };
+    return {
+      createdTasks,
+      errors: ["Agent 动作关联的 Task revision 已失效。"],
+      dispatchUserIds,
+      hasCompletionSummary,
+    };
   }
   for (const raw of input.actions) {
     const parsed = actionSchema.safeParse(raw);
@@ -617,12 +624,36 @@ export const applyAgentActions = async (
           : action.action === "block"
             ? action.reason
             : null;
-      const artifacts = action.action === "complete" ? action.artifactRefs : undefined;
+      let artifacts: string[] | undefined;
+      if (action.action === "complete") {
+        const currentArtifacts = await client.query<{ artifact_refs: string[] }>(
+          "SELECT artifact_refs FROM tasks WHERE id = $1",
+          [input.taskId],
+        );
+        artifacts = [
+          ...new Set([...(currentArtifacts.rows[0]?.artifact_refs ?? []), ...action.artifactRefs]),
+        ];
+      }
+      const completionSummary =
+        action.action === "complete" ? normalizeCompletionSummary(action.summary) : undefined;
+      if (completionSummary) hasCompletionSummary = true;
       await client.query(
         `UPDATE tasks SET status = $1, wait_reason = $2,
-                artifact_refs = COALESCE($3::jsonb, artifact_refs), updated_at = now()
-         WHERE id = $4`,
-        [status, waitReason, artifacts ? JSON.stringify(artifacts) : null, input.taskId],
+                completion_summary = CASE
+                  WHEN $3::text IS NULL THEN completion_summary
+                  WHEN completion_summary IS NULL OR completion_summary = '' THEN $3
+                  WHEN completion_summary = $3 THEN completion_summary
+                  ELSE completion_summary || E'\\n' || $3
+                END,
+                artifact_refs = COALESCE($4::jsonb, artifact_refs), updated_at = now()
+         WHERE id = $5`,
+        [
+          status,
+          waitReason,
+          completionSummary ?? null,
+          artifacts ? JSON.stringify(artifacts) : null,
+          input.taskId,
+        ],
       );
       await client.query(
         `UPDATE task_agent_actions SET status = 'applied', applied_at = now()
@@ -643,5 +674,5 @@ export const applyAgentActions = async (
       metadata: { actionId: action.actionId },
     });
   }
-  return { createdTasks, errors, dispatchUserIds };
+  return { createdTasks, errors, dispatchUserIds, hasCompletionSummary };
 };

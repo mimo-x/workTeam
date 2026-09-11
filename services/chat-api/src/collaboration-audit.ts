@@ -23,14 +23,14 @@ type AuditInput = {
 
 const SENSITIVE_KEY = /(path|token|secret|password|credential|private|encrypted|command|args)/i;
 
-export const redactAuditText = (value: string) =>
+export const redactAuditText = (value: string, maxLength = 1_000) =>
   value
     .replace(/(?:^|\s)(?:\/[\w.@+-]+){2,}/g, " [redacted-path]")
     .replace(/[A-Za-z]:\\(?:[^\s\\]+\\)+[^\s]*/g, "[redacted-path]")
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, "Bearer [redacted]")
     .replace(/\b(token|secret|password|credential)\s*[=:]\s*\S+/gi, "$1=[redacted]")
     .trim()
-    .slice(0, 1_000);
+    .slice(0, maxLength);
 
 export const redactAuditMetadata = (value: Record<string, unknown>) => {
   const redacted: Record<string, unknown> = {};

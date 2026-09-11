@@ -1343,6 +1343,29 @@ export function CodexDesktopDesignSystem() {
                           <p className="mt-1 text-sm leading-[22px]">
                             已完成初步分析，并委派测试 Agent 验证登录超时的边界条件。
                           </p>
+                          <Card size="sm" className="mt-3 max-w-sm shadow-none">
+                            <CardHeader>
+                              <CardTitle>Task 已完成</CardTitle>
+                              <CardDescription>分析登录超时并交付修复</CardDescription>
+                              <CardAction>
+                                <Badge className="bg-governance-ready/10 text-governance-ready">
+                                  <CheckCircle2 aria-hidden="true" />
+                                  已验收
+                                </Badge>
+                              </CardAction>
+                            </CardHeader>
+                            <CardContent>
+                              <p className="text-xs font-medium">产物</p>
+                              <p className="mt-1 truncate font-mono text-[10px] text-muted-foreground">
+                                reports/login-timeout-review.md
+                              </p>
+                            </CardContent>
+                            <CardFooter>
+                              <Button size="sm" variant="ghost">
+                                查看 Task
+                              </Button>
+                            </CardFooter>
+                          </Card>
                         </div>
                       </div>
                       <div className="flex justify-end">
@@ -1416,6 +1439,7 @@ export function CodexDesktopDesignSystem() {
                     "等待、阻塞、失败必须使用不同文案，并给出谁可以继续推进以及具体下一步。",
                     "审计时间线默认紧凑展示事件、结果和时间；复制诊断前必须移除本机路径与凭据。",
                     "Agent 委派必须显示父子关系、执行者、范围和预算，不使用看不见的后台自动化。",
+                    "子 Task 只汇总到父 Task；根 Task 人工验收完成后，来源群只显示一条持久结果卡。",
                     "明暗主题使用同一语义 Token；颜色只作辅助，状态仍需图标或文字标签。",
                   ]}
                 />

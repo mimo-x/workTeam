@@ -35,6 +35,12 @@ import {
   normalizeWorkspaceBindingSummary,
 } from "../shared/collaboration-governance";
 import { formatErrorMessage } from "../shared/error";
+import {
+  aggregateTaskCompletionSummaries,
+  formatTaskCompletionMessage,
+  normalizeCompletionArtifactRefs,
+  normalizeCompletionSummary,
+} from "../shared/task-completion-summary";
 import type { AgentRuntime, AgentRuntimeEvent } from "./agent-runtime";
 import type { AgentRuntimeRegistry } from "./runtime-registry";
 
@@ -977,6 +983,7 @@ export class AgentTeamService {
   async updateTaskStatus(workspace: string, taskId: string, status: TaskStatus) {
     const state = await this.loadWorkspace(workspace);
     const task = this.requireTask(state, taskId);
+    const previousStatus = task.status;
     const allowed = new Set<TaskStatus>([
       "waiting",
       "review",
@@ -1005,15 +1012,54 @@ export class AgentTeamService {
       ) {
         parent.status = "blocked";
         parent.waitReason = "至少一个必需子 Task 已阻塞，请先处理。";
-      } else if (siblings.length && siblings.every((candidate) => candidate.status === "done")) {
+      } else if (
+        siblings.length &&
+        siblings.every((candidate) => candidate.status === "done") &&
+        !["review", "done", "failed", "cancelled"].includes(parent.status)
+      ) {
         parent.status = "review";
         parent.waitReason = undefined;
         parent.artifactRefs = [
-          ...new Set(siblings.flatMap((candidate) => candidate.artifactRefs ?? [])),
+          ...new Set([
+            ...(parent.artifactRefs ?? []),
+            ...siblings.flatMap((candidate) => candidate.artifactRefs ?? []),
+          ]),
         ];
+        parent.completionSummary = aggregateTaskCompletionSummaries([
+          ...(parent.completionSummary
+            ? [{ title: parent.title, completionSummary: parent.completionSummary }]
+            : []),
+          ...siblings,
+        ]);
       }
       parent.updatedAt = Date.now();
       this.emitTask(state, parent);
+    }
+    if (
+      status === "done" &&
+      previousStatus !== "done" &&
+      !task.parentTaskId &&
+      !task.sourceSummaryPublishedAt
+    ) {
+      const sourceRoom = this.requireRoom(state, task.sourceRoomId);
+      const summaryAgent =
+        state.agents.find((agent) => agent.id === task.assigneeIds[0]) ?? state.agents[0];
+      task.sourceSummaryPublishedAt = Date.now();
+      const summaryMessage = this.createMessage(state, sourceRoom, {
+        senderId: summaryAgent.id,
+        senderName: summaryAgent.name,
+        senderType: "agent",
+        content: formatTaskCompletionMessage({
+          title: task.title,
+          completionSummary: task.completionSummary,
+          artifactRefs: task.artifactRefs,
+        }),
+        taskId: task.id,
+        kind: "task-summary",
+        artifactRefs: normalizeCompletionArtifactRefs(task.artifactRefs),
+        transport: "local",
+      });
+      this.upsertMessage(state, sourceRoom, summaryMessage);
     }
     this.persist(state);
     this.emitTask(state, task);
@@ -1844,6 +1890,9 @@ export class AgentTeamService {
                 : this.hasActiveRuns(task, taskRun.id)
                   ? "running"
                   : "review";
+            if (response.status === "complete" && !task.completionSummary) {
+              task.completionSummary = normalizeCompletionSummary(response.content) || undefined;
+            }
             task.updatedAt = response.updatedAt;
           }
           this.upsertMessage(state, room, response);
@@ -2182,7 +2231,19 @@ export class AgentTeamService {
         parent.waitReason = action.reason;
         nextStatus = "blocked";
       } else {
-        if (action.action === "complete") parent.artifactRefs = [...new Set(action.artifactRefs)];
+        if (action.action === "complete") {
+          const completionSummary = normalizeCompletionSummary(action.summary);
+          parent.completionSummary = parent.completionSummary
+            ? normalizeCompletionSummary(
+                parent.completionSummary === completionSummary
+                  ? parent.completionSummary
+                  : `${parent.completionSummary}\n${completionSummary}`,
+              )
+            : completionSummary || undefined;
+          parent.artifactRefs = [
+            ...new Set([...(parent.artifactRefs ?? []), ...action.artifactRefs]),
+          ];
+        }
         parent.waitReason = undefined;
         nextStatus = "review";
       }
