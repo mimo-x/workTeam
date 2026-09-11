@@ -55,6 +55,18 @@ test("CodexRuntime normalizes provider events and preserves session identity", a
     params: { turnId: turn.turnId, item: { type: "agentMessage", text: "你好" } },
   });
   codex.emit({
+    method: "desktop/approval/requested",
+    params: {
+      requestId: 41,
+      method: "item/commandExecution/requestApproval",
+      threadId: session.sessionId,
+      turnId: turn.turnId,
+      itemId: "item_1",
+      title: "Codex 请求执行命令",
+      command: "npm test",
+    },
+  });
+  codex.emit({
     method: "turn/completed",
     params: { turn: { id: turn.turnId, status: "completed" } },
   });
@@ -65,11 +77,14 @@ test("CodexRuntime normalizes provider events and preserves session identity", a
     [
       { method: "message/delta", sessionId: "thread_1" },
       { method: "message/completed", sessionId: "thread_1" },
+      { method: "approval/requested", sessionId: "thread_1" },
       { method: "turn/completed", sessionId: "thread_1" },
     ],
   );
   assert.equal(events[0].params.delta, "你好");
   assert.equal(events[1].params.text, "你好");
+  assert.equal(events[2].params.requestId, 41);
+  assert.equal(events[2].params.turnId, "turn_1");
 });
 
 test("CodexRuntime exposes provider and raw details on failures", async () => {

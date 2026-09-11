@@ -10,23 +10,28 @@ import {
   Clock3,
   Code2,
   Copy,
+  FileKey2,
+  GitBranch,
   Grid3X3,
   Info,
   Layers3,
   LayoutGrid,
   MessageSquare,
+  MonitorCog,
   Moon,
   MoveRight,
   Palette,
   Play,
   RotateCw,
   Send,
+  ShieldCheck,
   Shapes,
   Sparkles,
   Sun,
   Type,
   UsersRound,
   WandSparkles,
+  Workflow,
 } from "lucide-react";
 
 import {
@@ -72,6 +77,7 @@ const NAVIGATION = [
   { id: "icon", label: "图标 Icon", icon: Shapes },
   { id: "style", label: "样式 Style", icon: Layers3 },
   { id: "motion", label: "动效 Motion", icon: WandSparkles },
+  { id: "governance", label: "协作治理", icon: ShieldCheck },
   { id: "components", label: "shadcn 组件", icon: Code2 },
 ];
 
@@ -201,6 +207,10 @@ const TOKEN_TEXT = `:root {
   --destructive: #f54a45;
   --success: #32a645;
   --warning: #ed6d0c;
+  --governance-ready: var(--success);
+  --governance-waiting: var(--warning);
+  --governance-blocked: var(--destructive);
+  --governance-agent: var(--info);
   --border: #e4e4e9;
   --input: #d9d9e1;
   --accent: #ededf4;
@@ -1107,14 +1117,319 @@ export function CodexDesktopDesignSystem() {
             <Separator />
 
             <section
-              id="components"
+              id="governance"
               className="scroll-mt-14 bg-secondary/35 px-4 py-16 md:px-10 md:py-20"
             >
               <div className="mx-auto flex max-w-5xl flex-col gap-10">
                 <SectionHeading
-                  eyebrow="07 · shadcn"
-                  title="组件：保持 shadcn 结构，消费产品语义 Token"
-                  description="组件继续使用项目内的 shadcn/Base UI 实现，颜色、圆角、边框、字体与动效统一消费本设计系统变量。"
+                  eyebrow="07 · Governed collaboration"
+                  title="协作治理：让权限边界在工作流中可见"
+                  description="人和 Agent 共用一个群聊，但执行权不等于发言权。界面始终说明当前项目主机、Task 范围、责任人、预算、等待原因与下一步操作。"
+                />
+
+                <div className="flex gap-3 rounded-[8px] border border-primary/20 bg-primary/5 p-4">
+                  <ShieldCheck className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
+                  <p className="text-sm leading-[22px]">
+                    <span className="font-medium">双重授权：</span>
+                    群主或管理员审核“团队是否要做”；项目主机所有者审核“这台电脑是否允许做”。两项决定必须独立呈现，不能合并成一个模糊的“允许”。
+                  </p>
+                </div>
+
+                <div className="grid gap-4 lg:grid-cols-3">
+                  {[
+                    {
+                      title: "群成员",
+                      description:
+                        "发言、@ Agent、提出 Task、查看脱敏进度；不能审核或扩大执行范围。",
+                      icon: UsersRound,
+                    },
+                    {
+                      title: "群主 / 管理员",
+                      description:
+                        "审核计划、选择项目主机、开始或验收 Task；看不到主机私密路径和凭据。",
+                      icon: ShieldCheck,
+                    },
+                    {
+                      title: "项目主机所有者",
+                      description:
+                        "登记电脑、声明基线能力、批准具体 Runtime 操作；不替代群管理员决策。",
+                      icon: MonitorCog,
+                    },
+                  ].map((role) => (
+                    <SpecCard key={role.title} {...role} />
+                  ))}
+                </div>
+
+                <div className="grid gap-4 xl:grid-cols-[1.05fr_.95fr]">
+                  <Card className="shadow-none">
+                    <CardHeader>
+                      <CardTitle>项目主机与路径隐私</CardTitle>
+                      <CardDescription>
+                        群内共享稳定身份和就绪状态；本机绝对路径、设备密钥与 Runtime
+                        详情永不进入群消息。
+                      </CardDescription>
+                      <CardAction>
+                        <Badge className="bg-governance-ready/10 text-governance-ready">在线</Badge>
+                      </CardAction>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      <div className="flex items-start gap-3 rounded-md border bg-background p-3">
+                        <div className="grid size-8 shrink-0 place-items-center rounded-md bg-success/10 text-success">
+                          <GitBranch className="size-4" aria-hidden="true" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-medium">Agent Team · MacBook Pro</p>
+                            <Badge variant="outline">v3</Badge>
+                          </div>
+                          <p className="mt-1 truncate text-xs text-muted-foreground">
+                            github.com/team/agent-team · 所有者 我
+                          </p>
+                        </div>
+                      </div>
+                      <RuleList
+                        items={[
+                          "默认基线只有 workspace.read；写文件、命令和网络能力由主机逐项声明。",
+                          "Task 固定绑定主机 ID 与 revision，主机切换或 Task 改版后旧授权失效。",
+                          "离线时进入等待态并保留上下文，不静默转移到其他电脑。",
+                        ]}
+                      />
+                    </CardContent>
+                  </Card>
+
+                  <Card className="shadow-none">
+                    <CardHeader>
+                      <CardTitle>权限层级</CardTitle>
+                      <CardDescription>越接近真实副作用，授权越具体、有效期越短。</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-2">
+                      {[
+                        ["L0", "群聊与分析", "自动", "workspace.read"],
+                        ["L1", "Task 范围", "主机授权", "path / command / domain"],
+                        ["L2", "具体电脑操作", "逐次确认", "仅一次 / 本 Task"],
+                        ["L3", "首发不开放", "明确阻止", "发布、部署、破坏性远端操作"],
+                      ].map(([level, name, approval, scope]) => (
+                        <div
+                          key={level}
+                          className="grid grid-cols-[2.5rem_1fr_auto] items-center gap-3 rounded-md border bg-background px-3 py-2"
+                        >
+                          <Badge variant="outline" className="justify-center font-mono">
+                            {level}
+                          </Badge>
+                          <div>
+                            <p className="text-xs font-medium">{name}</p>
+                            <p className="font-mono text-[10px] text-muted-foreground">{scope}</p>
+                          </div>
+                          <span className="text-[10px] text-muted-foreground">{approval}</span>
+                        </div>
+                      ))}
+                    </CardContent>
+                  </Card>
+                </div>
+
+                <div className="grid gap-4 xl:grid-cols-2">
+                  <Card className="shadow-none">
+                    <CardHeader>
+                      <CardTitle>Task tree 与预算</CardTitle>
+                      <CardDescription>
+                        委派关系使用树表达；每个子 Task 显示执行者、能力范围和可解释状态。
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      <div className="overflow-hidden rounded-[8px] border bg-background">
+                        <div className="flex items-center gap-2 border-b bg-muted/50 px-3 py-2.5">
+                          <Workflow className="size-4 text-primary" aria-hidden="true" />
+                          <span className="min-w-0 flex-1 text-sm font-medium">
+                            分析登录超时并交付修复
+                          </span>
+                          <Badge variant="outline">根 Task</Badge>
+                        </div>
+                        {[
+                          ["定位 WebSocket 降级原因", "诊断 Agent", "执行中", "text-primary"],
+                          ["补充回归 Case", "测试 Agent", "等待权限", "text-warning"],
+                          ["汇总结果与证据", "协调 Agent", "阻塞", "text-destructive"],
+                        ].map(([title, agent, status, color]) => (
+                          <div
+                            key={title}
+                            className="grid grid-cols-[1rem_1fr_auto] items-center gap-2 border-b px-3 py-2.5 last:border-b-0"
+                          >
+                            <span className="text-muted-foreground">└</span>
+                            <div className="min-w-0">
+                              <p className="truncate text-xs font-medium">{title}</p>
+                              <p className="text-[10px] text-muted-foreground">{agent} · L1</p>
+                            </div>
+                            <span className={cn("text-[10px]", color)}>{status}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        {[
+                          ["深度", "1 / 3"],
+                          ["子 Task", "3 / 12"],
+                          ["Runs", "5 / 24"],
+                        ].map(([label, value]) => (
+                          <div key={label} className="rounded-md bg-muted p-2 text-center">
+                            <p className="font-mono text-xs font-medium">{value}</p>
+                            <p className="mt-0.5 text-[10px] text-muted-foreground">{label}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card className="shadow-none">
+                    <CardHeader>
+                      <CardTitle>电脑操作审批卡</CardTitle>
+                      <CardDescription>
+                        只呈现可决策的信息：谁、为何、对什么精确范围、允许多久。
+                      </CardDescription>
+                      <CardAction>
+                        <Badge className="bg-governance-waiting/10 text-governance-waiting">
+                          待处理
+                        </Badge>
+                      </CardAction>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="flex items-start gap-3 rounded-md border border-warning/25 bg-warning/5 p-3">
+                        <FileKey2
+                          className="mt-0.5 size-4 shrink-0 text-warning"
+                          aria-hidden="true"
+                        />
+                        <div>
+                          <p className="text-sm font-medium">运行测试命令</p>
+                          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                            测试 Agent 为验证登录回归请求在当前项目主机运行命令。
+                          </p>
+                          <div className="mt-2 rounded bg-background px-2 py-1.5 font-mono text-[10px] text-muted-foreground">
+                            command.run · npm · Task v2
+                          </div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <Button size="sm" variant="outline">
+                          拒绝
+                        </Button>
+                        <Button size="sm" variant="outline">
+                          仅这一次
+                        </Button>
+                        <Button size="sm">本 Task</Button>
+                      </div>
+                      <p className="text-[10px] leading-4 text-muted-foreground">
+                        “本 Task”只在同一 Task
+                        revision、同一主机和同一精确约束内复用；不要提供“永久允许”。
+                      </p>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                <Card className="shadow-none">
+                  <CardHeader>
+                    <CardTitle>群聊消息与治理状态</CardTitle>
+                    <CardDescription>
+                      内容优先、装饰克制。自己发送的短消息使用紧凑气泡，Agent 输出保留更宽的阅读列。
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="grid gap-6 lg:grid-cols-[1fr_20rem]">
+                    <div className="space-y-5 rounded-[8px] border bg-background p-4">
+                      <div className="flex gap-3">
+                        <Avatar size="sm">
+                          <AvatarFallback className="bg-primary/10 text-primary">研</AvatarFallback>
+                        </Avatar>
+                        <div className="max-w-[82%]">
+                          <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                            <span className="font-medium text-foreground">研究 Agent</span>
+                            16:32
+                          </div>
+                          <p className="mt-1 text-sm leading-[22px]">
+                            已完成初步分析，并委派测试 Agent 验证登录超时的边界条件。
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex justify-end">
+                        <div className="max-w-[68%]">
+                          <div className="mb-1 text-right text-[10px] text-muted-foreground">
+                            16:35 · 我
+                          </div>
+                          <div className="rounded-xl rounded-tr-sm border border-primary/15 bg-primary/8 px-3 py-2 text-[13px] leading-6">
+                            好，先验证再合并。
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <h3 className="text-xs font-medium">状态词与视觉语义</h3>
+                      <div className="mt-3 space-y-2">
+                        {[
+                          ["就绪 / 完成", "--governance-ready", "bg-governance-ready"],
+                          ["等待人工 / 离线", "--governance-waiting", "bg-governance-waiting"],
+                          ["阻塞 / 失败", "--governance-blocked", "bg-governance-blocked"],
+                          ["Agent / 信息", "--governance-agent", "bg-governance-agent"],
+                        ].map(([label, token, color]) => (
+                          <div key={label} className="flex items-center gap-2 text-xs">
+                            <span className={cn("size-2 rounded-full", color)} />
+                            <span className="min-w-0 flex-1">{label}</span>
+                            <code className="text-[10px] text-muted-foreground">{token}</code>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <div className="grid gap-4 md:grid-cols-3">
+                  <Card size="sm" className="shadow-none">
+                    <CardHeader>
+                      <CardTitle>等待态</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <p className="rounded-md bg-warning/10 p-2 text-xs leading-5 text-warning">
+                        等待项目主机上线。上线后自动续跑，无需重新创建 Task。
+                      </p>
+                    </CardContent>
+                  </Card>
+                  <Card size="sm" className="shadow-none">
+                    <CardHeader>
+                      <CardTitle>空状态</CardTitle>
+                    </CardHeader>
+                    <CardContent className="text-center">
+                      <MonitorCog className="mx-auto size-5 text-muted-foreground" />
+                      <p className="mt-2 text-xs">群里还没有项目主机</p>
+                      <p className="mt-1 text-[10px] text-muted-foreground">
+                        说明原因并给出唯一下一步。
+                      </p>
+                    </CardContent>
+                  </Card>
+                  <Card size="sm" className="shadow-none">
+                    <CardHeader>
+                      <CardTitle>错误态</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <p className="rounded-md bg-destructive/10 p-2 text-xs leading-5 text-destructive">
+                        授权已因 Task 版本变化失效，请核对新范围后重新授权。
+                      </p>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                <RuleList
+                  items={[
+                    "等待、阻塞、失败必须使用不同文案，并给出谁可以继续推进以及具体下一步。",
+                    "审计时间线默认紧凑展示事件、结果和时间；复制诊断前必须移除本机路径与凭据。",
+                    "Agent 委派必须显示父子关系、执行者、范围和预算，不使用看不见的后台自动化。",
+                    "明暗主题使用同一语义 Token；颜色只作辅助，状态仍需图标或文字标签。",
+                  ]}
+                />
+              </div>
+            </section>
+
+            <Separator />
+
+            <section id="components" className="scroll-mt-14 px-4 py-16 md:px-10 md:py-20">
+              <div className="mx-auto flex max-w-5xl flex-col gap-10">
+                <SectionHeading
+                  eyebrow="08 · shadcn"
+                  title="组件：保持 shadcn 结构，使用飞书视觉 Token"
+                  description="组件继续使用项目内的 shadcn/Base UI 实现，颜色、圆角、边框、字体和动效统一消费本设计系统变量。"
                 />
 
                 <div className="grid gap-4 xl:grid-cols-2">

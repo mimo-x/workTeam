@@ -203,7 +203,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   task_id uuid NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   agent_id uuid NOT NULL REFERENCES agents(id),
   device_id uuid REFERENCES devices(id) ON DELETE SET NULL,
-  status text NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'leased', 'running', 'waiting', 'review', 'blocked', 'complete', 'failed', 'cancelled')),
+  status text NOT NULL DEFAULT 'queued' CONSTRAINT task_runs_status_check CHECK (status IN ('queued', 'leased', 'running', 'waiting', 'review', 'blocked', 'complete', 'failed', 'cancelled')),
   execution_target text NOT NULL DEFAULT 'local' CHECK (execution_target IN ('local', 'hosted')),
   context_version integer NOT NULL,
   agent_snapshot jsonb NOT NULL,

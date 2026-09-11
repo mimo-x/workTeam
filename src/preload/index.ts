@@ -86,6 +86,11 @@ const backend: BackendDesktopApi = {
   syncWorkspace: (options) => ipcRenderer.invoke("backend:sync-workspace", options),
   importWorkspace: (options) => ipcRenderer.invoke("backend:import-workspace", options),
   startHost: (options) => ipcRenderer.invoke("backend:start-host", options),
+  registerWorkspaceBinding: (options) =>
+    ipcRenderer.invoke("backend:register-workspace-binding", options),
+  listLocalWorkspaceBindings: () => ipcRenderer.invoke("backend:list-workspace-bindings"),
+  removeLocalWorkspaceBinding: (options) =>
+    ipcRenderer.invoke("backend:remove-workspace-binding", options),
   stopHost: () => ipcRenderer.invoke("backend:stop-host"),
   getHostState: () => ipcRenderer.invoke("backend:get-host-state"),
   onHostState: (listener) => {
