@@ -406,6 +406,15 @@ export type AgentTeamApi = {
     agentIds: string[];
     humanIds: string[];
   }) => Promise<TeamRoomSnapshot>;
+  promoteRoom: (options: {
+    workspace: string;
+    localRoomId: string;
+    cloudRoomId: string;
+    openimGroupId?: string;
+    revision?: number;
+    humanIds: string[];
+    agentIds: string[];
+  }) => Promise<TeamRoomSnapshot>;
   openDirectRoom: (options: {
     workspace: string;
     principalId: string;

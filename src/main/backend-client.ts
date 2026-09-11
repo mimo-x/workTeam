@@ -21,6 +21,7 @@ import type {
   TeamRoomSnapshot,
   TeamWorkspaceSnapshot,
 } from "../shared/agent-team";
+import { formatBackendErrorDetails } from "../shared/backend-error";
 import { formatErrorMessage } from "../shared/error";
 
 type StoredBackendConfig = {
@@ -628,13 +629,15 @@ export class BackendClient {
       signal: AbortSignal.timeout(15_000),
     });
     const body = (await response.json().catch(() => ({}))) as T & {
-      error?: { code?: string; message?: string };
+      error?: { code?: string; message?: string; details?: unknown };
     };
     if (!response.ok) {
+      const message = body.error?.message ?? `聊天后台返回 HTTP ${response.status}`;
+      const details = formatBackendErrorDetails(body.error?.details);
       throw new BackendHttpError(
         response.status,
         body.error?.code ?? "BACKEND_ERROR",
-        body.error?.message ?? `聊天后台返回 HTTP ${response.status}`,
+        details ? `${message} ${details}` : message,
       );
     }
     return body;

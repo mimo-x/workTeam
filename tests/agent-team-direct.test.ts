@@ -255,6 +255,45 @@ test("legacy workspace data is upgraded without changing Agent identity or permi
   }
 });
 
+test("Given 本地协作群 When 加入云端成员 Then 房间和已有消息迁移到云端 UUID", async () => {
+  const storeDir = await mkdtemp(join(tmpdir(), "agent-team-room-promotion-"));
+  const workspace = "/tmp/room-promotion-workspace";
+  const service = new AgentTeamService(new FakeCodex() as unknown as AgentRuntime, storeDir);
+  const cloudRoomId = "11111111-1111-4111-8111-111111111111";
+  try {
+    const localRoom = await service.createRoom(
+      workspace,
+      "协作群",
+      ["agent_coder"],
+      ["local_user"],
+    );
+    await service.sendMessage({ workspace, roomId: localRoom.roomId, text: "保留这条上下文" });
+    const promoted = await service.promoteRoom(
+      workspace,
+      localRoom.roomId,
+      cloudRoomId,
+      "openim-group-1",
+      1,
+      ["local_user"],
+      ["agent_coder"],
+    );
+    const snapshot = await service.getWorkspace(workspace);
+    assert.equal(promoted.roomId, cloudRoomId);
+    assert.equal(
+      snapshot.rooms.some((room) => room.roomId === localRoom.roomId),
+      false,
+    );
+    assert.equal(
+      snapshot.rooms.find((room) => room.roomId === cloudRoomId)?.messages[0]?.roomId,
+      cloudRoomId,
+    );
+    assert.equal(snapshot.rooms.find((room) => room.roomId === cloudRoomId)?.syncSource, "backend");
+  } finally {
+    await service.flush();
+    await rm(storeDir, { recursive: true, force: true });
+  }
+});
+
 test("custom Runtime binding survives workspace normalization", async () => {
   const storeDir = await mkdtemp(join(tmpdir(), "agent-runtime-binding-"));
   const workspace = "/tmp/agent-runtime-binding-workspace";
@@ -280,6 +319,259 @@ test("custom Runtime binding survives workspace normalization", async () => {
     assert.equal(runtime?.endpoint, custom.runtime.endpoint);
     assert.equal(runtime?.auth, custom.runtime.auth);
     assert.deepEqual(runtime?.args, custom.runtime.args);
+  } finally {
+    await service.flush();
+    await rm(storeDir, { recursive: true, force: true });
+  }
+});
+
+test("BDD: 用户添加有效 Agent 后重新打开工作区仍能看到该 Agent", async () => {
+  // Given: 用户打开一个已有默认 Agent 的工作区，并填写新的本地 Agent。
+  const storeDir = await mkdtemp(join(tmpdir(), "agent-add-bdd-"));
+  const workspace = "/tmp/agent-add-bdd-workspace";
+  const service = new AgentTeamService(new FakeCodex() as unknown as AgentRuntime, storeDir);
+
+  try {
+    const initial = await service.getWorkspace(workspace);
+    const custom = {
+      ...initial.agents[0],
+      id: "custom_reviewer",
+      name: "审查员",
+      title: "代码审查",
+      mention: "@审查员",
+      initials: "审",
+      description: "检查实现质量和回归风险",
+      instructions: "你负责审查代码、指出风险并给出可执行的修复建议。",
+      source: "local" as const,
+      runtime: { provider: "codex", protocol: "app-server", target: "local" as const },
+    };
+
+    // When: 用户保存 Agent，并重新读取工作区快照。
+    const saved = await service.saveAgents(workspace, [...initial.agents, custom]);
+    const restored = await service.getWorkspace(workspace);
+    const persisted = restored.agents.find((agent) => agent.id === custom.id);
+
+    // Then: 新 Agent 已保存，关键配置在重新打开后仍然保持。
+    assert.ok(saved.agents.some((agent) => agent.id === custom.id));
+    assert.equal(persisted?.name, "审查员");
+    assert.equal(persisted?.mention, "@审查员");
+    assert.equal(persisted?.instructions, custom.instructions);
+    assert.equal(persisted?.runtime?.provider, "codex");
+  } finally {
+    await service.flush();
+    await rm(storeDir, { recursive: true, force: true });
+  }
+});
+
+test("BDD: 添加 Agent 使用非法 ID 时保存失败且不覆盖已有配置", async () => {
+  // Given: 工作区中已有一组有效 Agent，用户填写了包含空格的非法 ID。
+  const storeDir = await mkdtemp(join(tmpdir(), "agent-add-invalid-bdd-"));
+  const workspace = "/tmp/agent-add-invalid-bdd-workspace";
+  const service = new AgentTeamService(new FakeCodex() as unknown as AgentRuntime, storeDir);
+
+  try {
+    const initial = await service.getWorkspace(workspace);
+    const invalid = {
+      ...initial.agents[0],
+      id: "invalid agent id",
+      name: "无效 Agent",
+      mention: "@无效Agent",
+      instructions: "这是一条足够长的角色指令，用于触发 ID 校验。",
+    };
+
+    // When: 用户尝试保存包含非法 ID 的 Agent 列表。
+    await assert.rejects(
+      service.saveAgents(workspace, [...initial.agents, invalid]),
+      /Agent ID 无效/,
+    );
+    const restored = await service.getWorkspace(workspace);
+
+    // Then: 保存被拒绝，原有 Agent 列表保持不变。
+    assert.deepEqual(
+      restored.agents.map((agent) => agent.id),
+      initial.agents.map((agent) => agent.id),
+    );
+    assert.equal(
+      restored.agents.some((agent) => agent.id === invalid.id),
+      false,
+    );
+  } finally {
+    await service.flush();
+    await rm(storeDir, { recursive: true, force: true });
+  }
+});
+
+test("BDD: 默认 Agent 类型保留角色、权限和可见性差异", () => {
+  // Given: 应用提供协调员、架构师、程序员和审查员四种默认 Agent。
+  const profiles = DEFAULT_AGENTS.map((agent) => ({
+    id: agent.id,
+    workspaceAccess: agent.workspaceAccess,
+    visibility: agent.visibility,
+    executionLocation: agent.executionLocation,
+    source: agent.source,
+  }));
+
+  // When: 用户查看默认 Agent 配置。
+  // Then: 只读/可写、公开/私有和内置来源等差异都被保留。
+  assert.deepEqual(profiles, [
+    {
+      id: "agent_coordinator",
+      workspaceAccess: "read",
+      visibility: "private",
+      executionLocation: "local",
+      source: "builtin",
+    },
+    {
+      id: "agent_architect",
+      workspaceAccess: "read",
+      visibility: "public",
+      executionLocation: "local",
+      source: "builtin",
+    },
+    {
+      id: "agent_coder",
+      workspaceAccess: "write",
+      visibility: "private",
+      executionLocation: "local",
+      source: "builtin",
+    },
+    {
+      id: "agent_reviewer",
+      workspaceAccess: "read",
+      visibility: "public",
+      executionLocation: "local",
+      source: "builtin",
+    },
+  ]);
+});
+
+test("BDD: 不同 Runtime 类型保存后保留对应协议和连接配置", async () => {
+  // Given: 用户为 Agent 选择内置 Runtime 和自定义 HTTP/CLI Runtime。
+  const storeDir = await mkdtemp(join(tmpdir(), "agent-runtime-types-bdd-"));
+  const workspace = "/tmp/agent-runtime-types-bdd-workspace";
+  const service = new AgentTeamService(new FakeCodex() as unknown as AgentRuntime, storeDir);
+
+  try {
+    const initial = await service.getWorkspace(workspace);
+    const runtimeAgents = [
+      {
+        ...initial.agents[0],
+        id: "agent_claude",
+        name: "Claude Agent",
+        mention: "@ClaudeAgent",
+        runtime: { provider: "claude", protocol: "cli-stream-json", target: "local" as const },
+      },
+      {
+        ...initial.agents[0],
+        id: "agent_opencode",
+        name: "OpenCode Agent",
+        mention: "@OpenCodeAgent",
+        runtime: { provider: "opencode", protocol: "acp", target: "local" as const },
+      },
+      {
+        ...initial.agents[0],
+        id: "agent_antigravity",
+        name: "Antigravity Agent",
+        mention: "@AntigravityAgent",
+        runtime: {
+          provider: "antigravity",
+          protocol: "cli-stream-json",
+          target: "local" as const,
+        },
+      },
+      {
+        ...initial.agents[0],
+        id: "agent_http",
+        name: "HTTP Agent",
+        mention: "@HTTPAgent",
+        runtime: {
+          provider: "custom-http",
+          protocol: "http",
+          target: "hosted" as const,
+          endpoint: "https://agent.example.com",
+          auth: "bearer" as const,
+        },
+        executionLocation: "hosted" as const,
+      },
+      {
+        ...initial.agents[0],
+        id: "agent_cli",
+        name: "CLI Agent",
+        mention: "@CLIAgent",
+        runtime: {
+          provider: "custom-cli",
+          protocol: "cli-jsonl",
+          target: "local" as const,
+          command: "my-agent",
+          args: ["--protocol", "jsonl"],
+        },
+      },
+    ];
+
+    // When: 用户保存这些不同 Runtime 类型的 Agent，并重新读取工作区。
+    await service.saveAgents(workspace, [...initial.agents, ...runtimeAgents]);
+    const restored = await service.getWorkspace(workspace);
+
+    // Then: 每个 Agent 的 Provider、协议、运行位置和连接参数保持不变。
+    const actual = runtimeAgents.map((expected) => {
+      const agent = restored.agents.find((candidate) => candidate.id === expected.id)!;
+      return {
+        provider: agent.runtime?.provider,
+        protocol: agent.runtime?.protocol,
+        target: agent.runtime?.target,
+        endpoint: agent.runtime?.endpoint,
+        auth: agent.runtime?.auth,
+        command: agent.runtime?.command,
+        args: agent.runtime?.args,
+      };
+    });
+    assert.deepEqual(actual, [
+      {
+        provider: "claude",
+        protocol: "cli-stream-json",
+        target: "local",
+        endpoint: undefined,
+        auth: "none",
+        command: undefined,
+        args: undefined,
+      },
+      {
+        provider: "opencode",
+        protocol: "acp",
+        target: "local",
+        endpoint: undefined,
+        auth: "none",
+        command: undefined,
+        args: undefined,
+      },
+      {
+        provider: "antigravity",
+        protocol: "cli-stream-json",
+        target: "local",
+        endpoint: undefined,
+        auth: "none",
+        command: undefined,
+        args: undefined,
+      },
+      {
+        provider: "custom-http",
+        protocol: "http",
+        target: "hosted",
+        endpoint: "https://agent.example.com",
+        auth: "bearer",
+        command: undefined,
+        args: undefined,
+      },
+      {
+        provider: "custom-cli",
+        protocol: "cli-jsonl",
+        target: "local",
+        endpoint: undefined,
+        auth: "none",
+        command: "my-agent",
+        args: ["--protocol", "jsonl"],
+      },
+    ]);
   } finally {
     await service.flush();
     await rm(storeDir, { recursive: true, force: true });

@@ -1,0 +1,7 @@
+schema: spec-driven
+created: 2026-09-11
+---
+*** Add File: openspec/changes/fix-cloud-room-promotion/proposal.md
+# 支持本地群迁移为云端群
+
+本地群使用 `group_...` 标识，后台群接口要求 UUID。用户在本地群中加入云端成员时，应先创建云端群并迁移本地状态。

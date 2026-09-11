@@ -1,0 +1,3 @@
+- [x] 注册 Codex 会话、Skills、MCP 和 Worktree IPC
+- [x] 增加缺失处理器回归测试
+- [x] 运行项目验证门禁

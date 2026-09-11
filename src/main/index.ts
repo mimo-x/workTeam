@@ -16,6 +16,7 @@ import { RemoteAgentHost } from "./remote-agent-host";
 import { AgentRuntimeRegistry } from "./runtime-registry";
 import { OpenCodeRuntime } from "./opencode-runtime";
 import { RuntimeCredentialStore, runtimeCredentialsPath } from "./runtime-credentials";
+import { WorktreeManager } from "./worktree-manager";
 import type {
   AgentDefinition,
   AgentMessageAction,
@@ -33,6 +34,7 @@ import type {
 } from "../shared/backend";
 
 const codex = new CodexAppServer();
+const worktrees = new WorktreeManager();
 const runtime = new CodexRuntime(codex);
 const runtimeRegistry = new AgentRuntimeRegistry();
 runtimeRegistry.register("codex", runtime);
@@ -185,6 +187,61 @@ const registerIpc = () => {
       const model = typeof options.model === "string" ? options.model : undefined;
       return codex.startTurn(options.threadId, cwd, options.text, model);
     },
+  );
+  ipcMain.handle(
+    "codex:list-threads",
+    async (_event, options: { cwd?: unknown; search?: unknown; archived?: unknown }) =>
+      codex.listThreads(
+        await requireDirectory(options.cwd),
+        typeof options.search === "string" ? options.search : undefined,
+        options.archived === true,
+      ),
+  );
+  ipcMain.handle("codex:read-thread", (_event, options: { threadId?: unknown }) =>
+    codex.readThread(requireString(options.threadId, "会话 ID", 256)),
+  );
+  ipcMain.handle("codex:resume-thread", (_event, options: { threadId?: unknown }) =>
+    codex.resumeThread(requireString(options.threadId, "会话 ID", 256)),
+  );
+  ipcMain.handle("codex:rename-thread", (_event, options: { threadId?: unknown; name?: unknown }) =>
+    codex.renameThread(
+      requireString(options.threadId, "会话 ID", 256),
+      requireString(options.name, "会话名称", 128),
+    ),
+  );
+  ipcMain.handle("codex:archive-thread", (_event, options: { threadId?: unknown }) =>
+    codex.archiveThread(requireString(options.threadId, "会话 ID", 256)),
+  );
+  ipcMain.handle("codex:delete-thread", (_event, options: { threadId?: unknown }) =>
+    codex.deleteThread(requireString(options.threadId, "会话 ID", 256)),
+  );
+  ipcMain.handle("codex:fork-thread", (_event, options: { threadId?: unknown }) =>
+    codex.forkThread(requireString(options.threadId, "会话 ID", 256)),
+  );
+  ipcMain.handle("codex:compact-thread", (_event, options: { threadId?: unknown }) =>
+    codex.compactThread(requireString(options.threadId, "会话 ID", 256)),
+  );
+  ipcMain.handle("codex:list-skills", async (_event, options: { cwd?: unknown }) =>
+    codex.listSkills(await requireDirectory(options.cwd)),
+  );
+  ipcMain.handle("codex:list-mcp-servers", (_event, options: { threadId?: unknown }) =>
+    codex.listMcpServers(typeof options?.threadId === "string" ? options.threadId : undefined),
+  );
+  ipcMain.handle(
+    "codex:create-worktree",
+    async (_event, options: { cwd?: unknown; key?: unknown }) =>
+      worktrees.create(
+        await requireDirectory(options.cwd),
+        requireString(options.key, "Worktree 标识", 64),
+      ),
+  );
+  ipcMain.handle(
+    "codex:remove-worktree",
+    async (_event, options: { cwd?: unknown; path?: unknown }) =>
+      worktrees.remove(
+        await requireDirectory(options.cwd),
+        requireString(options.path, "Worktree 路径", 4096),
+      ),
   );
   ipcMain.handle(
     "codex:interrupt-turn",
@@ -418,6 +475,34 @@ const registerIpc = () => {
         : [];
       return agentTeam.updateRoom(workspace, roomId, name, agentIds, humanIds);
     },
+  );
+  ipcMain.handle(
+    "agent-team:promote-room",
+    async (
+      _event,
+      options: {
+        workspace?: unknown;
+        localRoomId?: unknown;
+        cloudRoomId?: unknown;
+        openimGroupId?: unknown;
+        revision?: unknown;
+        humanIds?: unknown;
+        agentIds?: unknown;
+      },
+    ) =>
+      agentTeam.promoteRoom(
+        await requireDirectory(options.workspace),
+        requireString(options.localRoomId, "本地房间 ID", 256),
+        requireString(options.cloudRoomId, "云端房间 ID", 64),
+        typeof options.openimGroupId === "string" ? options.openimGroupId : undefined,
+        typeof options.revision === "number" ? options.revision : undefined,
+        Array.isArray(options.humanIds)
+          ? options.humanIds.filter((v): v is string => typeof v === "string")
+          : [],
+        Array.isArray(options.agentIds)
+          ? options.agentIds.filter((v): v is string => typeof v === "string")
+          : [],
+      ),
   );
   ipcMain.handle(
     "agent-team:open-direct-room",
