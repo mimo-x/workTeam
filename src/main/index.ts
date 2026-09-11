@@ -17,6 +17,7 @@ import { AgentRuntimeRegistry } from "./runtime-registry";
 import { OpenCodeRuntime } from "./opencode-runtime";
 import { RuntimeCredentialStore, runtimeCredentialsPath } from "./runtime-credentials";
 import { WorktreeManager } from "./worktree-manager";
+import { ShutdownCoordinator } from "./shutdown-coordinator";
 import type {
   AgentDefinition,
   AgentMessageAction,
@@ -35,6 +36,7 @@ import type {
 
 const codex = new CodexAppServer();
 const worktrees = new WorktreeManager();
+const shutdownCoordinator = new ShutdownCoordinator();
 const runtime = new CodexRuntime(codex);
 const runtimeRegistry = new AgentRuntimeRegistry();
 runtimeRegistry.register("codex", runtime);
@@ -48,6 +50,7 @@ let agentTeam: AgentTeamService;
 let runtimeCredentials: RuntimeCredentialStore;
 let backend: BackendClient;
 let remoteAgentHost: RemoteAgentHost;
+let shutdownCoordinatorStarted = false;
 
 const requireDirectory = async (value: unknown) => {
   if (typeof value !== "string" || !isAbsolute(value)) throw new Error("请选择有效的项目目录。");
@@ -645,9 +648,16 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => {
-  remoteAgentHost?.stop();
-  runtimeRegistry.dispose();
-  openImSdk?.dispose();
-  codex.dispose();
+app.on("before-quit", (event) => {
+  if (shutdownCoordinatorStarted) return;
+  event.preventDefault();
+  shutdownCoordinatorStarted = true;
+  void shutdownCoordinator
+    .run([
+      () => remoteAgentHost?.stop(),
+      () => runtimeRegistry.dispose(),
+      () => openImSdk?.dispose(),
+      () => codex.dispose(),
+    ])
+    .finally(() => app.quit());
 });
