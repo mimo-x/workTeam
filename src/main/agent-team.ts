@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type {
+  AgentActionV1,
   AgentCapability,
   AgentDefinition,
   AgentLoopCompletionPolicy,
@@ -25,6 +26,16 @@ import type {
 } from "../shared/agent-team";
 import { cloudAgentIdFor, isCloudAgentId } from "../shared/agent-cloud-id";
 import { isUuid } from "../shared/uuid";
+import {
+  DEFAULT_TASK_BUDGET,
+  extractAgentActionsV1,
+  normalizeExecutionApprovalRequest,
+  normalizePermissionScopes,
+  parseAgentActionV1,
+  normalizeTaskGovernance,
+  normalizeTaskPermissionGrant,
+  normalizeWorkspaceBindingSummary,
+} from "../shared/collaboration-governance";
 import { formatErrorMessage } from "../shared/error";
 import type { AgentRuntime, AgentRuntimeEvent } from "./agent-runtime";
 import type { AgentRuntimeRegistry } from "./runtime-registry";
@@ -68,7 +79,7 @@ class EventQueue {
   }
 }
 
-const STORAGE_VERSION = 4;
+const STORAGE_VERSION = 5;
 const defaultRuntime: AgentRuntimeBinding = {
   provider: "codex",
   protocol: "app-server",
@@ -982,8 +993,35 @@ export class AgentTeamService {
       "cancelled",
     ]);
     if (!allowed.has(status)) throw new Error("Task 状态无效。");
+    if (
+      status === "done" &&
+      state.tasks.some(
+        (candidate) => candidate.parentTaskId === task.id && candidate.status !== "done",
+      )
+    ) {
+      throw new Error("仍有必需子 Task 未完成，父 Task 不能标记为完成。");
+    }
     task.status = status;
+    task.waitReason = undefined;
     task.updatedAt = Date.now();
+    if (task.parentTaskId) {
+      const parent = this.requireTask(state, task.parentTaskId);
+      const siblings = state.tasks.filter((candidate) => candidate.parentTaskId === parent.id);
+      if (
+        siblings.some((candidate) => ["blocked", "failed", "cancelled"].includes(candidate.status))
+      ) {
+        parent.status = "blocked";
+        parent.waitReason = "至少一个必需子 Task 已阻塞，请先处理。";
+      } else if (siblings.length && siblings.every((candidate) => candidate.status === "done")) {
+        parent.status = "review";
+        parent.waitReason = undefined;
+        parent.artifactRefs = [
+          ...new Set(siblings.flatMap((candidate) => candidate.artifactRefs ?? [])),
+        ];
+      }
+      parent.updatedAt = Date.now();
+      this.emitTask(state, parent);
+    }
     this.persist(state);
     this.emitTask(state, task);
     return clone(task);
@@ -1034,9 +1072,66 @@ export class AgentTeamService {
     }
     const taskRoom = this.requireRoom(state, task.taskRoomId);
     const agents = state.agents.filter((agent) => task.assigneeIds.includes(agent.id));
-    if (!agents.length) throw new Error("Task 没有可执行的 Agent。");
+    const sourceRoom = this.requireRoom(state, task.sourceRoomId);
+    if (
+      !agents.length ||
+      agents.length !== new Set(task.assigneeIds).size ||
+      agents.some((agent) => !sourceRoom.agentIds.includes(agent.id))
+    ) {
+      task.status = "waiting_for_assignee";
+      task.waitReason = "执行 Agent 已离开群聊、停用或不存在，请重新分派。";
+      task.updatedAt = Date.now();
+      this.emitTask(state, task);
+      return clone(task);
+    }
     if (agents.some((agent) => agent.executionLocation === "hosted")) {
       throw new Error("Task 包含托管 Agent，但云端 Worker 尚未接入，当前不能开始执行。");
+    }
+    const requestedScopes = normalizePermissionScopes(
+      task.requestedScopes ??
+        (task.requestedAccess === "write"
+          ? ["workspace.read", "workspace.write"]
+          : ["workspace.read"]),
+    );
+    const incapable = agents.find((agent) => {
+      const capabilities = new Set(
+        agent.capabilities ?? defaultCapabilities(agent.workspaceAccess),
+      );
+      return requestedScopes.some((scope) => {
+        if (scope === "workspace.read") return !capabilities.has("read_workspace");
+        if (scope === "workspace.write") {
+          return agent.workspaceAccess !== "write" || !capabilities.has("write_workspace");
+        }
+        if (scope === "command.run") return !capabilities.has("run_command");
+        return !capabilities.has("network_read") && !capabilities.has("network.read");
+      });
+    });
+    if (incapable) {
+      task.status = "waiting_for_assignee";
+      task.waitReason = `${incapable.name} 不具备 Task 所需能力。`;
+      task.updatedAt = Date.now();
+      this.emitTask(state, task);
+      return clone(task);
+    }
+    const root = this.requireTask(state, task.rootTaskId ?? task.id);
+    const budget = root.budget ?? DEFAULT_TASK_BUDGET;
+    const currentRuns = state.tasks
+      .filter((candidate) => (candidate.rootTaskId ?? candidate.id) === root.id)
+      .reduce((count, candidate) => count + candidate.runs.length, 0);
+    const budgetStartedAt = root.budgetUsage?.startedAt ?? root.startedAt ?? Date.now();
+    if (Date.now() - budgetStartedAt > budget.maxWallTimeMs) {
+      task.status = "waiting_for_budget";
+      task.waitReason = "根 Task 的运行时长预算已耗尽。";
+      task.updatedAt = Date.now();
+      this.emitTask(state, task);
+      return clone(task);
+    }
+    if (currentRuns + agents.length > budget.maxRuns) {
+      task.status = "waiting_for_budget";
+      task.waitReason = `根 Task 的 Agent Run 上限为 ${budget.maxRuns}。`;
+      task.updatedAt = Date.now();
+      this.emitTask(state, task);
+      return clone(task);
     }
     const reviewer = state.humans.find((human) => human.id === approval.reviewerUserId);
     const instruction = this.createMessage(state, taskRoom, {
@@ -1052,6 +1147,15 @@ export class AgentTeamService {
     task.status = "queued";
     task.startedByUserId = "local_user";
     task.startedAt = Date.now();
+    root.budgetUsage = {
+      descendants: state.tasks.filter(
+        (candidate) =>
+          candidate.id !== root.id && (candidate.rootTaskId ?? candidate.id) === root.id,
+      ).length,
+      runs: currentRuns + agents.length,
+      startedAt: budgetStartedAt,
+    };
+    task.waitReason = undefined;
     task.updatedAt = task.startedAt;
     for (const agent of agents)
       this.scheduleAgent(state, taskRoom, instruction, agent, task, model);
@@ -1108,6 +1212,10 @@ export class AgentTeamService {
       plan: proposal.plan,
       acceptanceCriteria: proposal.acceptanceCriteria,
       requestedAccess: proposal.requestedAccess,
+      requestedScopes:
+        proposal.requestedAccess === "write"
+          ? ["workspace.read", "workspace.write"]
+          : ["workspace.read"],
       creatorId: anchor.senderId,
       requestedByUserId: anchor.senderId,
       proposedByAgentId,
@@ -1115,10 +1223,15 @@ export class AgentTeamService {
       anchorMessageId: anchor.id,
       anchorSeq: anchor.seq,
       taskRoomId,
+      rootTaskId: taskId,
+      depth: 0,
       assigneeIds: targets.map((agent) => agent.id),
       status: "pending_review",
       revision: 1,
       reviews: [],
+      budget: { ...DEFAULT_TASK_BUDGET },
+      budgetUsage: { descendants: 0, runs: 0, startedAt: now },
+      artifactRefs: [],
       contextVersion: 1,
       latestSourceSeq: anchor.seq,
       consumedContextVersionByAgent: {},
@@ -1425,6 +1538,8 @@ export class AgentTeamService {
     proposalRequested = false,
   ) {
     const queue = new EventQueue();
+    const nativeAgentActions: AgentActionV1[] = [];
+    let invalidAgentActionCount = 0;
     let runtime: AgentRuntime;
     const effectiveModel = agent.runtime?.model ?? model;
     let unsubscribe = () => {};
@@ -1605,6 +1720,12 @@ export class AgentTeamService {
           throw new Error(String(event.params.error ?? "Agent Runtime 连接已断开。"));
         }
 
+        if (event.method === "provider/event" && event.params.agentAction !== undefined) {
+          const action = parseAgentActionV1(event.params.agentAction);
+          if (action) nativeAgentActions.push(action);
+          else invalidAgentActionCount += 1;
+        }
+
         if (event.method === "turn/completed") {
           const turnResult = (event.params.turn ?? {}) as Record<string, unknown>;
           const status = String(turnResult.status ?? "completed");
@@ -1625,6 +1746,10 @@ export class AgentTeamService {
           this.emitSession(state, activeSession);
           response.activity = undefined;
           response.updatedAt = Date.now();
+          const extractedActions = extractAgentActionsV1(response.content);
+          response.content = extractedActions.content;
+          nativeAgentActions.push(...extractedActions.actions);
+          invalidAgentActionCount += extractedActions.invalidCount;
           if (!response.content && response.status === "complete")
             response.content = task ? "任务已完成。" : "已收到。";
           let completedLoop: AgentLoopSession | undefined;
@@ -1694,14 +1819,27 @@ export class AgentTeamService {
                 );
           }
           if (task && taskRun) {
+            const actionStatus =
+              response.status === "complete"
+                ? this.applyLocalAgentActions(
+                    state,
+                    task,
+                    taskRun,
+                    agent,
+                    nativeAgentActions,
+                    invalidAgentActionCount,
+                    model,
+                  )
+                : undefined;
             taskRun.status = response.status;
             taskRun.updatedAt = response.updatedAt;
             task.consumedContextVersionByAgent[agent.id] = Math.max(
               task.consumedContextVersionByAgent[agent.id] ?? 0,
               taskRun.contextVersion,
             );
-            task.status =
-              response.status === "cancelled"
+            task.status = actionStatus
+              ? actionStatus
+              : response.status === "cancelled"
                 ? "cancelled"
                 : this.hasActiveRuns(task, taskRun.id)
                   ? "running"
@@ -1810,6 +1948,248 @@ export class AgentTeamService {
     }
   }
 
+  private applyLocalAgentActions(
+    state: TeamWorkspaceSnapshot,
+    parent: AgentTask,
+    parentRun: TaskRun,
+    delegatedBy: AgentDefinition,
+    actions: AgentActionV1[],
+    invalidCount: number,
+    model?: string,
+  ): TaskStatus | undefined {
+    if (invalidCount > 0) {
+      parent.waitReason = "Agent 返回了无法验证的结构化动作，未执行任何新增工作。";
+      return "blocked";
+    }
+    const validActions = actions.filter(
+      (action) => action.taskId === parent.id && action.taskRevision === parent.revision,
+    );
+    if (validActions.length !== actions.length) {
+      parent.waitReason = "Agent 动作关联的 Task 或 revision 已失效。";
+      return "blocked";
+    }
+    let nextStatus: TaskStatus | undefined;
+    for (const action of validActions) {
+      if (action.action === "create_subtask") {
+        const root = this.requireTask(state, parent.rootTaskId ?? parent.id);
+        const budget = root.budget ?? DEFAULT_TASK_BUDGET;
+        const nextDepth = (parent.depth ?? 0) + 1;
+        const descendants = state.tasks.filter(
+          (task) => task.id !== root.id && (task.rootTaskId ?? task.id) === root.id,
+        ).length;
+        const runs = state.tasks
+          .filter((task) => (task.rootTaskId ?? task.id) === root.id)
+          .reduce((count, task) => count + task.runs.length, 0);
+        const startedAt = root.budgetUsage?.startedAt ?? root.startedAt ?? root.createdAt;
+        const requestedScopes = normalizePermissionScopes([
+          "workspace.read",
+          ...action.requestedScopes,
+        ]);
+        if (nextDepth > budget.maxDepth) {
+          parent.waitReason = `委派深度超过上限 ${budget.maxDepth}。`;
+          nextStatus = "waiting_for_budget";
+          continue;
+        }
+        if (descendants + 1 > budget.maxDescendants) {
+          parent.waitReason = `子 Task 数量超过上限 ${budget.maxDescendants}。`;
+          nextStatus = "waiting_for_budget";
+          continue;
+        }
+        if (Date.now() - startedAt > budget.maxWallTimeMs) {
+          parent.waitReason = "根 Task 的运行时长预算已耗尽。";
+          nextStatus = "waiting_for_budget";
+          continue;
+        }
+        const sourceRoom = this.requireRoom(state, parent.sourceRoomId);
+        const uniqueAssigneeIds = [...new Set(action.assigneeIds)];
+        const assignees = state.agents.filter(
+          (agent) => uniqueAssigneeIds.includes(agent.id) && sourceRoom.agentIds.includes(agent.id),
+        );
+        if (assignees.length !== uniqueAssigneeIds.length) {
+          parent.waitReason = "指定 Agent 已不在群内、未知或已停用，未创建子 Task。";
+          nextStatus = "waiting_for_assignee";
+          continue;
+        }
+        const plannedRuns = assignees.length;
+        if (runs + plannedRuns > budget.maxRuns) {
+          parent.waitReason = `Agent Run 数量超过上限 ${budget.maxRuns}。`;
+          nextStatus = "waiting_for_budget";
+          continue;
+        }
+        const parentScopes = new Set(
+          normalizePermissionScopes(
+            parent.requestedScopes ??
+              (parent.requestedAccess === "write"
+                ? ["workspace.read", "workspace.write"]
+                : ["workspace.read"]),
+          ),
+        );
+        let childStatus: TaskStatus = "approved";
+        let childWaitReason: string | undefined;
+        if (requestedScopes.some((scope) => !parentScopes.has(scope))) {
+          childStatus = "waiting_for_permission";
+          childWaitReason = "子 Task 请求超出父 Task 已审核范围。";
+        }
+        const lacksCapability = assignees.find((agent) => {
+          const capabilities = new Set(
+            agent.capabilities ?? defaultCapabilities(agent.workspaceAccess),
+          );
+          return requestedScopes.some((scope) => {
+            if (scope === "workspace.read") return !capabilities.has("read_workspace");
+            if (scope === "workspace.write") {
+              return agent.workspaceAccess !== "write" || !capabilities.has("write_workspace");
+            }
+            if (scope === "command.run") return !capabilities.has("run_command");
+            return !capabilities.has("network_read") && !capabilities.has("network.read");
+          });
+        });
+        if (lacksCapability || assignees.some((agent) => agent.executionLocation !== "local")) {
+          childStatus = "waiting_for_assignee";
+          childWaitReason = lacksCapability
+            ? `${lacksCapability.name} 不具备子 Task 所需能力。`
+            : "指定 Agent 当前不能在本机执行。";
+        }
+        const now = Date.now();
+        const childId = `task_${randomUUID()}`;
+        const childRoomId = `task_room_${randomUUID()}`;
+        const inheritedReview = parent.reviews.find(
+          (review) => review.id === parent.approvedReviewId,
+        );
+        const childReviewId = `review_${randomUUID()}`;
+        const child: AgentTask = {
+          id: childId,
+          title: action.title,
+          objective: action.objective,
+          expectedResult: action.expectedResult,
+          plan: [],
+          acceptanceCriteria: action.acceptanceCriteria,
+          requestedAccess: requestedScopes.includes("workspace.write") ? "write" : "read",
+          requestedScopes,
+          creatorId: parent.creatorId,
+          requestedByUserId: parent.requestedByUserId ?? parent.creatorId,
+          proposedByAgentId: delegatedBy.id,
+          sourceRoomId: parent.sourceRoomId,
+          anchorMessageId: parentRun.messageId,
+          anchorSeq: parent.latestSourceSeq,
+          taskRoomId: childRoomId,
+          parentTaskId: parent.id,
+          rootTaskId: root.id,
+          delegatedByAgentId: delegatedBy.id,
+          depth: nextDepth,
+          assigneeIds: uniqueAssigneeIds,
+          status: childStatus,
+          revision: 1,
+          reviews: inheritedReview
+            ? [
+                {
+                  ...inheritedReview,
+                  id: childReviewId,
+                  taskId: childId,
+                  taskRevision: 1,
+                  comment: "继承父 Task 已审核的委派范围。",
+                  reviewedAt: now,
+                },
+              ]
+            : [],
+          approvedReviewId: inheritedReview ? childReviewId : undefined,
+          startedByUserId: childStatus === "approved" ? "local_user" : undefined,
+          startedAt: childStatus === "approved" ? now : undefined,
+          workspaceBinding: parent.workspaceBinding,
+          workspaceBindingRevision: parent.workspaceBindingRevision,
+          permissionGrantIds: parent.permissionGrantIds ? [...parent.permissionGrantIds] : [],
+          budget: { ...budget },
+          budgetUsage: { descendants: 0, runs: 0, startedAt },
+          waitReason: childWaitReason,
+          artifactRefs: [],
+          contextVersion: parent.contextVersion,
+          latestSourceSeq: parent.latestSourceSeq,
+          consumedContextVersionByAgent: {},
+          contextEvents: parent.contextEvents.map((event) => ({ ...event })),
+          runs: [],
+          createdAt: now,
+          updatedAt: now,
+        };
+        const childRoom: TeamRoomSnapshot = {
+          workspace: state.workspace,
+          roomId: childRoomId,
+          name: child.title,
+          type: "task",
+          agentIds: uniqueAssigneeIds,
+          humanIds: [...sourceRoom.humanIds],
+          sourceRoomId: sourceRoom.roomId,
+          taskId: child.id,
+          createdAt: now,
+          nextSeq: 1,
+          messages: [],
+        };
+        state.tasks.push(child);
+        state.rooms.push(childRoom);
+        root.budgetUsage = {
+          descendants: descendants + 1,
+          runs: runs + (childStatus === "approved" ? plannedRuns : 0),
+          startedAt,
+        };
+        this.emit({ type: "room-upsert", workspace: state.workspace, room: clone(childRoom) });
+        this.emitTask(state, child);
+        if (childStatus === "approved") {
+          const instruction = this.createMessage(state, childRoom, {
+            senderId: "local_user",
+            senderName: inheritedReview?.reviewerName ?? "本机用户",
+            senderType: "system",
+            content: `子 Task 已继承父 Task v${parent.revision} 的审核范围，开始执行。`,
+            targetAgentIds: uniqueAssigneeIds,
+            taskId: child.id,
+            transport: "local",
+          });
+          this.upsertMessage(state, childRoom, instruction);
+          for (const assignee of assignees) {
+            const runId = this.scheduleAgent(state, childRoom, instruction, assignee, child, model);
+            const run = child.runs.find((candidate) => candidate.id === runId);
+            if (run) run.parentRunId = parentRun.id;
+          }
+        }
+        parent.waitReason = `等待子 Task「${child.title}」完成。`;
+        nextStatus = "waiting";
+      } else if (action.action === "assign_agent") {
+        const child = state.tasks.find(
+          (candidate) => candidate.id === action.subtaskId && candidate.parentTaskId === parent.id,
+        );
+        if (!child) {
+          parent.waitReason = "只能重新分派当前 Task 的直接子 Task。";
+          nextStatus = "waiting_for_assignee";
+          continue;
+        }
+        const sourceRoom = this.requireRoom(state, parent.sourceRoomId);
+        const assigneeIds = [...new Set(action.assigneeIds)];
+        if (
+          assigneeIds.some(
+            (id) =>
+              !sourceRoom.agentIds.includes(id) || !state.agents.some((agent) => agent.id === id),
+          )
+        ) {
+          child.status = "waiting_for_assignee";
+          child.waitReason = "重新分派的 Agent 不在群内或已停用。";
+        } else {
+          child.assigneeIds = assigneeIds;
+          child.waitReason = undefined;
+        }
+        child.updatedAt = Date.now();
+        this.emitTask(state, child);
+      } else if (action.action === "request_permission") {
+        parent.waitReason = action.reason;
+        nextStatus = "waiting_for_permission";
+      } else if (action.action === "block") {
+        parent.waitReason = action.reason;
+        nextStatus = "blocked";
+      } else {
+        if (action.action === "complete") parent.artifactRefs = [...new Set(action.artifactRefs)];
+        parent.waitReason = undefined;
+        nextStatus = "review";
+      }
+    }
+    return nextStatus;
+  }
+
   private buildPrompt(
     state: TeamWorkspaceSnapshot,
     taskRoom: TeamRoomSnapshot,
@@ -1851,6 +2231,12 @@ export class AgentTeamService {
       approval
         ? `本版本由 ${approval.reviewerName} 于 ${new Date(approval.reviewedAt).toLocaleString("zh-CN")} 审核通过。`
         : "本版本缺少可识别的审核记录。",
+      [
+        "需要创建子 Task、请求权限、阻塞或提交完成结果时，必须输出 AgentActionV1 结构化动作；普通 @Agent 仅代表讨论，不会创建工作。",
+        `动作必须关联当前 taskId=${task.id}、taskRevision=${task.revision}，并使用唯一 actionId。`,
+        '隐藏格式：<!-- agent-action-v1 {"protocolVersion":1,"actionId":"唯一ID","taskId":"当前Task ID","taskRevision":1,"action":"create_subtask","title":"标题","objective":"目标","expectedResult":"结果","assigneeIds":["Agent ID"],"requestedScopes":["workspace.read"],"acceptanceCriteria":["条件"]} -->。',
+        "只能委派给成员名单中的 Agent，且子 Task 权限不能超过当前 Task；平台会独立校验成员、能力、主机范围和根预算。",
+      ].join("\n"),
       "主群会持续为这个 Task 提供上下文。下面包含执行开始前可见的最新内容；执行期间到达的新消息也会实时注入当前执行。",
       sourceContext ? `主群实时上下文：\n${sourceContext}` : "主群暂时没有可用上下文。",
       taskContext ? `Task 小群讨论：\n${taskContext}` : "Task 小群尚无其他讨论。",
@@ -2341,6 +2727,8 @@ export class AgentTeamService {
           type: "group",
           agentIds: agents.map((agent) => agent.id),
           humanIds: ["local_user"],
+          ownerId: "local_user",
+          memberRole: "owner",
           createdAt: Date.now(),
           nextSeq: 1,
           messages: [],
@@ -2348,6 +2736,8 @@ export class AgentTeamService {
       ],
       tasks: [],
       loops: [],
+      permissionGrants: [],
+      executionApprovals: [],
     };
   }
 
@@ -2372,6 +2762,7 @@ export class AgentTeamService {
         const hadInterruptedRun = runs.some((run) => run.error === "应用上次退出时任务仍在运行。");
         return {
           ...task,
+          ...normalizeTaskGovernance(task),
           status: hadInterruptedRun ? ("blocked" as const) : task.status,
           objective: task.objective || task.title,
           expectedResult: task.expectedResult || task.title,
@@ -2387,6 +2778,18 @@ export class AgentTeamService {
           contextEvents: Array.isArray(task.contextEvents) ? task.contextEvents : [],
           runs,
         };
+      });
+    }
+    if (Array.isArray(stored.permissionGrants)) {
+      state.permissionGrants = stored.permissionGrants.flatMap((grant) => {
+        const normalized = normalizeTaskPermissionGrant(grant);
+        return normalized ? [normalized] : [];
+      });
+    }
+    if (Array.isArray(stored.executionApprovals)) {
+      state.executionApprovals = stored.executionApprovals.flatMap((approval) => {
+        const normalized = normalizeExecutionApprovalRequest(approval);
+        return normalized ? [normalized] : [];
       });
     }
     if (Array.isArray(stored.sessions)) {
@@ -2502,7 +2905,13 @@ export class AgentTeamService {
       taskId: raw.taskId,
       directPrincipalId: raw.directPrincipalId,
       externalId: raw.externalId,
-      ownerId: raw.ownerId,
+      ownerId: raw.ownerId || (raw.syncSource === "backend" ? undefined : "local_user"),
+      memberRole: ["owner", "admin", "member"].includes(String(raw.memberRole))
+        ? raw.memberRole
+        : raw.syncSource === "backend"
+          ? undefined
+          : "owner",
+      workspaceBinding: normalizeWorkspaceBindingSummary(raw.workspaceBinding),
       revision: Number(raw.revision) || undefined,
       syncSource: raw.syncSource === "backend" ? "backend" : "local",
       createdAt: Number(raw.createdAt) || Date.now(),

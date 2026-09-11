@@ -248,7 +248,7 @@ test("legacy workspace data is upgraded without changing Agent identity or permi
 
     await restoredService.flush();
     const upgraded = JSON.parse(await readFile(join(storeDir, `workspace-${key}.json`), "utf8"));
-    assert.equal(upgraded.version, 4);
+    assert.equal(upgraded.version, 5);
   } finally {
     await seed.flush();
     await rm(storeDir, { recursive: true, force: true });
@@ -698,6 +698,109 @@ test("group mentions stay in chat and an approved Task proposal starts explicitl
     assert.equal(task.startedByUserId, "local_user");
     assert.ok(task.startedAt);
     assert.equal(task.runs.length, 1);
+  } finally {
+    await service.flush();
+    await rm(storeDir, { recursive: true, force: true });
+  }
+});
+
+test("an approved local Task can delegate a governed child while chat markers stay non-authoritative", async () => {
+  const storeDir = await mkdtemp(join(tmpdir(), "agent-team-local-delegation-"));
+  const workspace = "/tmp/local-delegation-workspace";
+  const codex = new FakeCodex();
+  const service = new AgentTeamService(codex as unknown as AgentRuntime, storeDir);
+
+  try {
+    const initial = await service.getWorkspace(workspace);
+    const room = initial.rooms.find((candidate) => candidate.type === "group")!;
+    const coder = initial.agents.find((candidate) => candidate.id === "agent_coder")!;
+    const architect = initial.agents.find((candidate) => candidate.id === "agent_architect")!;
+
+    codex.responses.push(
+      `仅讨论，不执行。\n<!-- agent-action-v1 {"protocolVersion":1,"actionId":"chat-action","taskId":"not-a-task","taskRevision":1,"action":"create_subtask","title":"不应创建","objective":"不应执行","expectedResult":"无","assigneeIds":["${architect.id}"],"requestedScopes":["workspace.read"],"acceptanceCriteria":[]} -->`,
+    );
+    await service.sendMessage({
+      workspace,
+      roomId: room.roomId,
+      text: `${coder.mention} 这里只讨论方案`,
+    });
+    await waitFor(async () => codex.prompts.length === 1);
+    let snapshot = await service.getWorkspace(workspace);
+    assert.equal(snapshot.tasks.length, 0);
+    assert.ok(
+      snapshot.rooms
+        .find((candidate) => candidate.roomId === room.roomId)!
+        .messages.every((message) => !message.content.includes("agent-action-v1")),
+    );
+
+    codex.responses.push(
+      '已生成草案。\n<agent-team-task-proposal>{"title":"检查登录实现","objective":"检查登录流程并给出修复","expectedResult":"可复核结果","plan":["检查实现"],"acceptanceCriteria":["结论可复核"],"requestedAccess":"write"}</agent-team-task-proposal>',
+    );
+    await service.sendMessage({
+      workspace,
+      roomId: room.roomId,
+      text: `${coder.mention} 请创建并执行登录检查任务`,
+      agentAction: "propose-task",
+    });
+    await waitFor(async () => (await service.getWorkspace(workspace)).tasks.length === 1);
+    let root = (await service.getWorkspace(workspace)).tasks[0];
+    assert.deepEqual(root.budget, {
+      maxDepth: 3,
+      maxDescendants: 12,
+      maxRuns: 24,
+      maxWallTimeMs: 30 * 60 * 1_000,
+    });
+    await service.reviewTask(workspace, root.id, "approved");
+    codex.responses.push(
+      `我会交给架构师复核。\n<!-- agent-action-v1 ${JSON.stringify({
+        protocolVersion: 1,
+        actionId: "delegate-review",
+        taskId: root.id,
+        taskRevision: root.revision,
+        action: "create_subtask",
+        title: "复核登录实现",
+        objective: "只读复核登录实现",
+        expectedResult: "复核报告",
+        assigneeIds: [architect.id],
+        requestedScopes: ["workspace.read"],
+        acceptanceCriteria: ["报告可复核"],
+      })} -->`,
+      "复核完成，没有发现阻塞问题。",
+    );
+    await service.startTask(workspace, root.id);
+    await waitFor(async () => {
+      const current = await service.getWorkspace(workspace);
+      return (
+        current.tasks.length === 2 && current.tasks.some((task) => task.parentTaskId === root.id)
+      );
+    });
+    await waitFor(async () => {
+      const current = await service.getWorkspace(workspace);
+      return current.tasks.find((task) => task.parentTaskId === root.id)?.status === "review";
+    });
+
+    snapshot = await service.getWorkspace(workspace);
+    root = snapshot.tasks.find((task) => task.id === root.id)!;
+    const child = snapshot.tasks.find((task) => task.parentTaskId === root.id)!;
+    assert.equal(root.status, "waiting");
+    assert.equal(root.budgetUsage?.descendants, 1);
+    assert.equal(root.budgetUsage?.runs, 2);
+    assert.equal(child.rootTaskId, root.id);
+    assert.equal(child.depth, 1);
+    assert.equal(child.assigneeIds[0], architect.id);
+    assert.equal(child.reviews[0]?.decision, "approved");
+    assert.equal(child.runs[0]?.parentRunId, root.runs[0]?.id);
+    assert.ok(
+      snapshot.rooms
+        .find((candidate) => candidate.roomId === root.taskRoomId)!
+        .messages.every((message) => !message.content.includes("agent-action-v1")),
+    );
+    await assert.rejects(() => service.updateTaskStatus(workspace, root.id, "done"), /子 Task/);
+    await service.updateTaskStatus(workspace, child.id, "blocked");
+    assert.equal(
+      (await service.getWorkspace(workspace)).tasks.find((task) => task.id === root.id)?.status,
+      "blocked",
+    );
   } finally {
     await service.flush();
     await rm(storeDir, { recursive: true, force: true });

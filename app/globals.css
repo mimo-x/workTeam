@@ -45,6 +45,10 @@
   --color-warning-foreground: var(--warning-foreground);
   --color-info: var(--info);
   --color-info-foreground: var(--info-foreground);
+  --color-governance-ready: var(--governance-ready);
+  --color-governance-waiting: var(--governance-waiting);
+  --color-governance-blocked: var(--governance-blocked);
+  --color-governance-agent: var(--governance-agent);
   --color-placeholder: var(--text-placeholder);
   --color-disabled: var(--text-disabled);
   --color-accent-foreground: var(--accent-foreground);
@@ -108,6 +112,11 @@
   --warning-foreground: #ffffff;
   --info: #1456f0;
   --info-foreground: #ffffff;
+  /* Governed collaboration states reuse the established semantic palette. */
+  --governance-ready: var(--success);
+  --governance-waiting: var(--warning);
+  --governance-blocked: var(--destructive);
+  --governance-agent: var(--info);
   --border: #dee0e3;
   --input: #d0d3d6;
   --ring: #1456f0;

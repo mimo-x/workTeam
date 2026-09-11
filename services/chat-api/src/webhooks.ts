@@ -335,12 +335,29 @@ const createTaskFromMessage = async (
       creator.id,
     ]);
   }
+  const activeBinding = await client.query<{
+    workspace_binding_id: string;
+    binding_revision: number;
+  }>(
+    `SELECT workspace_binding_id, binding_revision FROM room_workspace_bindings
+     WHERE room_id = $1 AND status = 'active'`,
+    [sourceRoom.id],
+  );
+  const requestedAccess = targetAgents.some((agent) => agent.workspace_access === "write")
+    ? "write"
+    : "read";
+  const requestedScopes =
+    requestedAccess === "write" ? ["workspace.read", "workspace.write"] : ["workspace.read"];
   await client.query(
     `INSERT INTO tasks(
        id, creator_id, requested_by_user_id, proposed_by_agent_id, source_room_id, task_room_id,
        anchor_message_id, title, objective, expected_result, plan, acceptance_criteria,
-       requested_access, status, revision, context_version, latest_source_seq, approval_required
-     ) VALUES ($1,$2,$2,$3,$4,$5,$6,$7,$8,$8,$9::jsonb,'[]'::jsonb,$10,'pending_review',1,1,$11,true)`,
+       requested_access, requested_scopes, status, revision, context_version, latest_source_seq,
+       approval_required, workspace_binding_id, binding_revision, root_task_id
+     ) VALUES (
+       $1,$2,$2,$3,$4,$5,$6,$7,$8,$8,$9::jsonb,'[]'::jsonb,$10,$11::jsonb,
+       'pending_review',1,1,$12,true,$13,$14,NULL
+     )`,
     [
       taskId,
       creator.id,
@@ -351,10 +368,14 @@ const createTaskFromMessage = async (
       title,
       message.text,
       JSON.stringify(["由 Agent 完善执行计划和验收条件"]),
-      targetAgents.some((agent) => agent.workspace_access === "write") ? "write" : "read",
+      requestedAccess,
+      JSON.stringify(requestedScopes),
       message.sequence,
+      activeBinding.rows[0]?.workspace_binding_id ?? null,
+      activeBinding.rows[0]?.binding_revision ?? null,
     ],
   );
+  await client.query("UPDATE tasks SET root_task_id = id WHERE id = $1", [taskId]);
   await client.query(
     `INSERT INTO task_context_events(task_id, message_id, context_version, source_seq)
      VALUES ($1, $2, 1, $3)`,
