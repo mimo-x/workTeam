@@ -204,6 +204,21 @@ export class RealtimeHub implements EventPublisher {
     return delivered;
   }
 
+  publishToAgentHost(userId: string, agentId: string, event: Record<string, unknown>) {
+    const connection = [...this.connections]
+      .reverse()
+      .find(
+        (candidate) =>
+          candidate.userId === userId &&
+          Boolean(candidate.deviceId) &&
+          candidate.agentIds.has(agentId) &&
+          candidate.socket.readyState === 1,
+      );
+    if (!connection) return false;
+    this.send(connection, event);
+    return true;
+  }
+
   async publishToRoom(roomId: string, event: Record<string, unknown>) {
     const users = await this.pool.query<{ user_id: string }>(
       `SELECT user_id FROM room_members WHERE room_id = $1
@@ -409,6 +424,10 @@ export class RealtimeHub implements EventPublisher {
       throw new ApiError(500, "DEVICE_REGISTRATION_FAILED", "Host 设备注册失败。");
     connection.deviceId = result.rows[0].id;
     connection.agentIds = allowed;
+    // Set iteration order is used to prefer the most recently registered Host.
+    // Moving this connection to the end prevents the same Agent answering from
+    // every active desktop while still allowing a newer Host to take over.
+    if (this.connections.delete(connection)) this.connections.add(connection);
     if (allowed.size) {
       await this.pool.query(
         `UPDATE agents SET runtime_status = 'online', runtime_last_seen_at = now(), updated_at = now()

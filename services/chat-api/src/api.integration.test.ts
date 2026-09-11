@@ -48,7 +48,24 @@ test("two users can become friends, create an Agent room, and sync settings", as
     OPENIM_ADMIN_TOKEN: "test-openim-admin-token",
     OPENIM_CALLBACK_TOKEN: "test-callback-token-long-enough",
   });
-  const { app, cipher } = await createApp(config, { pool, enableRealtime: false });
+  const agentHostEvents: Array<{
+    userId: string;
+    agentId: string;
+    event: Record<string, unknown>;
+  }> = [];
+  const events = {
+    publishToUser() {},
+    publishToDevice() {
+      return false;
+    },
+    async publishToRoom() {},
+    async dispatchQueued() {},
+    publishToAgentHost(userId: string, agentId: string, event: Record<string, unknown>) {
+      agentHostEvents.push({ userId, agentId, event });
+      return true;
+    },
+  };
+  const { app, cipher } = await createApp(config, { pool, events, enableRealtime: false });
 
   const register = async (email: string, handle: string, displayName: string) => {
     const response = await app.inject({
@@ -65,7 +82,7 @@ test("two users can become friends, create an Agent room, and sync settings", as
     assert.equal(response.statusCode, 201, response.body);
     return response.json() as {
       accessToken: string;
-      user: { id: string; emailVerified: boolean };
+      user: { id: string; emailVerified: boolean; openimUserId: string };
     };
   };
 
@@ -211,6 +228,23 @@ test("two users can become friends, create an Agent room, and sync settings", as
     });
     assert.equal(room.statusCode, 201, room.body);
     assert.equal(room.json().pendingAgentIds.length, 0);
+    const bobRoomsWithPrivateAgent = await app.inject({
+      method: "GET",
+      url: "/v1/rooms",
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+    });
+    assert.equal(bobRoomsWithPrivateAgent.statusCode, 200, bobRoomsWithPrivateAgent.body);
+    const bobSharedRoom = bobRoomsWithPrivateAgent
+      .json()
+      .data.find((item: { id: string }) => item.id === room.json().id);
+    const privateRoomAgent = bobSharedRoom.agents.find(
+      (roomAgent: { id: string }) => roomAgent.id === reviewerAgent.id,
+    );
+    assert.equal(privateRoomAgent.ownerId, alice.user.id);
+    assert.equal(privateRoomAgent.openimUserId, reviewerAgent.openimUserId);
+    assert.equal(privateRoomAgent.mention, "@reviewer");
+    assert.equal("instructions" in privateRoomAgent, false);
+    assert.equal("secrets" in privateRoomAgent, false);
 
     const chatDeliveryId = randomUUID();
     const chatRunId = randomUUID();
@@ -360,6 +394,35 @@ test("two users can become friends, create an Agent room, and sync settings", as
       },
     });
     assert.equal(chatMention.statusCode, 200, chatMention.body);
+    assert.equal(
+      agentHostEvents.length,
+      0,
+      "the sender owner's local send path must not be duplicated by the callback",
+    );
+
+    const friendMentionsOwnedAgent = await app.inject({
+      method: "POST",
+      url: "/internal/openim/callbacks/message/after?token=test-callback-token-long-enough",
+      payload: {
+        sendID: (bob.user as { openimUserId?: string }).openimUserId,
+        groupID: room.json().openimGroupId,
+        serverMsgID: "server-cross-user-chat-1",
+        clientMsgID: "client-cross-user-chat-1",
+        senderNickname: "Bob",
+        content: JSON.stringify({ content: "@coder 今天几号？" }),
+        contentType: 101,
+        seq: 2,
+        sendTime: Date.now(),
+        atUserList: [agent.openimUserId],
+      },
+    });
+    assert.equal(friendMentionsOwnedAgent.statusCode, 200, friendMentionsOwnedAgent.body);
+    assert.equal(agentHostEvents.length, 1);
+    assert.equal(agentHostEvents[0].userId, alice.user.id);
+    assert.equal(agentHostEvents[0].agentId, agent.id);
+    assert.deepEqual(agentHostEvents[0].event.targetAgentIds, [agent.id]);
+    assert.equal(agentHostEvents[0].event.senderUserId, bob.user.id);
+    assert.equal(agentHostEvents[0].event.agentAction, "chat");
 
     const noAutomaticTask = await app.inject({
       method: "GET",
@@ -2051,11 +2114,32 @@ test("two users can become friends, create an Agent room, and sync settings", as
     assert.equal(agentDirect.json().directAgentId, agent.id);
     assert.ok(agentDirect.json().openimGroupId);
 
+    const createdArchitectAgent = await app.inject({
+      method: "POST",
+      url: "/v1/agents",
+      headers: { authorization: `Bearer ${alice.accessToken}` },
+      payload: {
+        name: "架构师",
+        title: "Architect",
+        mention: "@architect",
+        description: "设计系统架构",
+        instructions: "分析系统边界和依赖关系。",
+        visibility: "private",
+        workspaceAccess: "read",
+        executionTarget: "local",
+        provider: "codex",
+        protocol: "app-server",
+        capabilities: ["chat", "read_workspace"],
+      },
+    });
+    assert.equal(createdArchitectAgent.statusCode, 201, createdArchitectAgent.body);
+    const architectAgent = createdArchitectAgent.json();
+
     const replacedMembers = await app.inject({
       method: "PUT",
       url: `/v1/rooms/${room.json().id}/members`,
       headers: { authorization: `Bearer ${alice.accessToken}`, "if-match": "3" },
-      payload: { userIds: [], agentIds: [agent.id] },
+      payload: { userIds: [], agentIds: [architectAgent.id] },
     });
     assert.equal(replacedMembers.statusCode, 200, replacedMembers.body);
     assert.equal(replacedMembers.json().revision, 4);
@@ -2072,6 +2156,48 @@ test("two users can become friends, create an Agent room, and sync settings", as
     assert.deepEqual(
       updatedRoom.members.map((member: { id: string }) => member.id),
       [alice.user.id],
+    );
+    assert.deepEqual(
+      updatedRoom.agents.map(
+        (roomAgent: { id: string; ownerId?: string; openimUserId: string }) => ({
+          id: roomAgent.id,
+          ownerId: roomAgent.ownerId,
+          openimUserId: roomAgent.openimUserId,
+        }),
+      ),
+      [
+        {
+          id: architectAgent.id,
+          ownerId: alice.user.id,
+          openimUserId: architectAgent.openimUserId,
+        },
+      ],
+    );
+    const membershipOutbox = await pool.query<{ topic: string; payload: Record<string, unknown> }>(
+      `SELECT topic, payload FROM outbox_events
+       WHERE aggregate_type = 'room' AND aggregate_id = $1
+         AND topic IN ('openim.group.invite', 'openim.group.kick')
+       ORDER BY topic`,
+      [room.json().id],
+    );
+    assert.deepEqual(
+      membershipOutbox.rows.map((event) => ({ topic: event.topic, payload: event.payload })),
+      [
+        {
+          topic: "openim.group.invite",
+          payload: {
+            groupID: room.json().openimGroupId,
+            userIDs: [architectAgent.openimUserId],
+          },
+        },
+        {
+          topic: "openim.group.kick",
+          payload: {
+            groupID: room.json().openimGroupId,
+            userIDs: [bob.user.openimUserId, agent.openimUserId, reviewerAgent.openimUserId],
+          },
+        },
+      ],
     );
 
     const settings = await app.inject({

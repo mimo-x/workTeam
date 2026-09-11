@@ -5,6 +5,7 @@ import { isAbsolute, join } from "node:path";
 import { stat } from "node:fs/promises";
 
 import { AgentGatewayPublisher } from "./agent-gateway";
+import { parseAgentChatRequest } from "./agent-chat-request";
 import { AgentTeamService } from "./agent-team";
 import { AntigravityRuntime } from "./antigravity-runtime";
 import { ClaudeRuntime } from "./claude-runtime";
@@ -36,6 +37,7 @@ import type {
   BackendRegisterInput,
   BackendRequestInput,
 } from "../shared/backend";
+import { formatErrorMessage } from "../shared/error";
 
 const codex = new CodexAppServer();
 const worktrees = new WorktreeManager();
@@ -732,7 +734,32 @@ app.whenReady().then(async () => {
   codex.onEvent((event) => sendToRenderer("codex:event", event));
   agentTeam.onEvent((event) => sendToRenderer("agent-team:event", event));
   remoteAgentHost.onState((state) => sendToRenderer("backend:host-state", state));
-  remoteAgentHost.onEvent((event) => sendToRenderer("backend:event", event));
+  remoteAgentHost.onEvent((event) => {
+    sendToRenderer("backend:event", event);
+    if (event.type !== "agent.chat.requested") return;
+    void (async () => {
+      const host = remoteAgentHost.getState();
+      const auth = await backend.getState();
+      if (!host.workspace || !auth.authenticated || !auth.user) return;
+      const snapshot = await agentTeam.mergeRemoteWorkspace(
+        await backend.syncWorkspace(host.workspace),
+      );
+      const request = parseAgentChatRequest(event, snapshot.agents, auth.user.id);
+      if (!request) return;
+      await agentTeam.ingestExternalMessage({
+        workspace: host.workspace,
+        message: request.message,
+        targetAgentIds: request.targetAgentIds,
+        triggerAgents: true,
+        agentAction: "chat",
+      });
+    })().catch((error) =>
+      sendToRenderer("backend:event", {
+        type: "agent.chat.failed",
+        message: formatErrorMessage(error),
+      }),
+    );
+  });
   createWindow();
 
   app.on("activate", () => {

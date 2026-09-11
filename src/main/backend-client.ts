@@ -24,6 +24,10 @@ import type {
   WorkspaceBindingSummary,
 } from "../shared/agent-team";
 import { formatBackendErrorDetails } from "../shared/backend-error";
+import {
+  mergeRoomAgentsIntoDirectory,
+  type CloudRoomAgentSummary,
+} from "../shared/cloud-room-agent-directory";
 import { formatErrorMessage } from "../shared/error";
 
 type StoredBackendConfig = {
@@ -95,7 +99,7 @@ type CloudRoom = {
   createdAt: string;
   updatedAt: string;
   members: CloudRoomMember[];
-  agents: Array<{ id: string }>;
+  agents: CloudRoomAgentSummary[];
 };
 
 type CloudMessage = {
@@ -402,7 +406,7 @@ export class BackendClient {
         syncSource: "backend" as const,
       })),
     ];
-    const agents: AgentDefinition[] = agentsResponse.data.map((agent) => ({
+    const directoryAgents: AgentDefinition[] = agentsResponse.data.map((agent) => ({
       id: agent.id,
       name: agent.name,
       title: agent.title,
@@ -437,6 +441,11 @@ export class BackendClient {
       version: agent.version,
       syncSource: "backend",
     }));
+    const agents = mergeRoomAgentsIntoDirectory(
+      directoryAgents,
+      roomsResponse.data.flatMap((room) => room.agents),
+      me.user.id,
+    );
     for (const agent of agentsResponse.data) {
       const token = agent.secrets?.bearerToken ?? agent.secrets?.token;
       if (token && agent.ownerId === me.user.id) this.onAgentCredential?.(agent.id, token);
