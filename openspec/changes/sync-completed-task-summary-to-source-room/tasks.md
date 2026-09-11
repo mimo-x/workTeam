@@ -17,4 +17,4 @@
 ## 4. 验收
 
 - [x] 4.1 覆盖子 Task 不发布、父摘要聚合、重复验收、投递重试、脱敏、无摘要回退和迁移升级。
-- [ ] 4.2 运行目标测试、全量测试、lint、typecheck、build、Bug 门禁与 `.githooks/pre-commit`，回填 Bug 记录和提交。
+- [x] 4.2 运行目标测试、全量测试、lint、typecheck、build、Bug 门禁与 `.githooks/pre-commit`，回填 Bug 记录和提交。
