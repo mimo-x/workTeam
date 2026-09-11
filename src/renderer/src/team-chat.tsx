@@ -103,6 +103,7 @@ import {
   setConversationPinned,
   type ConversationListPreferences,
 } from "./conversation-list";
+import { locallyRoutableAgentIds } from "./cloud-agent-routing";
 import { teamMessageAlignment } from "./team-message-layout";
 import { GroupIdentity } from "./group-identity";
 import { openImTransport, type OpenImConnectionState } from "./openim-transport";
@@ -2731,6 +2732,9 @@ export const TeamChat = ({
     setDraft("");
     try {
       if (connection.state === "connected" && room.syncSource === "backend" && room.externalId) {
+        const localAgentIds = locallyRoutableAgentIds(
+          room.type === "direct" && directAgent ? [directAgent] : mentionedAgents,
+        );
         const targetOpenimIds = roomAgents
           .filter(
             (agent) =>
@@ -2759,6 +2763,9 @@ export const TeamChat = ({
         await window.agentTeam.ingestExternalMessage({
           workspace,
           message: { ...message, roomId: room.roomId, agentAction },
+          model,
+          targetAgentIds: localAgentIds,
+          triggerAgents: agentAction === "chat" && localAgentIds.length > 0,
           agentAction,
         });
       } else if (

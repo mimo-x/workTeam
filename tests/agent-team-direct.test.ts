@@ -1084,3 +1084,45 @@ test("Agent execution failure with error object produces humanized error instead
     await rm(storeDir, { recursive: true, force: true });
   }
 });
+
+test("BDD: explicit external-message targets cannot expand to other mentioned Agents", async () => {
+  const storeDir = await mkdtemp(join(tmpdir(), "agent-team-exact-target-"));
+  const workspace = "/tmp/agent-team-exact-target-workspace";
+  const codex = new FakeCodex();
+  const published: Array<{ agentId: string; roomId: string }> = [];
+  const service = new AgentTeamService(
+    codex as unknown as AgentRuntime,
+    storeDir,
+    async (_message, target, room) => {
+      published.push({ agentId: target.id, roomId: room.roomId });
+    },
+  );
+
+  try {
+    const initial = await service.getWorkspace(workspace);
+    const room = initial.rooms.find((candidate) => candidate.type === "group")!;
+    const coordinator = initial.agents.find((candidate) => candidate.id === "agent_coordinator")!;
+    const architect = initial.agents.find((candidate) => candidate.id === "agent_architect")!;
+    const ingested = await service.ingestExternalMessage({
+      workspace,
+      message: {
+        externalId: "cloud-message-exact-target",
+        roomId: room.roomId,
+        senderId: "local_user",
+        senderName: "我",
+        content: `${coordinator.mention} ${architect.mention} 请一起分析`,
+        createdAt: Date.now(),
+        agentAction: "chat",
+      },
+      targetAgentIds: [coordinator.id],
+      triggerAgents: true,
+    });
+    assert.equal(ingested.runIds.length, 1);
+    await waitFor(async () => published.length === 1);
+    assert.deepEqual(published, [{ agentId: coordinator.id, roomId: room.roomId }]);
+    assert.equal(codex.prompts.length, 1);
+  } finally {
+    await service.flush();
+    await rm(storeDir, { recursive: true, force: true });
+  }
+});

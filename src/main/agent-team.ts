@@ -64,7 +64,11 @@ type LegacyRoom = Partial<TeamRoomSnapshot> & {
   agents?: AgentDefinition[];
   messages?: TeamMessage[];
 };
-type AgentMessagePublisher = (message: TeamMessage, agent: AgentDefinition) => Promise<void>;
+type AgentMessagePublisher = (
+  message: TeamMessage,
+  agent: AgentDefinition,
+  room: TeamRoomSnapshot,
+) => Promise<void>;
 
 class EventQueue {
   private values: AgentRuntimeEvent[] = [];
@@ -1907,7 +1911,7 @@ export class AgentTeamService {
               ...clone(response),
               roomId: room.externalId ?? room.roomId,
             };
-            void this.publishAgentMessage(published, agent).catch((error) => {
+            void this.publishAgentMessage(published, agent, room).catch((error) => {
               response.error = `OpenIM 发布失败：${errorMessage(error)}`;
               this.upsertMessage(state, room, response);
             });
@@ -1950,7 +1954,7 @@ export class AgentTeamService {
                 atUserIds: this.resolveAtUserIds(state, sourceRoom, response.content),
                 transport: "openim" as const,
               };
-              void this.publishAgentMessage(published, agent).catch((error) => {
+              void this.publishAgentMessage(published, agent, sourceRoom).catch((error) => {
                 response.error = `OpenIM 发布失败：${errorMessage(error)}`;
                 this.upsertMessage(state, room, response);
               });
@@ -2472,12 +2476,13 @@ export class AgentTeamService {
     requested?: string[],
   ) {
     const members = state.agents.filter((agent) => room.agentIds.includes(agent.id));
+    if (requested) return members.filter((agent) => requested.includes(agent.id));
     if (/@(所有Agent|全部Agent|all-agents|all)(?=\s|$)/i.test(text)) return members;
     const mentioned = members.filter(
       (agent) => text.includes(agent.mention) || text.includes(`@${agent.id}`),
     );
     if (mentioned.length) return mentioned;
-    return members.filter((agent) => requested?.includes(agent.id));
+    return [];
   }
 
   private createMessage(

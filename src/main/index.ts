@@ -634,11 +634,11 @@ app.whenReady().then(async () => {
   );
   workspaceBindings = new WorkspaceBindingStore(workspaceBindingsPath(userDataPath), safeStorage);
   remoteAgentHost = new RemoteAgentHost(backend, runtimeRegistry, workspaceBindings);
-  const publisher = new AgentGatewayPublisher(imConfig);
+  const publisher = new AgentGatewayPublisher(imConfig, backend);
   agentTeam = new AgentTeamService(
     runtimeRegistry,
     join(userDataPath, "agent-team-rooms"),
-    (message, agent) => publisher.publish(message, agent),
+    (message, agent, room) => publisher.publish(message, agent, room),
   );
   registerIpc();
   codex.onEvent((event) => sendToRenderer("codex:event", event));

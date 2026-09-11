@@ -36,6 +36,9 @@ test("two users can become friends, create an Agent room, and sync settings", as
   await pool.query(await readFile(join(migrationsDir, "0004_agent_runtime_config.sql"), "utf8"));
   await pool.query(await readFile(join(migrationsDir, "0005_governed_collaboration.sql"), "utf8"));
   await pool.query(await readFile(join(migrationsDir, "0006_task_completion_summary.sql"), "utf8"));
+  await pool.query(
+    await readFile(join(migrationsDir, "0007_agent_chat_outbox_idempotency.sql"), "utf8"),
+  );
   const config = loadConfig({
     NODE_ENV: "test",
     JWT_SECRET: "test-jwt-secret-with-at-least-32-characters",
@@ -208,6 +211,52 @@ test("two users can become friends, create an Agent room, and sync settings", as
     });
     assert.equal(room.statusCode, 201, room.body);
     assert.equal(room.json().pendingAgentIds.length, 0);
+
+    const chatDeliveryId = randomUUID();
+    const chatRunId = randomUUID();
+    const publishAgentChat = () =>
+      app.inject({
+        method: "POST",
+        url: `/v1/rooms/${room.json().id}/agent-messages`,
+        headers: { authorization: `Bearer ${alice.accessToken}` },
+        payload: {
+          agentId: agent.id,
+          content: "这是本机 Agent 的分析结果。",
+          deliveryId: chatDeliveryId,
+          runId: chatRunId,
+          parentMessageId: "server-chat-source",
+          agentHop: 1,
+        },
+      });
+    const publishedAgentChat = await publishAgentChat();
+    assert.equal(publishedAgentChat.statusCode, 202, publishedAgentChat.body);
+    assert.equal(publishedAgentChat.json().duplicate, false);
+    const duplicateAgentChat = await publishAgentChat();
+    assert.equal(duplicateAgentChat.statusCode, 202, duplicateAgentChat.body);
+    assert.equal(duplicateAgentChat.json().duplicate, true);
+    const agentChatOutbox = await pool.query(
+      `SELECT payload FROM outbox_events
+       WHERE topic = 'openim.message.send' AND aggregate_type = 'agent_chat'
+         AND aggregate_id = $1`,
+      [chatDeliveryId],
+    );
+    assert.equal(agentChatOutbox.rowCount, 1);
+    assert.equal(agentChatOutbox.rows[0].payload.sendID, agent.openimUserId);
+    assert.equal(agentChatOutbox.rows[0].payload.groupID, room.json().openimGroupId);
+    assert.equal(agentChatOutbox.rows[0].payload.content, "这是本机 Agent 的分析结果。");
+
+    const otherUserCannotPublishOwnedAgent = await app.inject({
+      method: "POST",
+      url: `/v1/rooms/${room.json().id}/agent-messages`,
+      headers: { authorization: `Bearer ${bob.accessToken}` },
+      payload: {
+        agentId: agent.id,
+        content: "伪造 Agent 回复",
+        deliveryId: randomUUID(),
+      },
+    });
+    assert.equal(otherUserCannotPublishOwnedAgent.statusCode, 403);
+    assert.equal(otherUserCannotPublishOwnedAgent.json().error.code, "AGENT_MESSAGE_NOT_ALLOWED");
 
     const bobDeviceId = randomUUID();
     await pool.query(
