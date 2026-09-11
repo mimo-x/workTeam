@@ -10,7 +10,6 @@ import {
   Clock3,
   Code2,
   Copy,
-  ExternalLink,
   FileKey2,
   GitBranch,
   Grid3X3,
@@ -84,55 +83,55 @@ const NAVIGATION = [
 
 const PRINCIPLES = [
   {
-    title: "准确",
-    description: "状态、图标与操作含义保持明确，效率优先，不制造歧义。",
+    title: "内容优先",
+    description: "对话、任务与决策是视觉中心；状态和配置主动退后。",
     icon: CheckCircle2,
   },
   {
-    title: "简洁",
-    description: "减少无效装饰，用轻量层级承载高密度协作信息。",
+    title: "分区密度",
+    description: "导航区紧凑、工作区松弛，不让整张界面保持同一种密度。",
     icon: Sparkles,
   },
   {
-    title: "一致",
-    description: "人、Agent、群聊与 Task 共用同一套语义 Token 和组件状态。",
+    title: "渐进披露",
+    description: "技术状态、成员详情和高级配置按需展开，默认视图保持专注。",
     icon: Grid3X3,
   },
   {
-    title: "愉悦",
-    description: "在不牺牲识别效率的前提下，提供自然、克制的情感反馈。",
+    title: "一致克制",
+    description: "统一消费语义 Token，以少量强调色、弱描边和轻投影建立秩序。",
     icon: WandSparkles,
   },
 ];
 
 const CORE_COLORS = [
-  { name: "Brand / Info", hex: "#1456F0", use: "主操作、链接、选中、信息" },
+  { name: "Brand / Info", hex: "#5B5BD6", use: "主操作、链接、选中、信息" },
   { name: "Success", hex: "#32A645", use: "成功、完成、在线" },
   { name: "Warning", hex: "#ED6D0C", use: "提醒、风险、待处理" },
   { name: "Error", hex: "#F54A45", use: "错误、失败、危险操作" },
 ];
 
 const NEUTRAL_COLORS = [
-  { name: "Primary text", hex: "#1F2329", use: "主标题、一级正文" },
-  { name: "Secondary text", hex: "#646A73", use: "副标题、二级正文" },
-  { name: "Placeholder", hex: "#8F959E", use: "占位符、次要信息" },
-  { name: "Disabled", hex: "#BBBFC4", use: "禁用文字与图标" },
-  { name: "Control border", hex: "#D0D3D6", use: "输入框、可交互控件" },
-  { name: "Card border", hex: "#DEE0E3", use: "卡片与内容容器" },
-  { name: "Surface / hover", hex: "#EFF0F1", use: "悬浮、禁用控件背景" },
-  { name: "Page surface", hex: "#F2F3F5", use: "栏、页面分组背景" },
-  { name: "Subtle surface", hex: "#F5F6F7", use: "数据组与弱化区块" },
+  { name: "Primary text", hex: "#24242B", use: "主标题、一级正文" },
+  { name: "Secondary text", hex: "#6F6F7B", use: "副标题、二级正文" },
+  { name: "Placeholder", hex: "#94949F", use: "占位符、次要信息" },
+  { name: "Disabled", hex: "#B9B9C1", use: "禁用文字与图标" },
+  { name: "Control border", hex: "#D9D9E1", use: "输入框、可交互控件" },
+  { name: "Card border", hex: "#E4E4E9", use: "卡片与内容容器" },
+  { name: "Surface / hover", hex: "#EDEDF4", use: "悬浮、局部选择" },
+  { name: "Page surface", hex: "#F2F2F5", use: "导航轨道、页面分组" },
+  { name: "Subtle surface", hex: "#F7F7F9", use: "会话列表与弱化区块" },
 ];
 
 const SEMANTIC_MAPPING = [
-  ["品牌蓝", "#1456F0", "--primary / --info", "Button、Link、选中态"],
-  ["一级正文", "#1F2329", "--foreground", "标题、正文"],
-  ["二级正文", "#646A73", "--muted-foreground", "说明、时间、辅助信息"],
-  ["卡片描边", "#DEE0E3", "--border", "Card、Separator"],
-  ["控件描边", "#D0D3D6", "--input", "Input、Select"],
-  ["悬浮表面", "#EFF0F1", "--accent", "Hover、局部选择"],
-  ["页面分组", "#F2F3F5", "--secondary", "Sidebar、分组背景"],
-  ["数据分组", "#F5F6F7", "--muted", "弱化区、空状态"],
+  ["品牌靛蓝", "#5B5BD6", "--primary / --info", "Button、Link、选中态"],
+  ["一级正文", "#24242B", "--foreground", "标题、正文"],
+  ["二级正文", "#6F6F7B", "--muted-foreground", "说明、时间、辅助信息"],
+  ["卡片描边", "#E4E4E9", "--border", "Card、Separator"],
+  ["控件描边", "#D9D9E1", "--input", "Input、Select"],
+  ["悬浮表面", "#EDEDF4", "--accent", "Hover、局部选择"],
+  ["导航表面", "#F2F2F5", "--secondary / --surface-sunken", "导航轨道"],
+  ["会话表面", "#F7F7F9", "--surface-subtle", "会话列表、弱化区"],
 ];
 
 const TYPE_SCALE = [
@@ -156,11 +155,11 @@ const TYPE_SCALE = [
 ];
 
 const RADIUS_SCALE = [
-  { name: "Radius-XS", value: "4px", use: "Tag、Checkbox、Section card" },
-  { name: "Radius-S", value: "6px", use: "Button、Input、Select、Toast" },
-  { name: "Radius-M", value: "8px", use: "Dialog、Popover、Toolbar" },
-  { name: "Radius-L", value: "10px", use: "复杂卡片、全屏模态、List" },
-  { name: "Radius-XL", value: "999px", use: "Avatar、Badge、Switch、Radio" },
+  { name: "Radius-SM", value: "8px", use: "小标签、紧凑控件" },
+  { name: "Radius-MD", value: "10px", use: "Button、Input、Select" },
+  { name: "Radius-LG", value: "12px", use: "会话项、普通 Card" },
+  { name: "Radius-XL", value: "16px", use: "面板、Dialog、Popover" },
+  { name: "Radius-3XL", value: "24px", use: "消息输入区、聚焦容器" },
 ];
 
 const ICON_LEVELS = [
@@ -193,19 +192,18 @@ const MOTION_EFFECTS = [
   { name: "透明度", idle: "opacity-35", active: "opacity-100", icon: Layers3 },
 ];
 
-const SOURCE_LINKS = [
-  ["颜色", "https://open.feishu.cn/document/design-specification/design-language/color"],
-  ["布局", "https://open.feishu.cn/document/design-specification/design-language/layout"],
-  ["动效", "https://open.feishu.cn/document/design-specification/design-language/animation"],
-  ["图标", "https://open.feishu.cn/document/design-specification/design-language/icon"],
-  ["样式", "https://open.feishu.cn/document/design-specification/design-language/style"],
-  ["字体", "https://open.feishu.cn/document/design-specification/design-language/font"],
+const DESIGN_FOUNDATIONS = [
+  "Semantic tokens",
+  "shadcn / Base UI",
+  "Lucide icons",
+  "4px spacing grid",
+  "Progressive disclosure",
 ];
 
 const TOKEN_TEXT = `:root {
-  --primary: #1456f0;
-  --foreground: #1f2329;
-  --muted-foreground: #646a73;
+  --primary: #5b5bd6;
+  --foreground: #24242b;
+  --muted-foreground: #6f6f7b;
   --destructive: #f54a45;
   --success: #32a645;
   --warning: #ed6d0c;
@@ -213,12 +211,14 @@ const TOKEN_TEXT = `:root {
   --governance-waiting: var(--warning);
   --governance-blocked: var(--destructive);
   --governance-agent: var(--info);
-  --border: #dee0e3;
-  --input: #d0d3d6;
-  --accent: #eff0f1;
-  --secondary: #f2f3f5;
-  --muted: #f5f6f7;
-  --radius: 0.375rem;
+  --border: #e4e4e9;
+  --input: #d9d9e1;
+  --accent: #ededf4;
+  --secondary: #f0f0f5;
+  --muted: #f4f4f7;
+  --surface-sunken: #f2f2f5;
+  --surface-subtle: #f7f7f9;
+  --radius: 0.75rem;
 }`;
 
 function SectionHeading({
@@ -276,7 +276,7 @@ function ColorSwatch({
   use: string;
   compact?: boolean;
 }) {
-  const needsDarkText = ["#EFF0F1", "#F2F3F5", "#F5F6F7", "#D0D3D6", "#DEE0E3"].includes(hex);
+  const needsDarkText = ["#EDEDF4", "#F2F2F5", "#F7F7F9", "#D9D9E1", "#E4E4E9"].includes(hex);
 
   return (
     <div className="overflow-hidden rounded-[8px] border bg-card">
@@ -284,7 +284,7 @@ function ColorSwatch({
         className={cn("flex items-end p-3", compact ? "h-16" : "h-24")}
         style={{
           backgroundColor: hex,
-          color: needsDarkText ? "#1F2329" : "#FFFFFF",
+          color: needsDarkText ? "#24242B" : "#FFFFFF",
         }}
       >
         <span className="text-xs font-medium">{hex}</span>
@@ -314,7 +314,7 @@ function RuleList({ items }: { items: string[] }) {
   );
 }
 
-export function WorkTeamDesignSystem() {
+export function CodexDesktopDesignSystem() {
   const [isDark, setIsDark] = useState(false);
   const [copied, setCopied] = useState(false);
   const [motionActive, setMotionActive] = useState(false);
@@ -355,7 +355,7 @@ export function WorkTeamDesignSystem() {
                 <Bot className="size-4" strokeWidth={2} aria-hidden="true" />
               </div>
               <div className="flex items-baseline gap-2">
-                <span className="text-sm font-medium">WorkTeam</span>
+                <span className="text-sm font-medium">Codex Desktop</span>
                 <span className="hidden text-xs text-muted-foreground sm:inline">
                   Design System
                 </span>
@@ -363,7 +363,7 @@ export function WorkTeamDesignSystem() {
             </div>
 
             <div className="flex items-center gap-2">
-              <Badge variant="secondary">Feishu × shadcn</Badge>
+              <Badge variant="secondary">Calm collaboration · shadcn</Badge>
               <Separator orientation="vertical" className="mx-1 h-5" />
               <Tooltip>
                 <TooltipTrigger
@@ -405,11 +405,11 @@ export function WorkTeamDesignSystem() {
               <div className="mt-auto rounded-[8px] border bg-card p-3 shadow-[var(--shadow-down-1)]">
                 <p className="text-xs font-medium">实现基线</p>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                  Brand #1456F0
+                  Brand #5B5BD6
                   <br />
                   Body 14 / 22
                   <br />
-                  shadcn · Base UI
+                  Radius 12 · Base UI
                 </p>
               </div>
             </nav>
@@ -426,16 +426,17 @@ export function WorkTeamDesignSystem() {
                     variant="outline"
                     className="w-fit border-primary/20 bg-primary/5 text-primary"
                   >
-                    WorkTeam design language · 2026
+                    Codex Desktop design language · 2026
                   </Badge>
                   <div className="flex flex-col gap-4">
                     <h1 className="max-w-4xl text-[30px] leading-[46px] font-semibold md:text-[42px] md:leading-[58px]">
-                      飞书式高效协作，
-                      <br className="hidden sm:block" />用 shadcn 稳定实现。
+                      让复杂的 Agent 协作，
+                      <br className="hidden sm:block" />
+                      保持安静、清晰与可控。
                     </h1>
                     <p className="max-w-2xl text-sm leading-[22px] text-muted-foreground md:text-base md:leading-6">
-                      WorkTeam 采用飞书的颜色、布局、字体、图标、圆角与动效原则，并通过 shadcn
-                      组件和语义 Token 统一聊天、Agent 与 Task 的产品体验。
+                      Codex Desktop 采用“内容优先、分区密度、渐进披露”的设计语言，并通过 shadcn
+                      组件和语义 Token 统一聊天、Agent、Task 与运行状态体验。
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -464,8 +465,8 @@ export function WorkTeamDesignSystem() {
                   <Info className="mt-0.5 size-4 shrink-0 text-primary" strokeWidth={2} />
                   <p className="text-sm leading-[22px]">
                     <span className="font-medium">实现边界：</span>
-                    飞书规范决定视觉原则与基础数值；shadcn 决定组件结构、可访问性和组合方式。
-                    深色模式是 WorkTeam 基于同一语义层级扩展的主题。
+                    本设计系统定义视觉层级、布局密度与交互表达；shadcn
+                    决定组件结构、可访问性和组合方式。 明暗主题共享相同的语义层级与组件逻辑。
                   </p>
                 </div>
               </div>
@@ -475,8 +476,8 @@ export function WorkTeamDesignSystem() {
               <div className="mx-auto flex max-w-5xl flex-col gap-10">
                 <SectionHeading
                   eyebrow="01 · Color"
-                  title="颜色：以品牌蓝建立清晰的操作焦点"
-                  description="品牌色只承担关键操作与信息强调；成功、警告、错误遵守用户的固有认知；大面积内容使用中性色建立层级。"
+                  title="颜色：以克制的靛蓝建立操作焦点"
+                  description="品牌色只承担关键操作、链接与选择；大面积区域使用暖灰白表面分层，成功、警告和错误保留稳定语义。"
                 />
 
                 <div>
@@ -499,7 +500,7 @@ export function WorkTeamDesignSystem() {
 
                 <Card className="shadow-none">
                   <CardHeader>
-                    <CardTitle>飞书语义 → shadcn Token</CardTitle>
+                    <CardTitle>产品语义 → shadcn Token</CardTitle>
                     <CardDescription>
                       业务代码只消费语义 Token，不直接写颜色值，明暗主题无需改变组件逻辑。
                     </CardDescription>
@@ -508,7 +509,7 @@ export function WorkTeamDesignSystem() {
                     <table className="w-full min-w-[720px] border-collapse text-left text-sm">
                       <thead>
                         <tr className="border-y bg-muted/70 text-xs text-muted-foreground">
-                          <th className="px-4 py-2 font-medium">飞书语义</th>
+                          <th className="px-4 py-2 font-medium">产品语义</th>
                           <th className="px-4 py-2 font-medium">色值</th>
                           <th className="px-4 py-2 font-medium">shadcn Token</th>
                           <th className="px-4 py-2 font-medium">使用场景</th>
@@ -539,14 +540,16 @@ export function WorkTeamDesignSystem() {
                 <SectionHeading
                   eyebrow="02 · Font"
                   title="字体：用字阶建立内容节奏"
-                  description="PC 端遵循飞书 10–30px 字阶。常规界面只使用 Regular 400 与 Medium 500，Semibold 600 仅用于页面级与大标题。"
+                  description="桌面端使用 10–30px 的紧凑字阶。常规界面以 Regular 400 与 Medium 500 为主，Semibold 600 只用于页面级和区域标题。"
                 />
 
                 <div className="grid gap-4 lg:grid-cols-[minmax(0,1.45fr)_minmax(280px,.55fr)]">
                   <Card className="shadow-none">
                     <CardHeader>
                       <CardTitle>PC 字阶</CardTitle>
-                      <CardDescription>字号 / 行高 / 字重均来自飞书字体规范。</CardDescription>
+                      <CardDescription>
+                        字号、行高与字重服务于长时间阅读和高频协作。
+                      </CardDescription>
                     </CardHeader>
                     <CardContent className="px-0">
                       {TYPE_SCALE.map((type, index) => (
@@ -608,12 +611,12 @@ export function WorkTeamDesignSystem() {
                         <CardTitle>文字颜色</CardTitle>
                       </CardHeader>
                       <CardContent className="flex flex-col gap-3">
-                        <p className="text-sm text-foreground">一级正文 · #1F2329</p>
-                        <p className="text-sm text-muted-foreground">二级正文 · #646A73</p>
-                        <p className="text-sm text-[#8F959E]">次要信息 · #8F959E</p>
-                        <p className="text-sm text-[#BBBFC4]">禁用文字 · #BBBFC4</p>
+                        <p className="text-sm text-foreground">一级正文 · #24242B</p>
+                        <p className="text-sm text-muted-foreground">二级正文 · #6F6F7B</p>
+                        <p className="text-sm text-placeholder">次要信息 · #94949F</p>
+                        <p className="text-sm text-disabled">禁用文字 · #B9B9C1</p>
                         <a href="#color" className="text-sm text-primary hover:underline">
-                          链接与菜单选中 · #1456F0
+                          链接与菜单选中 · #5B5BD6
                         </a>
                       </CardContent>
                     </Card>
@@ -631,15 +634,15 @@ export function WorkTeamDesignSystem() {
               <div className="mx-auto flex max-w-5xl flex-col gap-10">
                 <SectionHeading
                   eyebrow="03 · Layout"
-                  title="布局：根据任务选择信息密度"
-                  description="高密度用于浏览、批量与快速操作；低密度用于聚焦任务、重要提醒和需要安全点击区域的场景。"
+                  title="布局：用分区密度突出当前任务"
+                  description="全局导航紧凑、会话列表适中、对话画布松弛。固定结构保持空间记忆，详情和高级状态只在需要时展开。"
                 />
 
                 <div className="grid gap-4 lg:grid-cols-2">
                   <Card className="shadow-none">
                     <CardHeader>
-                      <CardTitle>高密度 · 浏览与协作</CardTitle>
-                      <CardDescription>好友列表、会话列表、消息流、Task 面板。</CardDescription>
+                      <CardTitle>导航密度 · 快速定位</CardTitle>
+                      <CardDescription>会话列表、联系人列表与 Task 看板保持紧凑。</CardDescription>
                     </CardHeader>
                     <CardContent className="flex flex-col gap-1">
                       {[
@@ -666,8 +669,8 @@ export function WorkTeamDesignSystem() {
 
                   <Card className="shadow-none">
                     <CardHeader>
-                      <CardTitle>低密度 · 聚焦与确认</CardTitle>
-                      <CardDescription>任务审核、危险操作、复杂表单、关键提醒。</CardDescription>
+                      <CardTitle>内容密度 · 专注阅读</CardTitle>
+                      <CardDescription>对话、任务审核和复杂决策使用更宽松的节奏。</CardDescription>
                     </CardHeader>
                     <CardContent>
                       <div className="rounded-[8px] border bg-muted/60 p-5">
@@ -691,6 +694,67 @@ export function WorkTeamDesignSystem() {
                     </CardContent>
                   </Card>
                 </div>
+
+                <Card className="shadow-none">
+                  <CardHeader>
+                    <CardTitle>桌面工作台骨架</CardTitle>
+                    <CardDescription>
+                      顶栏承载环境选择，图标轨道承载一级导航，会话栏承载当前模块，内容画布保持弹性；详情面板默认关闭。
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-4">
+                    <div className="overflow-hidden rounded-xl border bg-background">
+                      <div className="flex h-10 items-center justify-between border-b px-3">
+                        <span className="text-[10px] font-medium">56px 全局顶栏</span>
+                        <span className="text-[10px] text-muted-foreground">
+                          Workspace · Model · Account
+                        </span>
+                      </div>
+                      <div className="grid h-36 grid-cols-[64px_180px_minmax(0,1fr)]">
+                        <div className="flex flex-col items-center gap-2 border-r bg-surface-sunken py-3">
+                          {[0, 1, 2, 3].map((item) => (
+                            <span
+                              key={item}
+                              className={cn(
+                                "size-6 rounded-lg",
+                                item === 0 ? "bg-primary/15" : "bg-muted",
+                              )}
+                            />
+                          ))}
+                        </div>
+                        <div className="flex flex-col gap-2 border-r bg-surface-subtle p-3">
+                          <span className="h-3 w-16 rounded-full bg-foreground/15" />
+                          {[0, 1, 2].map((item) => (
+                            <span
+                              key={item}
+                              className={cn(
+                                "h-7 rounded-lg",
+                                item === 0
+                                  ? "bg-card shadow-[var(--shadow-down-1)]"
+                                  : "bg-muted/70",
+                              )}
+                            />
+                          ))}
+                        </div>
+                        <div className="flex flex-col justify-between p-4">
+                          <div className="mx-auto flex w-full max-w-80 flex-col gap-2">
+                            <span className="h-3 w-1/3 rounded-full bg-foreground/15" />
+                            <span className="h-2 w-full rounded-full bg-muted" />
+                            <span className="h-2 w-4/5 rounded-full bg-muted" />
+                          </div>
+                          <div className="mx-auto h-10 w-full max-w-80 rounded-2xl border bg-card shadow-[var(--shadow-down-3)]" />
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Badge variant="secondary">Top bar 56px</Badge>
+                      <Badge variant="secondary">Navigation rail 64px</Badge>
+                      <Badge variant="secondary">Conversation list 288px</Badge>
+                      <Badge variant="secondary">Reading width 768–832px</Badge>
+                      <Badge variant="secondary">Inspector on demand</Badge>
+                    </div>
+                  </CardContent>
+                </Card>
 
                 <div className="grid gap-4 lg:grid-cols-3">
                   <Card size="sm" className="shadow-none">
@@ -745,10 +809,10 @@ export function WorkTeamDesignSystem() {
                 </div>
 
                 <div className="rounded-[8px] border bg-card p-4">
-                  <p className="text-sm font-medium">WorkTeam 间距映射</p>
+                  <p className="text-sm font-medium">Codex Desktop 间距映射</p>
                   <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                    飞书布局规范定义密度与对齐原则；工程侧采用 4px 基础步进： 4 / 8 / 12 / 16 / 24 /
-                    32px。数字表格统一有效位并右对齐。
+                    工程侧采用 4px 基础步进：4 / 8 / 12 / 16 / 24 / 32px。导航列表使用
+                    8–12px，阅读区使用 24–32px；禁止用同一密度铺满整张界面。
                   </p>
                 </div>
               </div>
@@ -760,8 +824,8 @@ export function WorkTeamDesignSystem() {
               <div className="mx-auto flex max-w-5xl flex-col gap-10">
                 <SectionHeading
                   eyebrow="04 · Icon"
-                  title="图标：Lucide 形态，飞书规则"
-                  description="统一使用 Lucide 图标并遵循飞书的尺寸、线宽、层级和像素对齐原则。图标用于提高识别效率，不作为装饰。"
+                  title="图标：统一使用 Lucide 线性语言"
+                  description="一级导航、区域操作和状态提示共享同一图标库与视觉权重。图标提高识别效率，不承担纯装饰职责。"
                 />
 
                 <div className="grid gap-4 lg:grid-cols-3">
@@ -841,14 +905,16 @@ export function WorkTeamDesignSystem() {
               <div className="mx-auto flex max-w-5xl flex-col gap-10">
                 <SectionHeading
                   eyebrow="05 · Style"
-                  title="样式：轻圆角、轻投影、清楚分层"
-                  description="组件面积越大，圆角通常越大。优先用背景和描边区分同一高程，仅在确有高程关系时使用轻量投影。"
+                  title="样式：柔和圆角、弱描边、明确高程"
+                  description="组件面积越大，圆角越大。平级区域依靠表面色和留白区分；只有浮动输入区、弹层和选中会话使用轻量投影。"
                 />
 
                 <Card className="shadow-none">
                   <CardHeader>
                     <CardTitle>圆角层级</CardTitle>
-                    <CardDescription>shadcn 组件按面积和交互类型映射到五级圆角。</CardDescription>
+                    <CardDescription>
+                      以 12px 为基础圆角，小控件向下收紧，聚焦容器向上放大。
+                    </CardDescription>
                   </CardHeader>
                   <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                     {RADIUS_SCALE.map((radius) => (
@@ -910,15 +976,15 @@ export function WorkTeamDesignSystem() {
                     </CardHeader>
                     <CardContent className="flex flex-col gap-4">
                       {[
-                        ["#D0D3D6", "可交互控件", "Input、Select、Checkbox"],
-                        ["#DEE0E3", "卡片描边", "Card、Panel"],
-                        ["#1F2329 / 15%", "内容分割线", "Feed、设置页、List"],
+                        ["#D9D9E1", "可交互控件", "Input、Select、Checkbox"],
+                        ["#E4E4E9", "卡片描边", "Card、Panel"],
+                        ["#24242B / 12%", "内容分割线", "Feed、设置页、List"],
                       ].map(([value, name, use]) => (
                         <div key={name} className="grid grid-cols-[48px_1fr] items-center gap-3">
                           <div
                             className="h-px w-12"
                             style={{
-                              background: value === "#1F2329 / 15%" ? "rgb(31 35 41 / 15%)" : value,
+                              background: value === "#24242B / 12%" ? "rgb(36 36 43 / 12%)" : value,
                             }}
                           />
                           <div>
@@ -938,9 +1004,9 @@ export function WorkTeamDesignSystem() {
                     </CardHeader>
                     <CardContent className="grid grid-cols-2 gap-3">
                       {[
-                        ["#EFF0F1", "Hover / Disabled"],
-                        ["#F2F3F5", "页面 / 栏"],
-                        ["#F5F6F7", "数据分组"],
+                        ["#EDEDF4", "Hover / Selected"],
+                        ["#F2F2F5", "导航轨道"],
+                        ["#F7F7F9", "会话列表"],
                         ["rgba(0,0,0,.55)", "模态遮罩"],
                       ].map(([value, use]) => (
                         <div key={value}>
@@ -1005,9 +1071,9 @@ export function WorkTeamDesignSystem() {
                 <div className="grid gap-4 lg:grid-cols-2">
                   <Card className="shadow-none">
                     <CardHeader>
-                      <CardTitle>WorkTeam 时长映射</CardTitle>
+                      <CardTitle>Codex Desktop 时长映射</CardTitle>
                       <CardDescription>
-                        下列数值是依据飞书动效原则制定的工程实现，而非飞书页面公布的固定参数。
+                        让频繁操作即时响应，让面板变化自然结束，不用动效制造注意力。
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="flex flex-col gap-4">
@@ -1397,7 +1463,7 @@ export function WorkTeamDesignSystem() {
                     <CardHeader>
                       <CardTitle>表单</CardTitle>
                       <CardDescription>
-                        控件保持 6px 圆角，并提供明确标签、占位符与权限说明。
+                        控件使用 10–12px 圆角，并提供明确标签、占位符与权限说明。
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="grid gap-3 sm:grid-cols-2">
@@ -1434,9 +1500,9 @@ export function WorkTeamDesignSystem() {
                 <div className="grid gap-4 xl:grid-cols-[1.15fr_.85fr]">
                   <Card className="shadow-none">
                     <CardHeader>
-                      <CardTitle>群聊消息模式</CardTitle>
+                      <CardTitle>对话消息与输入区</CardTitle>
                       <CardDescription>
-                        Agent 感知群名、成员与实时上下文，并可 @ 其他成员。
+                        他人消息以内容流呈现，自己的消息使用贴合内容的轻量气泡。
                       </CardDescription>
                       <CardAction>
                         <AvatarGroup>
@@ -1473,14 +1539,39 @@ export function WorkTeamDesignSystem() {
                           </div>
                         </div>
                       </div>
-                      <div className="rounded-[8px] border bg-background p-2">
+                      <div className="flex justify-end gap-2">
+                        <div className="max-w-[68%]">
+                          <div className="mb-1 flex justify-end gap-2 text-[10px] text-muted-foreground">
+                            <span>16:34</span>
+                            <span className="font-medium text-foreground">我</span>
+                          </div>
+                          <div className="rounded-xl rounded-tr-sm bg-primary/10 px-3 py-2 text-sm leading-5">
+                            收到，我来确认 Task 面板的筛选交互。
+                          </div>
+                        </div>
+                        <Avatar size="sm">
+                          <AvatarFallback className="bg-primary/10 text-primary">我</AvatarFallback>
+                        </Avatar>
+                      </div>
+                      <div className="rounded-3xl border bg-card p-3 shadow-[var(--shadow-down-3)]">
                         <div className="flex items-center justify-between gap-2">
-                          <span className="px-1 text-xs text-muted-foreground">回复群聊…</span>
+                          <span className="px-1 text-sm text-muted-foreground">
+                            输入消息，使用 @ 提及 Agent…
+                          </span>
                           <Button size="icon-sm" aria-label="发送消息">
                             <Send />
                           </Button>
                         </div>
                       </div>
+                      <Separator />
+                      <RuleList
+                        items={[
+                          "自己的消息气泡最大宽度为内容栏的 68%，不使用描边与投影。",
+                          "自己的消息气泡使用 12 × 8px 内边距、12px 圆角和更紧凑的 20px 行高。",
+                          "Agent 与他人消息优先保持开放文本流，避免所有消息都变成大卡片。",
+                          "输入区使用 24px 圆角和轻量浮层阴影，始终与正文阅读宽度对齐。",
+                        ]}
+                      />
                     </CardContent>
                   </Card>
 
@@ -1521,23 +1612,16 @@ export function WorkTeamDesignSystem() {
 
                 <div className="flex flex-col justify-between gap-4 border-t pt-8 sm:flex-row sm:items-center">
                   <div>
-                    <p className="text-sm font-medium">规范来源</p>
+                    <p className="text-sm font-medium">设计基础</p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      飞书开放平台设计规范 · WorkTeam 工程映射
+                      Codex Desktop Calm Collaboration · 2026
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-x-4 gap-y-2">
-                    {SOURCE_LINKS.map(([name, href]) => (
-                      <a
-                        key={name}
-                        href={href}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-                      >
-                        {name}
-                        <ExternalLink className="size-3" />
-                      </a>
+                  <div className="flex flex-wrap gap-2">
+                    {DESIGN_FOUNDATIONS.map((foundation) => (
+                      <Badge key={foundation} variant="outline">
+                        {foundation}
+                      </Badge>
                     ))}
                   </div>
                 </div>

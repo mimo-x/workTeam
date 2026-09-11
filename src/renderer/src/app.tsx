@@ -1608,290 +1608,244 @@ const AuthenticatedApp = () => {
   const currentApproval = approvals[0];
 
   return (
-    <div className={`app-shell theme-${theme} flex h-dvh min-h-0 overflow-hidden`}>
-      <aside className="app-sidebar relative flex w-[240px] shrink-0 flex-col border-r border-border font-sans">
-        <div className="app-titlebar electron-drag flex h-12 shrink-0 items-center justify-between border-b border-border px-3 pl-[76px]">
-          <div className="flex items-center gap-2">
-            <span className="grid size-5 place-items-center rounded bg-foreground text-[10px] font-mono font-bold text-background">
-              CX
-            </span>
-            <span className="text-xs font-semibold tracking-tight text-foreground">Codex</span>
-          </div>
-          <span className="rounded border border-border bg-background/80 px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">
-            v0.1
+    <div className={`app-shell theme-${theme} flex h-dvh min-h-0 flex-col overflow-hidden`}>
+      <header className="app-titlebar electron-drag flex h-14 shrink-0 items-center border-b border-border/60 px-4 pl-[76px]">
+        <div className="flex w-48 shrink-0 items-center gap-2.5">
+          <span className="grid size-7 place-items-center rounded-lg bg-foreground text-[10px] font-bold text-background">
+            CX
           </span>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold tracking-tight text-foreground">
+              Codex Desktop
+            </div>
+            <div className="text-[10px] text-muted-foreground">Agent workspace</div>
+          </div>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-2.5">
-          <section>
-            <div className="mb-1.5 px-2 text-[10px] font-semibold tracking-wider text-muted-foreground/80 uppercase">
-              Views
-            </div>
-            <div className="space-y-0.5">
-              {(
-                [
-                  ["messages", "消息流", UsersRoundIcon],
-                  ["tasks", "Task 看板", ListTodoIcon],
-                  ["contacts", "通讯录与 Agent", BookUserIcon],
-                ] as const
-              ).map(([value, label, Icon]) => {
-                const isActive = mode === value;
-                return (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => changeMode(value)}
-                    className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs font-medium transition ${
-                      isActive
-                        ? "bg-card text-foreground shadow-[var(--shadow-down-1)]"
-                        : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                    }`}
-                  >
-                    <Icon className="size-3.5 shrink-0" />
-                    <span className="flex-1">{label}</span>
-                  </button>
-                );
-              })}
-              <button
-                type="button"
-                onClick={() => changeMode("solo")}
-                className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs font-medium transition ${
-                  mode === "solo"
-                    ? "bg-card text-foreground shadow-[var(--shadow-down-1)]"
-                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                }`}
-              >
-                <MessageSquareIcon className="size-3.5 shrink-0" />
-                <span className="flex-1">Codex 私聊</span>
-              </button>
-            </div>
-          </section>
-
-          <section>
-            <div className="mb-1.5 flex items-center justify-between px-2">
-              <span className="text-[10px] font-semibold tracking-wider text-muted-foreground/80 uppercase">
-                Workspaces
-              </span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-xs"
-                onClick={() => void chooseWorkspace()}
-                aria-label="添加 Workspace"
-                title="打开文件夹"
-              >
-                <PlusIcon />
-              </Button>
-            </div>
-            <div className="flex flex-col gap-1">
-              {projects.length > 0 ? (
-                projects.map((project) => {
-                  const active = project === workspace;
-                  return (
-                    <Button
-                      key={project}
-                      type="button"
-                      variant="ghost"
-                      onClick={() => rememberProject(project)}
-                      aria-current={active ? "page" : undefined}
-                      className={cn(
-                        "h-auto min-w-0 justify-start gap-2.5 whitespace-normal px-2 py-2 text-left",
-                        active && "border-border bg-card shadow-[var(--shadow-down-1)]",
-                      )}
-                    >
-                      <FolderIcon className="size-4 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-xs font-medium text-foreground">
-                          {shortPath(project)}
-                        </span>
-                        <span className="mt-0.5 block truncate font-mono text-[9px] font-normal text-muted-foreground">
-                          {project}
-                        </span>
-                      </span>
-                    </Button>
-                  );
-                })
-              ) : (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full justify-start"
-                  onClick={() => void chooseWorkspace()}
-                >
-                  <FolderIcon data-icon="inline-start" />
-                  打开文件夹
-                </Button>
-              )}
-            </div>
-            {workspaceError && (
-              <p className="mt-1.5 px-2 text-[10px] leading-4 text-destructive">{workspaceError}</p>
-            )}
-          </section>
-
-          <section>
-            <div className="mb-1.5 px-2 text-[10px] font-semibold tracking-wider text-muted-foreground/80 uppercase">
-              Model
-            </div>
-            {status.models.length > 0 ? (
-              <Select value={activeModel} onValueChange={(val) => setSelectedModel(val ?? "")}>
-                <SelectTrigger className="h-8 w-full rounded text-xs font-mono">
-                  <SelectValue placeholder="选择模型" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {status.models.map((model) => (
-                      <SelectItem key={model.id} value={model.model} className="text-xs font-mono">
-                        {model.displayName}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            ) : (
-              <div className="rounded border border-border bg-background/50 px-2.5 py-1.5 font-mono text-[11px] text-muted-foreground">
-                Codex Default
-              </div>
-            )}
-          </section>
-
-          <section className="mt-auto rounded-lg border border-border bg-card p-2.5 shadow-[var(--shadow-down-1)]">
-            <div className="flex items-center gap-2">
-              <span
-                className={`size-2 rounded-full ${
-                  status.connecting
-                    ? "animate-pulse bg-warning"
-                    : status.connected
-                      ? "bg-success "
-                      : "bg-destructive"
-                }`}
-              />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-xs font-medium text-foreground">
-                  {status.connecting
-                    ? "Connecting Codex..."
-                    : status.connected
-                      ? "Engine Connected"
-                      : "Connection Failed"}
-                </div>
-                <div className="truncate font-mono text-[10px] text-muted-foreground">
-                  {status.connected ? accountLabel : (status.error ?? "Offline")}
-                </div>
-              </div>
-              {!status.connected && !status.connecting && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  onClick={() => void connect()}
-                  className="h-6 w-6 text-muted-foreground hover:text-foreground"
-                  aria-label="重试连接"
-                >
-                  <RefreshCwIcon className="size-3" />
-                </Button>
-              )}
-            </div>
-            {needsLogin && (
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => void window.codex.login()}
-                className="mt-2 h-7 w-full gap-1.5 rounded text-xs font-medium"
-              >
-                <LogInIcon className="size-3" />
-                登录 ChatGPT
-              </Button>
-            )}
-          </section>
-        </div>
-        <div className="shrink-0 border-t border-border p-2">
+        <div className="electron-no-drag mx-auto flex min-w-0 max-w-2xl flex-1 items-center justify-center gap-2 px-4">
+          {projects.length > 0 ? (
+            <Select
+              value={workspace}
+              onValueChange={(value) => {
+                if (value) rememberProject(value);
+              }}
+            >
+              <SelectTrigger size="sm" className="w-52 bg-muted/70 shadow-none">
+                <FolderIcon />
+                <SelectValue placeholder="选择工作区">
+                  {workspace ? shortPath(workspace) : "选择工作区"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent align="start">
+                <SelectGroup>
+                  {projects.map((project) => (
+                    <SelectItem key={project} value={project}>
+                      {shortPath(project)}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void chooseWorkspace()}
+            >
+              <FolderIcon data-icon="inline-start" />
+              选择工作区
+            </Button>
+          )}
           <Button
             type="button"
             variant="ghost"
-            size="sm"
-            onClick={() => setSettingsOpen(true)}
-            className="flex h-8 w-full items-center justify-between rounded px-2 text-xs text-muted-foreground hover:bg-background hover:text-foreground"
+            size="icon-sm"
+            onClick={() => void chooseWorkspace()}
+            aria-label="添加工作区"
+            title="添加工作区"
           >
-            <span className="flex items-center gap-2">
-              <Settings2Icon className="size-3.5" />
-              设置中心
-            </span>
-            <span className="font-mono text-[10px]">{theme === "dark" ? "Dark" : "Light"}</span>
+            <PlusIcon />
           </Button>
-        </div>
-      </aside>
-
-      <main className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-        {mode === "solo" && (
-          <header className="app-titlebar electron-drag relative z-10 flex h-12 items-center justify-between border-b border-border px-4">
-            <div className="flex items-center gap-2 font-mono text-xs text-foreground">
-              <BotIcon className="size-3.5 text-muted-foreground" />
-              <span className="font-semibold">codex</span>
-              {workspace && <span className="text-muted-foreground/40">/</span>}
-              {workspace && (
-                <span className="max-w-72 truncate text-muted-foreground">
-                  {shortPath(workspace)}
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="rounded border border-border bg-muted/60 px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
-                workspace:rw · prompt-confirm
-              </span>
-            </div>
-          </header>
-        )}
-
-        <div className="relative min-h-0 flex-1 overflow-hidden">
-          {ready ? (
-            mode !== "solo" ? (
-              <TeamChat
-                key={`${workspace}:team`}
-                workspace={workspace}
-                model={activeModel || undefined}
-                view={mode}
-                onViewChange={changeMode}
-              />
-            ) : (
-              <CodexChat key={runtimeKey} workspace={workspace} model={activeModel || undefined} />
-            )
-          ) : (
-            <div className="grid h-full place-items-center px-8 text-center">
-              <div className="max-w-sm">
-                {status.connecting ? (
-                  <LoaderCircleIcon className="mx-auto size-7 animate-spin text-primary" />
-                ) : (
-                  <CircleAlertIcon className="mx-auto size-7 text-muted-foreground" />
-                )}
-                <h2 className="mt-4 text-base font-medium text-foreground">
-                  {status.connecting
-                    ? "正在启动本机 Codex…"
-                    : needsLogin
-                      ? "需要登录 Codex"
-                      : !workspace
-                        ? "请选择项目目录"
-                        : workspaceError
-                          ? "无法打开 Workspace"
-                          : "Codex 暂不可用"}
-                </h2>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                  {workspaceError ||
-                    status.error ||
-                    "连接完成后，就可以让 Codex 读取、修改并运行这个项目。"}
-                </p>
-              </div>
-            </div>
+          {status.models.length > 0 && (
+            <Select value={activeModel} onValueChange={(value) => setSelectedModel(value ?? "")}>
+              <SelectTrigger size="sm" className="w-44 bg-muted/70 shadow-none">
+                <BotIcon />
+                <SelectValue placeholder="选择模型" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {status.models.map((model) => (
+                    <SelectItem key={model.id} value={model.model}>
+                      {model.displayName}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
           )}
         </div>
 
-        {currentApproval && (
-          <div className="pointer-events-none absolute inset-x-0 top-20 z-50 flex justify-center px-4">
-            <ApprovalCard
-              approval={currentApproval}
-              onResolve={(decision) => resolveApproval(currentApproval, decision)}
+        <div className="electron-no-drag flex w-48 shrink-0 items-center justify-end gap-2">
+          <Badge variant="outline" className="max-w-40 gap-1.5">
+            <span
+              className={cn(
+                "size-1.5 rounded-full",
+                status.connecting
+                  ? "animate-pulse bg-warning"
+                  : status.connected
+                    ? "bg-success"
+                    : "bg-destructive",
+              )}
             />
+            <span className="truncate">
+              {status.connecting ? "正在连接" : status.connected ? accountLabel : "连接失败"}
+            </span>
+          </Badge>
+          {!status.connected && !status.connecting && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => void connect()}
+              aria-label="重试连接"
+              title="重试连接"
+            >
+              <RefreshCwIcon />
+            </Button>
+          )}
+        </div>
+      </header>
+
+      <div className="flex min-h-0 flex-1">
+        <aside className="app-sidebar flex w-16 shrink-0 flex-col items-center border-r border-border/60 py-3">
+          <nav className="flex flex-col items-center gap-2" aria-label="主导航">
+            {(
+              [
+                ["messages", "消息", UsersRoundIcon],
+                ["tasks", "Task 看板", ListTodoIcon],
+                ["contacts", "通讯录与 Agent", BookUserIcon],
+                ["solo", "Codex 私聊", MessageSquareIcon],
+              ] as const
+            ).map(([value, label, Icon]) => {
+              const isActive = mode === value;
+              return (
+                <Button
+                  key={value}
+                  type="button"
+                  variant={isActive ? "secondary" : "ghost"}
+                  size="icon-lg"
+                  onClick={() => changeMode(value)}
+                  aria-label={label}
+                  aria-current={isActive ? "page" : undefined}
+                  title={label}
+                >
+                  <Icon />
+                </Button>
+              );
+            })}
+          </nav>
+
+          <div className="mt-auto flex flex-col items-center gap-2">
+            {needsLogin && (
+              <Button
+                type="button"
+                variant="outline"
+                size="icon-lg"
+                onClick={() => void window.codex.login()}
+                aria-label="登录 ChatGPT"
+                title="登录 ChatGPT"
+              >
+                <LogInIcon />
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-lg"
+              onClick={() => setSettingsOpen(true)}
+              aria-label="设置中心"
+              title="设置中心"
+            >
+              <Settings2Icon />
+            </Button>
           </div>
-        )}
-      </main>
+        </aside>
+
+        <main className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+          {mode === "solo" && (
+            <header className="flex h-14 shrink-0 items-center justify-between border-b border-border/60 px-5">
+              <div className="flex items-center gap-2.5">
+                <span className="grid size-8 place-items-center rounded-xl bg-primary/10 text-primary">
+                  <BotIcon />
+                </span>
+                <div>
+                  <div className="text-sm font-semibold text-foreground">Codex 私聊</div>
+                  <div className="text-[10px] text-muted-foreground">
+                    {workspace ? shortPath(workspace) : "未选择工作区"}
+                  </div>
+                </div>
+              </div>
+              <Badge variant="secondary">读写工作区 · 操作前确认</Badge>
+            </header>
+          )}
+
+          <div className="relative min-h-0 flex-1 overflow-hidden">
+            {ready ? (
+              mode !== "solo" ? (
+                <TeamChat
+                  key={`${workspace}:team`}
+                  workspace={workspace}
+                  model={activeModel || undefined}
+                  view={mode}
+                  onViewChange={changeMode}
+                />
+              ) : (
+                <CodexChat
+                  key={runtimeKey}
+                  workspace={workspace}
+                  model={activeModel || undefined}
+                />
+              )
+            ) : (
+              <div className="grid h-full place-items-center px-8 text-center">
+                <div className="max-w-sm">
+                  {status.connecting ? (
+                    <LoaderCircleIcon className="mx-auto size-7 animate-spin text-primary" />
+                  ) : (
+                    <CircleAlertIcon className="mx-auto size-7 text-muted-foreground" />
+                  )}
+                  <h2 className="mt-4 text-base font-medium text-foreground">
+                    {status.connecting
+                      ? "正在启动本机 Codex…"
+                      : needsLogin
+                        ? "需要登录 Codex"
+                        : !workspace
+                          ? "请选择项目目录"
+                          : workspaceError
+                            ? "无法打开 Workspace"
+                            : "Codex 暂不可用"}
+                  </h2>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    {workspaceError ||
+                      status.error ||
+                      "连接完成后，就可以让 Codex 读取、修改并运行这个项目。"}
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {currentApproval && (
+            <div className="pointer-events-none absolute inset-x-0 top-20 z-50 flex justify-center px-4">
+              <ApprovalCard
+                approval={currentApproval}
+                onResolve={(decision) => resolveApproval(currentApproval, decision)}
+              />
+            </div>
+          )}
+        </main>
+      </div>
       {settingsOpen && (
         <SettingsCenter
           theme={theme}

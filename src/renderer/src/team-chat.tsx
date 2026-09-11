@@ -11,6 +11,7 @@ import {
   LockIcon,
   MonitorCogIcon,
   MessageSquareMoreIcon,
+  PanelRightIcon,
   PauseIcon,
   PencilIcon,
   PinIcon,
@@ -18,6 +19,7 @@ import {
   PlayIcon,
   PlusIcon,
   Repeat2Icon,
+  RotateCcwIcon,
   SearchIcon,
   SendIcon,
   Settings2Icon,
@@ -81,6 +83,7 @@ import type {
   TeamWorkspaceSnapshot,
 } from "../../shared/agent-team";
 import { formatErrorMessage } from "../../shared/error";
+import { canRetryAgentReply } from "./agent-message-actions";
 import {
   ApprovalInboxDialog,
   AuditTimeline,
@@ -107,6 +110,7 @@ import {
   mentionedCandidates,
   type MentionCandidate,
 } from "./openim-mentions";
+import { resolveRoomSaveTarget } from "./room-save-target";
 
 export type TeamView = "messages" | "contacts" | "tasks";
 
@@ -381,6 +385,7 @@ const MessageRow = ({
   human,
   task,
   onStop,
+  onRetry,
   onOpenTask,
 }: {
   message: TeamMessage;
@@ -388,6 +393,7 @@ const MessageRow = ({
   human?: HumanContact;
   task?: AgentTask;
   onStop: (runId: string) => void;
+  onRetry?: (messageId: string) => void;
   onOpenTask: (task: AgentTask) => void;
 }) => {
   if (message.senderType === "system") {
@@ -404,7 +410,7 @@ const MessageRow = ({
 
   if (alignment === "end") {
     return (
-      <article className="flex justify-end gap-2.5 py-3">
+      <article className="flex justify-end gap-2 py-2.5">
         <div className="max-w-[min(32rem,68%)]">
           <div className="mb-1 flex items-center justify-end gap-2 font-mono text-[10px] text-muted-foreground">
             <span>{timeLabel(message.createdAt)}</span>
@@ -432,7 +438,7 @@ const MessageRow = ({
             </button>
           )}
         </div>
-        <div className="mt-4 grid size-7 shrink-0 place-items-center rounded-lg border border-primary/20 bg-primary/10 font-mono text-[10px] font-semibold text-primary">
+        <div className="mt-4 grid size-7 shrink-0 place-items-center rounded-lg bg-primary/10 font-mono text-[10px] font-semibold text-primary">
           我
         </div>
       </article>
@@ -497,15 +503,25 @@ const MessageRow = ({
             </div>
           )}
         </div>
-        {running && message.runId && (
-          <button
-            type="button"
-            onClick={() => onStop(message.runId!)}
-            className="mt-2 flex items-center gap-1.5 text-[10px] text-muted-foreground opacity-0 transition hover:text-foreground group-hover:opacity-100"
-          >
-            <SquareIcon className="size-2.5 fill-current" />
-            停止
-          </button>
+        {(running ? Boolean(message.runId) : Boolean(onRetry)) && (
+          <div className="mt-1 flex gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
+            {running && message.runId ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                onClick={() => onStop(message.runId!)}
+              >
+                <SquareIcon data-icon="inline-start" className="fill-current" />
+                停止
+              </Button>
+            ) : onRetry ? (
+              <Button type="button" variant="ghost" size="xs" onClick={() => onRetry(message.id)}>
+                <RotateCcwIcon data-icon="inline-start" />
+                重新回答
+              </Button>
+            ) : null}
+          </div>
         )}
       </div>
     </article>
@@ -1591,7 +1607,13 @@ const RoomDialog = ({
             id !== "local_user" &&
             humans.find((human) => human.id === id)?.syncSource === "backend",
         );
-      const useCloud = room?.syncSource === "backend" || (cloudMode && remoteSelection);
+      const useCloud =
+        resolveRoomSaveTarget({
+          hasExistingRoom: Boolean(room),
+          existingRoomSource: room?.syncSource,
+          cloudMode,
+          hasRemoteSelection: remoteSelection,
+        }) === "cloud";
       let next: TeamRoomSnapshot;
       if (useCloud) {
         const localOnlyHumans = selectedHumans.filter(
@@ -2243,6 +2265,7 @@ export const TeamChat = ({
   const [editingAgentId, setEditingAgentId] = useState<string | undefined>();
   const [contactSettingsOpen, setContactSettingsOpen] = useState(false);
   const [roomDialogOpen, setRoomDialogOpen] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [editingRoom, setEditingRoom] = useState<TeamRoomSnapshot | undefined>();
   const [pendingDeleteRoom, setPendingDeleteRoom] = useState<TeamRoomSnapshot | null>(null);
   const [hostBindingOpen, setHostBindingOpen] = useState(false);
@@ -2957,13 +2980,11 @@ export const TeamChat = ({
 
   return (
     <div className="relative flex h-full min-h-0">
-      <aside className="flex w-56 shrink-0 flex-col border-r border-border bg-secondary/60">
-        <header className="app-titlebar electron-drag flex h-12 items-center justify-between border-b border-border px-3">
+      <aside className="flex w-72 shrink-0 flex-col border-r border-border/60 bg-surface-subtle/70">
+        <header className="flex h-14 items-center justify-between border-b border-border/60 px-4">
           <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold tracking-wider text-foreground uppercase">
-              Threads
-            </span>
-            <Badge variant="outline" className="h-5 font-mono text-[10px] text-muted-foreground">
+            <span className="text-sm font-semibold tracking-tight text-foreground">消息</span>
+            <Badge variant="secondary" className="h-5 text-[10px] text-muted-foreground">
               {conversations.length}
             </Badge>
           </div>
@@ -2982,8 +3003,8 @@ export const TeamChat = ({
             <PlusIcon />
           </Button>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto p-2">
-          <div className="flex flex-col gap-0.5">
+        <div className="min-h-0 flex-1 overflow-y-auto p-2.5">
+          <div className="flex flex-col gap-1">
             {conversations.map((item) => {
               const itemTask = state.tasks.find((candidate) => candidate.id === item.taskId);
               const itemAgent = state.agents.find(
@@ -2994,24 +3015,20 @@ export const TeamChat = ({
               const kind =
                 item.type === "task"
                   ? {
-                      label: "任务",
                       icon: <FolderKanbanIcon className="size-3.5" />,
                       tone: "border-warning/30 bg-warning/10 text-warning",
                     }
                   : item.type === "group"
                     ? {
-                        label: "群聊",
                         icon: <UsersIcon className="size-3.5" />,
                         tone: "border-info/30 bg-info/10 text-info",
                       }
                     : itemAgent
                       ? {
-                          label: "Agent",
                           icon: <BotIcon className="size-3.5" />,
                           tone: "border-primary/30 bg-primary/10 text-primary",
                         }
                       : {
-                          label: "私聊",
                           icon: <MessageSquareMoreIcon className="size-3.5" />,
                           tone: "border-border bg-card text-muted-foreground",
                         };
@@ -3023,10 +3040,10 @@ export const TeamChat = ({
                         type="button"
                         onClick={() => setSelectedRoomId(item.roomId)}
                         className={cn(
-                          "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2.5 text-left transition [&_[data-pin-indicator]]:size-3",
+                          "flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition [&_[data-pin-indicator]]:size-3",
                           isSelected
-                            ? "bg-primary/10 text-foreground ring-1 ring-primary/20"
-                            : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                            ? "bg-card text-foreground shadow-[var(--shadow-down-1)]"
+                            : "text-muted-foreground hover:bg-muted hover:text-foreground",
                         )}
                       />
                     }
@@ -3060,16 +3077,8 @@ export const TeamChat = ({
                         )}
                       </span>
                     </span>
-                    <span className="flex w-11 shrink-0 flex-col items-end gap-1">
-                      <span
-                        className={cn(
-                          "rounded border px-1.5 py-0.5 text-[9px] font-medium",
-                          kind.tone,
-                        )}
-                      >
-                        {kind.label}
-                      </span>
-                      <span className="h-3 font-mono text-[9px] text-muted-foreground/70">
+                    <span className="flex w-10 shrink-0 justify-end self-start pt-0.5">
+                      <span className="h-3 text-[10px] text-muted-foreground/70">
                         {item.messages.length > 0
                           ? timeLabel(item.messages.at(-1)?.updatedAt ?? item.createdAt)
                           : null}
@@ -3098,7 +3107,7 @@ export const TeamChat = ({
       </aside>
 
       <section className="flex min-w-0 flex-1 flex-col">
-        <header className="app-titlebar electron-drag flex min-h-12 shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-1.5">
+        <header className="flex min-h-14 shrink-0 items-center justify-between gap-3 border-b border-border/60 px-5 py-2">
           <div className="flex min-w-0 flex-1 items-center gap-2.5">
             {room?.type === "task" && (
               <Button
@@ -3114,10 +3123,10 @@ export const TeamChat = ({
             )}
             <div
               className={cn(
-                "grid size-6 shrink-0 place-items-center rounded border",
+                "grid size-8 shrink-0 place-items-center rounded-xl",
                 room?.type === "task"
-                  ? "border-warning/30 bg-warning/10 text-warning"
-                  : "border-border bg-muted/40 text-muted-foreground",
+                  ? "bg-warning/10 text-warning"
+                  : "bg-muted text-muted-foreground",
               )}
             >
               {room?.type === "task" ? (
@@ -3134,7 +3143,7 @@ export const TeamChat = ({
             </div>
             <div className="flex min-w-0 flex-1 flex-col">
               <div className="flex min-w-0 items-center gap-2">
-                <h1 className="truncate text-xs font-semibold text-foreground">{room?.name}</h1>
+                <h1 className="truncate text-sm font-semibold text-foreground">{room?.name}</h1>
                 {task && <StatusPill status={task.status} />}
                 {runningCount > 0 && (
                   <Badge variant="outline" className="h-5 font-mono text-[10px]">
@@ -3209,6 +3218,19 @@ export const TeamChat = ({
                 aria-label="OpenIM 设置"
               >
                 <Settings2Icon />
+              </Button>
+            )}
+            {room && (
+              <Button
+                type="button"
+                variant={inspectorOpen ? "secondary" : "ghost"}
+                size="icon-sm"
+                onClick={() => setInspectorOpen((open) => !open)}
+                title={inspectorOpen ? "隐藏会话详情" : "显示会话详情"}
+                aria-label={inspectorOpen ? "隐藏会话详情" : "显示会话详情"}
+                aria-pressed={inspectorOpen}
+              >
+                <PanelRightIcon />
               </Button>
             )}
           </div>
@@ -3388,12 +3410,12 @@ export const TeamChat = ({
             </div>
           </div>
         )}
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-          <div className="mx-auto max-w-4xl">
+        <div className="min-h-0 flex-1 overflow-y-auto px-8 py-7">
+          <div className="mx-auto max-w-3xl">
             {!room?.messages.length && (
               <div className="grid min-h-[46vh] place-items-center text-center">
                 <div className="max-w-md">
-                  <div className="mx-auto grid size-10 place-items-center rounded border border-border bg-muted/40 text-muted-foreground">
+                  <div className="mx-auto grid size-12 place-items-center rounded-2xl bg-primary/10 text-primary">
                     <BotIcon className="size-4" />
                   </div>
                   <h2 className="mt-4 text-base font-semibold text-foreground">
@@ -3415,72 +3437,56 @@ export const TeamChat = ({
                 </div>
               </div>
             )}
-            {room?.messages.map((message) => (
-              <MessageRow
-                key={message.id}
-                message={message}
-                agent={state.agents.find((agent) => agent.id === message.senderId)}
-                human={state.humans.find((human) => human.id === message.senderId)}
-                task={
-                  message.taskId
-                    ? state.tasks.find((candidate) => candidate.id === message.taskId)
-                    : undefined
-                }
-                onStop={(runId) => void window.agentTeam.stopRun({ runId }).catch(() => undefined)}
-                onOpenTask={openTask}
-              />
-            ))}
+            {room?.messages.map((message) => {
+              const messageAgent = state.agents.find((agent) => agent.id === message.senderId);
+              const replyTarget = message.replyTo
+                ? room.messages.find((candidate) => candidate.id === message.replyTo)
+                : undefined;
+              const retryable = canRetryAgentReply({
+                reply: message,
+                replyTarget,
+                executionLocation: messageAgent?.executionLocation,
+                belongsToLoop: state.loops.some((loop) => loop.rootMessageId === replyTarget?.id),
+              });
+              return (
+                <MessageRow
+                  key={message.id}
+                  message={message}
+                  agent={messageAgent}
+                  human={state.humans.find((human) => human.id === message.senderId)}
+                  task={
+                    message.taskId
+                      ? state.tasks.find((candidate) => candidate.id === message.taskId)
+                      : undefined
+                  }
+                  onStop={(runId) =>
+                    void window.agentTeam.stopRun({ runId }).catch(() => undefined)
+                  }
+                  onRetry={
+                    retryable
+                      ? (messageId) => {
+                          setError("");
+                          void window.agentTeam
+                            .retryMessage({
+                              workspace,
+                              roomId: room.roomId,
+                              messageId,
+                              model,
+                            })
+                            .catch((nextError) => setError(formatErrorMessage(nextError)));
+                        }
+                      : undefined
+                  }
+                  onOpenTask={openTask}
+                />
+              );
+            })}
             <div ref={endRef} />
           </div>
         </div>
-        <footer className="app-titlebar shrink-0 border-t border-border px-6 py-4">
-          <div className="mx-auto max-w-4xl">
-            {room?.type === "direct" ? (
-              <div className="mb-2 font-mono text-[10px] text-muted-foreground">
-                {directAgent ? "Agent 会在当前私聊中自动回复" : "好友私聊"}
-              </div>
-            ) : (
-              <div className="mb-2 flex items-center justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-2 font-mono text-[10px] text-muted-foreground">
-                  <span className="rounded border border-border bg-muted/40 px-2 py-1 font-medium text-foreground">
-                    @
-                  </span>
-                  <span>在消息栏输入 @ 选择 Agent，可连续提及多个</span>
-                  {!!mentionedAgents.length && (
-                    <span className="truncate text-primary">
-                      将通知：{mentionedAgents.map((agent) => agent.name).join("、")}
-                    </span>
-                  )}
-                </div>
-                <div className="flex shrink-0 rounded-lg border border-border bg-muted/40 p-0.5">
-                  <button
-                    type="button"
-                    onClick={() => setAgentAction("chat")}
-                    className={cn(
-                      "rounded-md px-2.5 py-1 text-[10px] transition",
-                      agentAction === "chat"
-                        ? "bg-card text-foreground shadow-[var(--shadow-down-1)]"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    群聊回复
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAgentAction("propose-task")}
-                    className={cn(
-                      "rounded-md px-2.5 py-1 text-[10px] transition",
-                      agentAction === "propose-task"
-                        ? "bg-primary/10 text-primary"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    规划 Task
-                  </button>
-                </div>
-              </div>
-            )}
-            <div className="relative rounded-2xl border border-input bg-card p-2.5 shadow-[var(--shadow-down-1)] transition-colors focus-within:border-primary focus-within:ring-3 focus-within:ring-primary/15">
+        <footer className="shrink-0 bg-background/90 px-8 pt-3 pb-5 backdrop-blur-xl">
+          <div className="mx-auto max-w-3xl">
+            <div className="relative rounded-3xl border border-border/80 bg-card p-3 shadow-[var(--shadow-down-3)] transition-[border-color,box-shadow] focus-within:border-primary/50 focus-within:shadow-[var(--shadow-primary)]">
               {mention && (
                 <div className="absolute bottom-full left-0 mb-2 w-72 overflow-hidden rounded-xl border border-border bg-popover p-1.5 shadow-[var(--shadow-down-3)]">
                   <div className="px-2 py-1.5 text-[10px] tracking-wider text-muted-foreground uppercase">
@@ -3582,30 +3588,48 @@ export const TeamChat = ({
                 placeholder={
                   room?.type === "group"
                     ? agentAction === "propose-task"
-                      ? "描述需要完成的工作，Agent 将整理目标和执行计划供你审核…"
-                      : "发消息或 @ Agent 对话；不会自动创建 Task…"
+                      ? "描述目标并 @ 一个 Agent 生成 Task 草案…"
+                      : "输入消息，使用 @ 提及 Agent…"
                     : room?.type === "task"
                       ? agentAction === "propose-task"
-                        ? "要求 Agent 根据讨论修改 Task 计划并重新提交审核…"
-                        : "讨论任务细节；消息会更新上下文，但不会立即执行…"
+                        ? "根据讨论更新 Task 草案…"
+                        : "继续讨论任务细节…"
                       : `给 ${room?.name ?? "联系人"} 发消息…`
                 }
-                className="min-h-14 resize-none border-0 bg-transparent px-2 py-1 text-sm leading-6 shadow-none focus-visible:bg-transparent focus-visible:ring-0"
+                className="min-h-16 resize-none border-0 bg-transparent px-2.5 py-2 text-sm leading-6 shadow-none focus-visible:bg-transparent focus-visible:ring-0"
               />
-              <div className="flex items-center justify-between px-2 pb-1">
-                <span className="font-mono text-[10px] text-muted-foreground">
-                  {room?.type === "direct"
-                    ? directAgent
-                      ? "连续 Agent 会话，不创建 Task"
-                      : "一对一好友消息"
-                    : agentAction === "propose-task"
-                      ? mentionedAgents.length
-                        ? "Agent 只生成或修改 Task 草案；人工审核后才能开始执行"
-                        : "请先在消息中 @ 一个负责规划的 Agent"
-                      : mentionedAgents.length
-                        ? "Agent 在当前会话回复；不会创建或启动 Task"
-                        : "输入 @ 提及 Agent；未提及时只发送普通消息"}
-                </span>
+              <div className="flex items-center justify-between gap-3 px-1">
+                {room?.type === "direct" ? (
+                  <span className="text-xs text-muted-foreground">
+                    {directAgent ? "连续 Agent 会话" : "好友私聊"}
+                  </span>
+                ) : (
+                  <div className="flex min-w-0 items-center gap-1">
+                    <Button
+                      type="button"
+                      variant={agentAction === "chat" ? "secondary" : "ghost"}
+                      size="xs"
+                      onClick={() => setAgentAction("chat")}
+                      aria-pressed={agentAction === "chat"}
+                    >
+                      群聊
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={agentAction === "propose-task" ? "secondary" : "ghost"}
+                      size="xs"
+                      onClick={() => setAgentAction("propose-task")}
+                      aria-pressed={agentAction === "propose-task"}
+                    >
+                      规划 Task
+                    </Button>
+                    {!!mentionedAgents.length && (
+                      <span className="ml-1 truncate text-xs text-primary">
+                        @{mentionedAgents.map((agent) => agent.name).join("、")}
+                      </span>
+                    )}
+                  </div>
+                )}
                 <Button
                   type="button"
                   size="icon"
@@ -3628,243 +3652,254 @@ export const TeamChat = ({
         </footer>
       </section>
 
-      <aside
-        className={cn(
-          "hidden shrink-0 border-l border-border bg-card xl:flex xl:flex-col",
-          room?.type === "task" ? "w-80" : "w-64",
-        )}
-      >
-        <div className="flex h-12 items-center border-b border-border px-3 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
-          {room?.type === "task"
-            ? "Context Feed"
-            : room?.type === "direct"
-              ? "Contact Info"
-              : "Room Inspector"}
-        </div>
-        {room?.type === "group" ? (
-          <div className="min-h-0 flex-1 overflow-y-auto p-2">
-            {cloudMode && (
-              <button
-                type="button"
-                onClick={() => setHostBindingOpen(true)}
-                className="mb-3 flex w-full items-center gap-2 rounded-lg border border-border bg-muted/20 p-2.5 text-left hover:bg-muted/40"
-              >
-                <MonitorCogIcon
-                  className={cn(
-                    "size-4",
-                    room.workspaceBinding?.status === "online" ? "text-success" : "text-warning",
-                  )}
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-xs font-medium">
-                    {room.workspaceBinding?.label ?? "尚未设置项目主机"}
+      {inspectorOpen && (
+        <aside className="flex w-72 shrink-0 flex-col border-l border-border/60 bg-surface-subtle/70">
+          <div className="flex h-14 items-center justify-between border-b border-border/60 px-4">
+            <span className="text-sm font-semibold text-foreground">
+              {room?.type === "task"
+                ? "任务上下文"
+                : room?.type === "direct"
+                  ? "联系人信息"
+                  : "会话详情"}
+            </span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => setInspectorOpen(false)}
+              aria-label="关闭会话详情"
+              title="关闭会话详情"
+            >
+              <PanelRightIcon />
+            </Button>
+          </div>
+          {room?.type === "group" ? (
+            <div className="min-h-0 flex-1 overflow-y-auto p-2">
+              {cloudMode && (
+                <button
+                  type="button"
+                  onClick={() => setHostBindingOpen(true)}
+                  className="mb-3 flex w-full items-center gap-2 rounded-lg border border-border bg-muted/20 p-2.5 text-left hover:bg-muted/40"
+                >
+                  <MonitorCogIcon
+                    className={cn(
+                      "size-4",
+                      room.workspaceBinding?.status === "online" ? "text-success" : "text-warning",
+                    )}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-medium">
+                      {room.workspaceBinding?.label ?? "尚未设置项目主机"}
+                    </span>
+                    <span className="mt-0.5 block truncate font-mono text-[9px] text-muted-foreground">
+                      {room.workspaceBinding
+                        ? `${room.workspaceBinding.repositoryUrl ?? "无仓库身份"} · v${room.workspaceBinding.revision} · ${room.workspaceBinding.status === "online" ? "在线" : "离线"}`
+                        : "绑定后 Task 才能在指定电脑执行"}
+                    </span>
                   </span>
-                  <span className="mt-0.5 block truncate font-mono text-[9px] text-muted-foreground">
-                    {room.workspaceBinding
-                      ? `${room.workspaceBinding.repositoryUrl ?? "无仓库身份"} · v${room.workspaceBinding.revision} · ${room.workspaceBinding.status === "online" ? "在线" : "离线"}`
-                      : "绑定后 Task 才能在指定电脑执行"}
-                  </span>
-                </span>
-              </button>
-            )}
-            <div className="mb-1.5 px-2 font-mono text-[10px] tracking-wider text-muted-foreground uppercase">
-              Agents
-            </div>
-            {roomAgents.map((agent) => {
-              const active = state.tasks.some(
-                (candidate) =>
-                  candidate.assigneeIds.includes(agent.id) && candidate.status === "running",
-              );
-              return (
+                </button>
+              )}
+              <div className="mb-1.5 px-2 font-mono text-[10px] tracking-wider text-muted-foreground uppercase">
+                Agents
+              </div>
+              {roomAgents.map((agent) => {
+                const active = state.tasks.some(
+                  (candidate) =>
+                    candidate.assigneeIds.includes(agent.id) && candidate.status === "running",
+                );
+                return (
+                  <div
+                    key={agent.id}
+                    className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-muted/40"
+                  >
+                    <div
+                      className={`grid size-6 place-items-center rounded border font-mono text-[10px] font-medium ${themeClasses[agent.theme].avatar}`}
+                    >
+                      {agent.initials}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs font-medium text-foreground">
+                        {agent.name}
+                      </div>
+                      <div className="font-mono text-[10px] text-muted-foreground">
+                        {active
+                          ? "正在工作"
+                          : agent.visibility === "public"
+                            ? "公开 Agent"
+                            : "私有 Agent"}
+                      </div>
+                    </div>
+                    <span
+                      className={`size-1.5 rounded-full ${active ? "animate-pulse bg-primary" : "bg-muted-foreground/50"}`}
+                    />
+                  </div>
+                );
+              })}
+              <div className="mt-3 mb-1.5 px-2 font-mono text-[10px] tracking-wider text-muted-foreground uppercase">
+                Members
+              </div>
+              {roomHumans.map((human) => (
                 <div
-                  key={agent.id}
+                  key={human.id}
                   className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-muted/40"
                 >
-                  <div
-                    className={`grid size-6 place-items-center rounded border font-mono text-[10px] font-medium ${themeClasses[agent.theme].avatar}`}
-                  >
-                    {agent.initials}
+                  <div className="grid size-6 place-items-center rounded border border-border bg-muted/50 font-mono text-[10px] text-foreground">
+                    {human.initials}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-xs font-medium text-foreground">{agent.name}</div>
-                    <div className="font-mono text-[10px] text-muted-foreground">
-                      {active
-                        ? "正在工作"
-                        : agent.visibility === "public"
-                          ? "公开 Agent"
-                          : "私有 Agent"}
+                    <div className="truncate text-xs font-medium text-foreground">{human.name}</div>
+                    <div className="truncate font-mono text-[10px] text-muted-foreground">
+                      {human.title}
                     </div>
                   </div>
                   <span
-                    className={`size-1.5 rounded-full ${active ? "animate-pulse bg-primary" : "bg-muted-foreground/50"}`}
+                    className={`size-1.5 rounded-full ${human.status === "online" ? "bg-success" : "bg-muted-foreground/40"}`}
                   />
                 </div>
-              );
-            })}
-            <div className="mt-3 mb-1.5 px-2 font-mono text-[10px] tracking-wider text-muted-foreground uppercase">
-              Members
-            </div>
-            {roomHumans.map((human) => (
-              <div
-                key={human.id}
-                className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-muted/40"
-              >
-                <div className="grid size-6 place-items-center rounded border border-border bg-muted/50 font-mono text-[10px] text-foreground">
-                  {human.initials}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-xs font-medium text-foreground">{human.name}</div>
-                  <div className="truncate font-mono text-[10px] text-muted-foreground">
-                    {human.title}
+              ))}
+              <div className="mt-4 mb-1.5 flex items-center justify-between px-2">
+                <span className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase">
+                  Tasks
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onViewChange("tasks")}
+                  className="font-mono text-[10px] text-muted-foreground hover:text-foreground"
+                >
+                  查看全部
+                </button>
+              </div>
+              {roomTasks.slice(0, 8).map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => openTask(item)}
+                  className="mb-1 w-full rounded border border-border bg-muted/20 p-2 text-left hover:bg-muted/50"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <StatusPill status={item.status} />
+                    <span className="font-mono text-[9px] text-muted-foreground">
+                      {timeLabel(item.updatedAt)}
+                    </span>
                   </div>
+                  <div className="mt-1 line-clamp-2 text-xs text-foreground">{item.title}</div>
+                </button>
+              ))}
+              {cloudMode && (
+                <div className="mt-4 border-t border-border pt-3">
+                  <AuditTimeline items={auditItems} />
                 </div>
-                <span
-                  className={`size-1.5 rounded-full ${human.status === "online" ? "bg-success" : "bg-muted-foreground/40"}`}
-                />
-              </div>
-            ))}
-            <div className="mt-4 mb-1.5 flex items-center justify-between px-2">
-              <span className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase">
-                Tasks
-              </span>
-              <button
-                type="button"
-                onClick={() => onViewChange("tasks")}
-                className="font-mono text-[10px] text-muted-foreground hover:text-foreground"
-              >
-                查看全部
-              </button>
-            </div>
-            {roomTasks.slice(0, 8).map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => openTask(item)}
-                className="mb-1 w-full rounded border border-border bg-muted/20 p-2 text-left hover:bg-muted/50"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <StatusPill status={item.status} />
-                  <span className="font-mono text-[9px] text-muted-foreground">
-                    {timeLabel(item.updatedAt)}
-                  </span>
-                </div>
-                <div className="mt-1 line-clamp-2 text-xs text-foreground">{item.title}</div>
-              </button>
-            ))}
-            {cloudMode && (
-              <div className="mt-4 border-t border-border pt-3">
-                <AuditTimeline items={auditItems} />
-              </div>
-            )}
-          </div>
-        ) : room?.type === "task" ? (
-          <div className="min-h-0 flex-1 overflow-y-auto p-3">
-            {task && (
-              <TaskInspector
-                task={task}
-                state={state}
-                role={sourceRoom?.memberRole}
-                currentUserId={backendUserId}
-                onOpenTask={openTask}
-                onReview={(decision) => void reviewTask(task, decision)}
-                onStart={() => void startTask(task)}
-                onGrant={() => {
-                  setGrantTask(task);
-                  setTaskGrantOpen(true);
-                }}
-                onComplete={() => void updateTaskStatus(task, "done")}
-              />
-            )}
-            {cloudMode && (
-              <div className="mt-4 border-t border-border pt-3">
-                <AuditTimeline items={auditItems} />
-              </div>
-            )}
-            <div className="mt-4 border-t border-border pt-3">
-              <div className="rounded border border-border bg-muted/20 p-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="font-mono text-[10px] text-foreground">
-                    context v{task?.contextVersion}
-                  </span>
-                  {task && <StatusPill status={task.status} />}
-                </div>
-                <p className="mt-1.5 text-[11px] text-muted-foreground">
-                  这些是主群持续同步到当前 Task 的消息引用。
-                </p>
-              </div>
-              <div className="mt-2 flex flex-col gap-1.5">
-                {sourceContext.map((message) => (
-                  <button
-                    key={message.id}
-                    type="button"
-                    onClick={() => sourceRoom && setSelectedRoomId(sourceRoom.roomId)}
-                    className="w-full rounded border border-border bg-card p-2 text-left hover:bg-muted/40"
-                  >
-                    <div className="flex items-center justify-between font-mono text-[9px] text-muted-foreground">
-                      <span>
-                        {message.senderName} · #{message.seq}
-                      </span>
-                      <span>{timeLabel(message.createdAt)}</span>
-                    </div>
-                    <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                      {message.content}
-                    </p>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="min-h-0 flex-1 overflow-y-auto p-4">
-            <div className="rounded border border-border bg-card p-3 text-center">
-              <div
-                className={cn(
-                  "mx-auto grid size-12 place-items-center rounded border font-mono text-sm font-semibold",
-                  directAgent
-                    ? themeClasses[directAgent.theme].avatar
-                    : "border-border bg-muted/40 text-foreground",
-                )}
-              >
-                {directAgent?.initials ?? directHuman?.initials ?? "?"}
-              </div>
-              <div className="mt-2.5 text-xs font-semibold text-foreground">
-                {directAgent?.name ?? directHuman?.name ?? room?.name}
-              </div>
-              <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
-                {directAgent
-                  ? `${directAgent.title} · ${directAgent.executionLocation === "local" ? "本机运行" : "托管运行"}`
-                  : (directHuman?.title ?? "好友")}
-              </div>
-              {directAgent && (
-                <>
-                  <p className="mt-3 text-left text-xs text-muted-foreground">
-                    {directAgent.description}
-                  </p>
-                  <div className="mt-4 flex flex-wrap justify-center gap-2">
-                    <Badge
-                      variant="outline"
-                      className="font-mono text-[10px] text-muted-foreground"
-                    >
-                      {directAgent.visibility === "public" ? "公开 Agent" : "私有 Agent"}
-                    </Badge>
-                    <Badge
-                      variant="outline"
-                      className="font-mono text-[10px] text-muted-foreground"
-                    >
-                      {directAgent.workspaceAccess === "write" ? "工作区可写" : "只读"}
-                    </Badge>
-                  </div>
-                </>
               )}
             </div>
-            <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
-              {directAgent
-                ? "当前私聊使用独立的连续 Codex 上下文，不会混入群聊或自动创建 Task。"
-                : "这是好友的一对一会话，所有私聊都会保留在左侧消息列表中。"}
-            </p>
-          </div>
-        )}
-      </aside>
+          ) : room?.type === "task" ? (
+            <div className="min-h-0 flex-1 overflow-y-auto p-3">
+              {task && (
+                <TaskInspector
+                  task={task}
+                  state={state}
+                  role={sourceRoom?.memberRole}
+                  currentUserId={backendUserId}
+                  onOpenTask={openTask}
+                  onReview={(decision) => void reviewTask(task, decision)}
+                  onStart={() => void startTask(task)}
+                  onGrant={() => {
+                    setGrantTask(task);
+                    setTaskGrantOpen(true);
+                  }}
+                  onComplete={() => void updateTaskStatus(task, "done")}
+                />
+              )}
+              {cloudMode && (
+                <div className="mt-4 border-t border-border pt-3">
+                  <AuditTimeline items={auditItems} />
+                </div>
+              )}
+              <div className="mt-4 border-t border-border pt-3">
+                <div className="rounded border border-border bg-muted/20 p-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono text-[10px] text-foreground">
+                      context v{task?.contextVersion}
+                    </span>
+                    {task && <StatusPill status={task.status} />}
+                  </div>
+                  <p className="mt-1.5 text-[11px] text-muted-foreground">
+                    这些是主群持续同步到当前 Task 的消息引用。
+                  </p>
+                </div>
+                <div className="mt-2 flex flex-col gap-1.5">
+                  {sourceContext.map((message) => (
+                    <button
+                      key={message.id}
+                      type="button"
+                      onClick={() => sourceRoom && setSelectedRoomId(sourceRoom.roomId)}
+                      className="w-full rounded border border-border bg-card p-2 text-left hover:bg-muted/40"
+                    >
+                      <div className="flex items-center justify-between font-mono text-[9px] text-muted-foreground">
+                        <span>
+                          {message.senderName} · #{message.seq}
+                        </span>
+                        <span>{timeLabel(message.createdAt)}</span>
+                      </div>
+                      <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                        {message.content}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="min-h-0 flex-1 overflow-y-auto p-4">
+              <div className="rounded border border-border bg-card p-3 text-center">
+                <div
+                  className={cn(
+                    "mx-auto grid size-12 place-items-center rounded border font-mono text-sm font-semibold",
+                    directAgent
+                      ? themeClasses[directAgent.theme].avatar
+                      : "border-border bg-muted/40 text-foreground",
+                  )}
+                >
+                  {directAgent?.initials ?? directHuman?.initials ?? "?"}
+                </div>
+                <div className="mt-2.5 text-xs font-semibold text-foreground">
+                  {directAgent?.name ?? directHuman?.name ?? room?.name}
+                </div>
+                <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                  {directAgent
+                    ? `${directAgent.title} · ${directAgent.executionLocation === "local" ? "本机运行" : "托管运行"}`
+                    : (directHuman?.title ?? "好友")}
+                </div>
+                {directAgent && (
+                  <>
+                    <p className="mt-3 text-left text-xs text-muted-foreground">
+                      {directAgent.description}
+                    </p>
+                    <div className="mt-4 flex flex-wrap justify-center gap-2">
+                      <Badge
+                        variant="outline"
+                        className="font-mono text-[10px] text-muted-foreground"
+                      >
+                        {directAgent.visibility === "public" ? "公开 Agent" : "私有 Agent"}
+                      </Badge>
+                      <Badge
+                        variant="outline"
+                        className="font-mono text-[10px] text-muted-foreground"
+                      >
+                        {directAgent.workspaceAccess === "write" ? "工作区可写" : "只读"}
+                      </Badge>
+                    </div>
+                  </>
+                )}
+              </div>
+              <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
+                {directAgent
+                  ? "当前私聊使用独立的连续 Codex 上下文，不会混入群聊或自动创建 Task。"
+                  : "这是好友的一对一会话，所有私聊都会保留在左侧消息列表中。"}
+              </p>
+            </div>
+          )}
+        </aside>
+      )}
 
       <Dialog
         open={Boolean(pendingDeleteRoom)}

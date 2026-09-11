@@ -191,6 +191,135 @@ test("Agent and friend direct messages reuse rooms and do not create Tasks", asy
   }
 });
 
+test("BDD: retrying a completed Agent reply appends an independent answer to the same question", async () => {
+  const storeDir = await mkdtemp(join(tmpdir(), "agent-team-retry-complete-"));
+  const workspace = "/tmp/agent-retry-complete-workspace";
+  const codex = new FakeCodex();
+  codex.responses.push("第一版回答", "第二版回答");
+  const service = new AgentTeamService(codex as unknown as AgentRuntime, storeDir);
+
+  try {
+    const room = await service.openDirectRoom(workspace, "agent_coordinator");
+    const sent = await service.sendMessage({
+      workspace,
+      roomId: room.roomId,
+      text: "请解释这个方案",
+    });
+    await waitFor(async () => {
+      const current = await service.getWorkspace(workspace);
+      return Boolean(
+        current.rooms
+          .find((candidate) => candidate.roomId === room.roomId)
+          ?.messages.some(
+            (message) =>
+              message.senderType === "agent" &&
+              message.replyTo === sent.messageId &&
+              message.status === "complete",
+          ),
+      );
+    });
+    const firstSnapshot = await service.getWorkspace(workspace);
+    const firstReply = firstSnapshot.rooms
+      .find((candidate) => candidate.roomId === room.roomId)!
+      .messages.find(
+        (message) => message.senderType === "agent" && message.replyTo === sent.messageId,
+      )!;
+
+    const retried = await service.retryMessage({
+      workspace,
+      roomId: room.roomId,
+      messageId: firstReply.id,
+    });
+    await waitFor(async () => {
+      const current = await service.getWorkspace(workspace);
+      return (
+        current.rooms
+          .find((candidate) => candidate.roomId === room.roomId)
+          ?.messages.find((message) => message.id === retried.messageId)?.status === "complete"
+      );
+    });
+
+    const current = await service.getWorkspace(workspace);
+    const replies = current.rooms
+      .find((candidate) => candidate.roomId === room.roomId)!
+      .messages.filter(
+        (message) => message.senderType === "agent" && message.replyTo === sent.messageId,
+      );
+    assert.deepEqual(
+      replies.map((message) => message.content),
+      ["第一版回答", "第二版回答"],
+    );
+    assert.notEqual(retried.messageId, firstReply.id);
+    assert.equal(codex.threadStarts, 1, "a completed retry should preserve the continuous Session");
+    assert.match(codex.prompts[1], /用户要求你针对同一条消息重新回答/);
+    assert.match(codex.prompts[1], /请解释这个方案/);
+    assert.doesNotMatch(codex.prompts[1], /第一版回答/);
+  } finally {
+    await service.flush();
+    await rm(storeDir, { recursive: true, force: true });
+  }
+});
+
+test("BDD: retrying a failed Agent reply starts a recoverable Session", async () => {
+  const storeDir = await mkdtemp(join(tmpdir(), "agent-team-retry-failed-"));
+  const workspace = "/tmp/agent-retry-failed-workspace";
+  const codex = new FakeCodex();
+  codex.nextTurnError = new Error("首次回答失败");
+  const service = new AgentTeamService(codex as unknown as AgentRuntime, storeDir);
+
+  try {
+    const room = await service.openDirectRoom(workspace, "agent_coordinator");
+    const sent = await service.sendMessage({
+      workspace,
+      roomId: room.roomId,
+      text: "请再试一次",
+    });
+    await waitFor(async () => {
+      const current = await service.getWorkspace(workspace);
+      return Boolean(
+        current.rooms
+          .find((candidate) => candidate.roomId === room.roomId)
+          ?.messages.some(
+            (message) => message.replyTo === sent.messageId && message.status === "error",
+          ),
+      );
+    });
+    const failedSnapshot = await service.getWorkspace(workspace);
+    const failedReply = failedSnapshot.rooms
+      .find((candidate) => candidate.roomId === room.roomId)!
+      .messages.find((message) => message.replyTo === sent.messageId)!;
+
+    codex.responses.push("恢复后的回答");
+    const retried = await service.retryMessage({
+      workspace,
+      roomId: room.roomId,
+      messageId: failedReply.id,
+    });
+    await waitFor(async () => {
+      const current = await service.getWorkspace(workspace);
+      return (
+        current.rooms
+          .find((candidate) => candidate.roomId === room.roomId)
+          ?.messages.find((message) => message.id === retried.messageId)?.status === "complete"
+      );
+    });
+
+    const current = await service.getWorkspace(workspace);
+    const retriedReply = current.rooms
+      .find((candidate) => candidate.roomId === room.roomId)!
+      .messages.find((message) => message.id === retried.messageId)!;
+    assert.equal(retriedReply.content, "恢复后的回答");
+    assert.equal(codex.threadStarts, 2, "a failed Session must be replaced before retrying");
+    assert.deepEqual(
+      current.sessions.map((session) => session.state),
+      ["failed", "waiting"],
+    );
+  } finally {
+    await service.flush();
+    await rm(storeDir, { recursive: true, force: true });
+  }
+});
+
 test("legacy workspace data is upgraded without changing Agent identity or permissions", async () => {
   const storeDir = await mkdtemp(join(tmpdir(), "agent-domain-migration-"));
   const workspace = "/tmp/agent-domain-migration-workspace";
