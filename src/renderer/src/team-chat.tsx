@@ -95,6 +95,7 @@ import {
   type ConversationListPreferences,
 } from "./conversation-list";
 import { teamMessageAlignment } from "./team-message-layout";
+import { GroupIdentity } from "./group-identity";
 import { openImTransport, type OpenImConnectionState } from "./openim-transport";
 import {
   buildMentionCandidates,
@@ -2974,8 +2975,8 @@ export const TeamChat = ({
       </aside>
 
       <section className="flex min-w-0 flex-1 flex-col">
-        <header className="app-titlebar electron-drag flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
-          <div className="flex min-w-0 items-center gap-2.5">
+        <header className="app-titlebar electron-drag flex min-h-12 shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-1.5">
+          <div className="flex min-w-0 flex-1 items-center gap-2.5">
             {room?.type === "task" && (
               <Button
                 type="button"
@@ -3008,22 +3009,25 @@ export const TeamChat = ({
                 <UsersIcon className="size-4" />
               )}
             </div>
-            <div className="flex min-w-0 items-center gap-2">
-              <h1 className="truncate text-xs font-semibold text-foreground">{room?.name}</h1>
-              {task && <StatusPill status={task.status} />}
-              {runningCount > 0 && (
-                <Badge variant="outline" className="h-5 font-mono text-[10px]">
-                  {runningCount} running
-                </Badge>
-              )}
-              {room?.type === "task" && sourceRoom && (
-                <span className="font-mono text-[10px] text-muted-foreground">
-                  #{sourceRoom.name}
-                </span>
-              )}
+            <div className="flex min-w-0 flex-1 flex-col">
+              <div className="flex min-w-0 items-center gap-2">
+                <h1 className="truncate text-xs font-semibold text-foreground">{room?.name}</h1>
+                {task && <StatusPill status={task.status} />}
+                {runningCount > 0 && (
+                  <Badge variant="outline" className="h-5 font-mono text-[10px]">
+                    {runningCount} running
+                  </Badge>
+                )}
+                {room?.type === "task" && sourceRoom && (
+                  <span className="font-mono text-[10px] text-muted-foreground">
+                    #{sourceRoom.name}
+                  </span>
+                )}
+              </div>
+              {room?.type === "group" && <GroupIdentity key={room.roomId} roomId={room.roomId} />}
             </div>
           </div>
-          <div className="electron-no-drag flex items-center gap-2">
+          <div className="electron-no-drag flex shrink-0 items-center gap-2">
             <ConnectionBadge status={connection} />
             {room &&
               room.type !== "direct" &&
